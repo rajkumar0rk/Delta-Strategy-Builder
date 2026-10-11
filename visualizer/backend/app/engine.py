@@ -10,6 +10,7 @@ import pandas as pd
 from .models import BacktestRequest, StrategyConfig
 from .data_store import DataStore, parse_time, iso
 from .indicators import compute_indicators
+from .warmup import required_warmup_candles, historical_bar_sources, warmup_diagnostics
 from .rules import evaluate_group, evaluate_condition, find_condition
 from .config import result_root, cache_root
 from .storage import write_json_gz, write_csv_gz, load_result, maybe_auto_cleanup
@@ -258,7 +259,7 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
 
 def _backtest_cache_key(req: BacktestRequest, paths) -> str:
     payload = {
-        'engine_version': 151,
+        'engine_version': 153,  # warmed indicator initialization + HTF grid validation
         'dataset': _dataset_fingerprint(paths),
         'dataset_id': getattr(req, 'dataset_id', None),
         'dataset_ids': [x.id for x in (paths if isinstance(paths, (list, tuple)) else [paths])],
@@ -859,7 +860,15 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
     # Cache lookup happens before expensive CSV preflight. The key fingerprints
     # every selected source file, so a cached result is reused only while the
     # downloaded inputs remain byte/mtime-identical.
-    cache_key = _backtest_cache_key(req, parts)
+    warmup_count = required_warmup_candles(
+        req.strategy.indicators, req.strategy.timeframe,
+        minimum=getattr(req, 'warmup_candles', 500), strategy=req.strategy,
+    )
+    bar_parts = historical_bar_sources(
+        store, parts, req.start, req.strategy.timeframe, warmup_count,
+        archive_neighbors=getattr(req, 'dataset_mode', 'SINGLE') in {'ARCHIVE', 'AUTO'},
+    )
+    cache_key = _backtest_cache_key(req, bar_parts)
     cached = _cached_result(cache_key)
     if cached is not None:
         report(f"Cache hit — reused identical V15.1 backtest {cached.get('run_id', '')}.", 100, 'CACHE_HIT', 'Complete')
@@ -874,7 +883,16 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         raise ValueError('Preflight failed: ' + '; '.join(preflight['errors']))
 
     report('Loading and merging underlying bars…', 12, 'LOAD_BARS', 'Load option instruments')
-    bars = store.load_bars_many(parts, req.start, req.end, req.strategy.timeframe)
+    bars = store.load_bars_many(bar_parts, req.start, req.end, req.strategy.timeframe, warmup_candles=warmup_count)
+    warmup = warmup_diagnostics(bars, req.start, req.strategy.timeframe, warmup_count)
+    if not warmup['contiguous']:
+        if getattr(req, 'warmup_policy', 'WARN') == 'REQUIRE':
+            raise ValueError(f"Insufficient contiguous warm-up: need {warmup_count} "
+                             f"{req.strategy.timeframe} candles before {req.start}")
+        preflight.setdefault('warnings', []).append(
+            f"Incomplete indicator warm-up: {warmup['available_candles']} earlier candles "
+            f"(need {warmup_count} contiguous). Early values/signals can vary with selected range."
+        )
     report('Loading and de-duplicating option instruments…', 18, 'LOAD_INSTRUMENTS', 'Calculate indicators')
     inst = store.load_instruments_many(parts)
     report('Calculating selected indicators and V15.1 trend state…', 25, 'INDICATORS', 'Prepare option quote indexes')
@@ -1071,7 +1089,11 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         pos_quotes = None
         q_cursor = 0
 
+    measured_start = pd.Timestamp(parse_time(req.start))
     for i, (ts, row) in enumerate(frame.iterrows()):
+        # Warm-up initializes indicators/strategy state; never trades before From.
+        if ts < measured_start:
+            continue
         ensure_daily_state(ts)
         if i and i % max(250, len(frame)//100 or 1) == 0:
             pct = 35.0 + (i / max(1, len(frame))) * 50.0
@@ -1399,6 +1421,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         'cache_key': cache_key,
         'storage_mode': getattr(req, 'storage_mode', 'ANALYSIS'),
         'preflight': preflight,
+        'warmup': warmup,
         'fee_model': {
             'name': 'DELTA_OPTIONS',
             'option_notional_fee_rate_percent': strategy.execution.option_notional_fee_rate_percent,
@@ -1470,11 +1493,23 @@ def chart_payload(req, run_result=None):
     parts = store.resolve_request(req, require_options=False)
     strategy = getattr(req, 'strategy', None)
     timeframe = strategy.timeframe if strategy is not None else getattr(req, 'timeframe', '5m')
-    bars = store.load_bars_many(parts, req.start, req.end, timeframe)
     instances = strategy.indicators if strategy is not None else req.indicators
+    warmup_count = required_warmup_candles(
+        instances, timeframe, minimum=getattr(req, 'warmup_candles', 500), strategy=strategy,
+    )
+    bar_parts = historical_bar_sources(
+        store, parts, req.start, timeframe, warmup_count,
+        archive_neighbors=getattr(req, 'dataset_mode', 'SINGLE') in {'ARCHIVE', 'AUTO'},
+    )
+    bars = store.load_bars_many(bar_parts, req.start, req.end, timeframe, warmup_candles=warmup_count)
+    warmup = warmup_diagnostics(bars, req.start, timeframe, warmup_count)
     frame, meta = compute_indicators(bars, instances, timeframe)
     if strategy is not None:
         _prepare_strategy_state(frame, strategy)
+    cutoff = pd.Timestamp(parse_time(req.start))
+    until = pd.Timestamp(parse_time(req.end))
+    # Keep earlier rows during computation, then exclude them from displayed data.
+    frame = frame.loc[(frame.index >= cutoff) & (frame.index < until)].copy()
     if len(frame) > 30000:
         raise ValueError(
             f'Chart range contains {len(frame):,} source candles. Narrow the chart date range below 30,000 candles; '
@@ -1620,4 +1655,5 @@ def chart_payload(req, run_result=None):
         'markers': (run_result or {}).get('markers', []),
         'study_markers': study_markers,
         'condition_states': condition_states,
+        'warmup': warmup,
     }

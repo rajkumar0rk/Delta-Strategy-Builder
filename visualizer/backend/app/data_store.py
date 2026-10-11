@@ -395,7 +395,7 @@ class DataStore:
     def load_bars(self, p: DatasetPaths, start: str, end: str, timeframe: str = '5m') -> pd.DataFrame:
         return self.load_bars_many([p], start, end, timeframe)
 
-    def load_bars_many(self, parts: list[DatasetPaths], start: str, end: str, timeframe: str = '5m') -> pd.DataFrame:
+    def load_bars_many(self, parts: list[DatasetPaths], start: str, end: str, timeframe: str = '5m', warmup_candles: int = 0) -> pd.DataFrame:
         timeframe_minutes = {'5m': 5, '10m': 10, '15m': 15, '30m': 30, '1h': 60}
         if timeframe not in timeframe_minutes:
             raise ValueError(f'Unsupported timeframe: {timeframe}')
@@ -410,7 +410,9 @@ class DataStore:
         # candles whose complete expected 5m close sequence is present.
         raw_parts: list[pd.DataFrame] = []
         target_minutes = timeframe_minutes[timeframe]
-        warmup = pd.Timedelta(minutes=max(0, target_minutes - 5))
+        if warmup_candles < 0:
+            raise ValueError('warmup_candles cannot be negative')
+        warmup = pd.Timedelta(minutes=max(0, target_minutes - 5) + warmup_candles * target_minutes)
         for p in parts:
             raw = self._read_bars_raw(p)
             if raw.empty:
@@ -461,7 +463,8 @@ class DataStore:
             df = pd.DataFrame(aggregated, columns=['timestamp','open','high','low','close','volume'])
 
         # Range semantics are based on the completed target-timeframe candle timestamp.
-        df = df[(df.timestamp >= s) & (df.timestamp < e)]
+        earliest = s - pd.Timedelta(minutes=warmup_candles * target_minutes)
+        df = df[(df.timestamp >= earliest) & (df.timestamp < e)]
         if df.empty:
             # Give actionable diagnostics from the actual downloaded 5m rows.
             source = pd.concat(raw_parts, ignore_index=True).sort_values('timestamp').drop_duplicates(subset=['timestamp'])

@@ -22,3 +22,6 @@ Before finishing:
 9. If candle/indicator timeframes changed, run start-time-invariance tests and a datetime64[us] HTF indicator test.
 10. If position sizing changed, test min quantity, size increment, strict-budget ON and OFF.
 11. If result creation changed, test two same-name runs created immediately produce different directories.
+
+12. For indicator or timeframe changes, test 15m/30m/1h aggregation, duplicate/missing/off-grid timestamps, no future leakage, completed-boundary alignment, and chart vs backtest value parity.
+13. If warm-up behavior changes, test archived cross-segment history, missing-history warnings, historical cache invalidation, and identical overlapping values after sufficient warm-up.

@@ -64,3 +64,12 @@ This toggle does not disable cash checks and does not model SELL margin/collater
 ## Data fidelity
 
 The public archive is `LOW_FIDELITY_SYNTHETIC_BBO`: option bid/ask is reconstructed from 1m option candle closes using an estimated spread, and sizes are synthetic. P&L/fills are research estimates, not proof of historical executability. SELL margin/collateral/liquidation is not modeled.
+
+## Multi-timeframe warm-up and chart/backtest parity
+
+- Indicator calculations for both chart preview and backtest must include a conservative historical warm-up window **before** the requested range. Do not display warm-up bars or allow warm-up trades.
+- Automatically include earlier *catalogued* archive segments as underlying-only warm-up inputs in ARCHIVE/AUTO modes, without expanding the tradable option universe. Explicit SINGLE/MULTI selection remains scoped.
+- Flag insufficient **contiguous** warm-up history. No padding or generated candles; incomplete warm-up means early values may depend on dataset start. Backtest requests that support `warmup_policy=REQUIRE` must reject missing history.
+- Higher-timeframe OHLC and indicators use actual distinct on-grid base candle close timestamps. Duplicates, missing closes, or off-grid times must not form a complete candle.
+- Compare overlapping chart-preview and backtest indicator values at the same timestamp; no access to a higher-timeframe candle before its close.
+- A change to these semantics invalidates previous cached backtests. Keep historical results unchanged and identify the behavior change in reports.

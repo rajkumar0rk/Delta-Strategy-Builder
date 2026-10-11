@@ -281,6 +281,11 @@ def _aggregate_completed(frame: pd.DataFrame, base_tf: str, target_tf: str) -> p
         tmp.index = tmp.index.tz_convert('UTC')
     rule = f'{target}min'
     expected = target // base
+    # Duplicate close timestamps and off-grid bars must never masquerade as
+    # a complete HTF candle merely because a resample bucket has N rows.
+    if not (tmp.index == tmp.index.floor(f'{base}min')).all():
+        raise ValueError(f'Off-grid {base_tf} timestamps cannot form completed {target_tf} candles')
+    tmp = tmp.loc[~tmp.index.duplicated(keep='last')]
     rs = tmp.resample(rule, origin='epoch', label='right', closed='right')
     grouped = rs.agg({'open':'first','high':'max','low':'min','close':'last','volume':'sum'})
     counts = rs['close'].count()
