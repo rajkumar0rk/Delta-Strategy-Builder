@@ -1,4 +1,4 @@
-# BTC Strategy Lab V15.1
+# BTC Strategy Lab — V15.2 Accuracy & V16 Execution-Stress Research
 
 V15.1 adds a **correctness hardening pass** on top of V15 storage/performance hygiene and Codex project context. New runs no longer duplicate large arrays inside `summary.json`; normal ANALYSIS runs compress diagnostic artifacts, optimizer/ablation inner runs use COMPACT persistence, and a Storage Manager can compact legacy result folders, pin important runs, and apply explicit retention cleanup.
 
@@ -239,3 +239,9 @@ Frontend production build when dependencies are installed:
 Set-Location C:\projects\workspace\Delta-Strategy-Builder\visualizer\frontend
 npm run build
 ```
+
+## V15.2 + V16 phase 1 on working
+
+V15.2: conservative prehistory warm-up for chart/backtest indicators, distinct quote-observed mark-to-market drawdown, stale final quote unresolved exposure, gzip analysis compatibility, de-duplicated rejection diagnostics, ablation dependency cleanup, and RESEARCH_ONLY metadata. BacktestRequest warmup_candles (default 500) and warmup_policy (WARN|REQUIRE) are not strategy fields. ExecutionConfig.end_of_data_quote_max_age_seconds defaults to 300.
+
+V16 phase 1: research-only adverse premium execution-cost sensitivity (0/0.5/1/2/5% per side) over saved trades in Analysis, recalculating fee/GST differences. No recorded historical BBO depth, partial fills, live orders, SELL margin or execution replay. **Strategy JSON schema_version stays 15.** See codex/V15_2_ACCURACY_AND_TRUST.md and codex/V16_EXECUTION_STRESS.md.

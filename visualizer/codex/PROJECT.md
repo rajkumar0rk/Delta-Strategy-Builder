@@ -2,7 +2,7 @@
 
 ## Product
 
-**BTC Strategy Lab V15.1** is a local-first visual strategy research and options backtesting application. It is not a live broker/order-routing system.
+**BTC Strategy Lab V15.2 / V16 phase 1** is a local-first visual strategy research and options backtesting application. It is not a live broker/order-routing system.
 
 Repository layout (relevant subset):
 
@@ -52,3 +52,7 @@ Delta-Strategy-Builder/
 ## User workflow assumptions
 
 The user commonly tests long BTC history ranges and many parameter combinations. Performance, deterministic behavior, and avoiding unnecessary reprocessing are important. The user wants visual configurability rather than features that exist only in code.
+
+## V15.2 + V16 phase 1
+
+Backtest request warm-up and strict REQUIRE handling, mark-to-market risk sampling, stale-quote unresolved position metadata, ablation fixes, and analysis-only execution cost sensitivity. The strategy import schema remains version 15. No live broker routing or recorded order-book replay. See V15_2_ACCURACY_AND_TRUST.md and V16_EXECUTION_STRESS.md.

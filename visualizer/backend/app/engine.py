@@ -259,7 +259,9 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
 
 def _backtest_cache_key(req: BacktestRequest, paths) -> str:
     payload = {
-        'engine_version': 153,  # warmed indicator initialization + HTF grid validation
+        'engine_version': 154,  # MTF warm-up + V15.2 quote-risk/finality semantics
+        'warmup_candles': req.warmup_candles,
+        'warmup_policy': req.warmup_policy,
         'dataset': _dataset_fingerprint(paths),
         'dataset_id': getattr(req, 'dataset_id', None),
         'dataset_ids': [x.id for x in (paths if isinstance(paths, (list, tuple)) else [paths])],
@@ -833,6 +835,19 @@ def _entry_ignore_ids(strategy, direction: str) -> set[str] | None:
     return None
 
 
+def _mark_to_market_value(pos: Position, q: dict[str, Any], cash_balance: float, strategy, spot: float) -> float:
+    """Quote-observed liquidation equity, including spread, slippage and modeled fees.
+
+    Synthetic quote sizes / liquidity are NOT validated by this diagnostic.
+    """
+    px = _executable_exit_price(pos, q, strategy)
+    cv = float(pos.spec['contract_value'])
+    direction = 1.0 if pos.action == 'BUY' else -1.0
+    pnl = direction * (px - pos.entry_price) * pos.quantity * cv
+    exit_fee = _delta_fee(spot, px, pos.quantity, cv, strategy.execution)['total_fee_usd']
+    return cash_balance + pnl - pos.entry_fee - exit_fee
+
+
 def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = None) -> dict[str, Any]:
     store = DataStore()
 
@@ -907,6 +922,11 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
     peak_equity = equity
     max_dd = 0.0
     max_dd_percent = 0.0
+    mtm_peak = balance
+    mtm_max_dd = 0.0
+    mtm_max_dd_percent = 0.0
+    mtm_low = balance
+    mtm_samples = 0
     equity_curve: list[dict[str, Any]] = [{
         'timestamp': req.start,
         'equity_usd': equity,
@@ -983,6 +1003,20 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             return float(eligible.iloc[-1])
         return float(frame.iloc[0].close)
 
+    def record_mtm_value(marked: float):
+        nonlocal mtm_peak, mtm_max_dd, mtm_max_dd_percent, mtm_low, mtm_samples
+        mtm_peak = max(mtm_peak, marked)
+        dd = max(0.0, mtm_peak - marked)
+        mtm_max_dd = max(mtm_max_dd, dd)
+        if mtm_peak > 0:
+            mtm_max_dd_percent = max(mtm_max_dd_percent, dd / mtm_peak * 100.0)
+        mtm_low = min(mtm_low, marked)
+        mtm_samples += 1
+
+    def record_mtm(q: dict[str, Any], stamp: str):
+        if pos is not None:
+            record_mtm_value(_mark_to_market_value(pos, q, balance, strategy, spot_at(stamp)))
+
     def close_position(exit_time: str, exit_price: float, reason: str, exit_rule: dict[str, Any] | None = None):
         nonlocal pos, balance, equity, peak_equity, max_dd, max_dd_percent, pos_quotes, q_cursor
         assert pos
@@ -992,6 +1026,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         exit_fee = exit_fee_details['total_fee_usd']
         gross = ((exit_price - pos.entry_price) if pos.action == 'BUY' else (pos.entry_price - exit_price)) * pos.quantity * cv
         net = gross - pos.entry_fee - exit_fee
+        record_mtm_value(balance + net)
         balance += net
         equity = balance
         peak_equity = max(peak_equity, equity)
@@ -1115,6 +1150,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             while q_cursor < len(pos_quotes) and pos_quotes.iloc[q_cursor].timestamp <= ts:
                 q = pos_quotes.iloc[q_cursor].to_dict()
                 q_cursor += 1
+                record_mtm(q, pd.Timestamp(q['timestamp']).isoformat())
                 reason, _ = _stop_reason(pos, q, strategy)
                 if reason:
                     close_position(pd.Timestamp(q['timestamp']).isoformat(), _executable_exit_price(pos, q, strategy), reason)
@@ -1334,6 +1370,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         if chosen_breakout_origin is not None:
             consumed_breakout_origin[direction] = int(chosen_breakout_origin)
         daily_state['entries'] = int(daily_state['entries']) + 1
+        record_mtm(q, pos.entry_time)  # immediately price liquidation against spread + fees
         pos_quotes = store.quotes_between_many(parts, pos.symbol, pos.entry_time, iso(end_dt))
         q_cursor = 0
         while q_cursor < len(pos_quotes) and pos_quotes.iloc[q_cursor].timestamp <= pd.Timestamp(parse_time(pos.entry_time)):
@@ -1373,9 +1410,38 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             )
         )
 
-    if pos is not None and pos_quotes is not None and len(pos_quotes):
-        last = pos_quotes.iloc[-1]
-        close_position(pd.Timestamp(last.timestamp).isoformat(), _executable_exit_price(pos, last.to_dict(), strategy), 'END_OF_DATA')
+    # Process remaining historical quotes up to the requested end. This also
+    # detects protective exits after the last completed strategy candle.
+    if pos is not None and pos_quotes is not None:
+        while q_cursor < len(pos_quotes) and pd.Timestamp(pos_quotes.iloc[q_cursor].timestamp) <= pd.Timestamp(end_dt):
+            last_q = pos_quotes.iloc[q_cursor].to_dict()
+            q_cursor += 1
+            stamp = pd.Timestamp(last_q['timestamp']).isoformat()
+            record_mtm(last_q, stamp)
+            reason, _ = _stop_reason(pos, last_q, strategy)
+            if reason:
+                close_position(stamp, _executable_exit_price(pos, last_q, strategy), reason)
+                break
+
+    unresolved_position = None
+    if pos is not None:
+        last = pos_quotes.iloc[-1] if pos_quotes is not None and len(pos_quotes) else None
+        last_ts = pd.Timestamp(last.timestamp) if last is not None else None
+        quote_age = (pd.Timestamp(end_dt) - last_ts).total_seconds() if last_ts is not None else None
+        allowed_age = strategy.execution.end_of_data_quote_max_age_seconds
+        if last is not None and quote_age is not None and 0 <= quote_age <= allowed_age:
+            record_mtm(last.to_dict(), last_ts.isoformat())
+            close_position(last_ts.isoformat(), _executable_exit_price(pos, last.to_dict(), strategy), 'END_OF_DATA')
+        else:
+            unresolved_position = {
+                'symbol': pos.symbol, 'direction': pos.direction, 'action': pos.action,
+                'entry_time': pos.entry_time, 'entry_price': pos.entry_price,
+                'quantity': pos.quantity,
+                'last_quote_timestamp': last_ts.isoformat() if last_ts is not None else None,
+                'quote_age_seconds': quote_age,
+                'max_allowed_quote_age_seconds': allowed_age,
+                'reason': 'NO_FRESH_FINAL_QUOTE',
+            }
 
     wins = sum(t['net_pnl_usd'] > 0 for t in trades)
     losses = sum(t['net_pnl_usd'] < 0 for t in trades)
@@ -1396,6 +1462,11 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         'return_percent': (balance / strategy.risk.starting_balance_usd - 1) * 100,
         'max_closed_trade_drawdown_usd': max_dd,
         'max_closed_trade_drawdown_percent': max_dd_percent,
+        'max_mark_to_market_drawdown_usd': mtm_max_dd,
+        'max_mark_to_market_drawdown_percent': mtm_max_dd_percent,
+        'minimum_mark_to_market_equity_usd': mtm_low,
+        'mark_to_market_quote_samples': mtm_samples,
+        'unresolved_position_count': int(unresolved_position is not None),
         'avg_mfe_percent': (sum(t['mfe_percent'] for t in trades) / len(trades) if trades else 0),
         'avg_mae_percent': (sum(t['mae_percent'] for t in trades) / len(trades) if trades else 0),
         'daily_risk_blocks': int(daily_state['blocked_count']),
@@ -1422,6 +1493,18 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         'storage_mode': getattr(req, 'storage_mode', 'ANALYSIS'),
         'preflight': preflight,
         'warmup': warmup,
+        'unresolved_position': unresolved_position,
+        'reliability': {
+            'grade': 'RESEARCH_ONLY',
+            'quote_fidelity': str((store.archive_catalog() or {}).get('fidelity') or 'UNVERIFIED'),
+            'execution_model': 'TOP_OF_BOOK_NO_DEPTH_OR_PARTIAL_FILLS',
+            'limitations': [
+                'Synthetic/unverified quotes cannot confirm real fills',
+                'SELL margin, liquidation and actual depth are not modeled',
+                'MTM drawdown is sampled only at available historical quotes',
+            ] + (['Warm-up incomplete'] if not warmup['contiguous'] else [])
+              + (['Open position unresolved at end'] if unresolved_position else []),
+        },
         'fee_model': {
             'name': 'DELTA_OPTIONS',
             'option_notional_fee_rate_percent': strategy.execution.option_notional_fee_rate_percent,

@@ -73,3 +73,11 @@ The public archive is `LOW_FIDELITY_SYNTHETIC_BBO`: option bid/ask is reconstruc
 - Higher-timeframe OHLC and indicators use actual distinct on-grid base candle close timestamps. Duplicates, missing closes, or off-grid times must not form a complete candle.
 - Compare overlapping chart-preview and backtest indicator values at the same timestamp; no access to a higher-timeframe candle before its close.
 - A change to these semantics invalidates previous cached backtests. Keep historical results unchanged and identify the behavior change in reports.
+
+## V15.2 and V16 phase 1 consistency
+
+- Backtest and chart preview should share actual completed-candle warm-up. No trades before the requested range. Missing contiguous warm-up gives a warning or a strict rejection.
+- Quote-observed liquidation MTM drawdown is an estimate and separate from closed-trade drawdown.
+- Do not book stale end-of-range quote exits. Represent unresolved exposure explicitly.
+- V16 stress analysis only adjusts existing filled trades hypothetically; it does not re-run entries/stops or imply recorded depth, liquidity, margin, or execution probability.
+- Preserve the strategy import schema_version 15 and RESEARCH_ONLY warnings.

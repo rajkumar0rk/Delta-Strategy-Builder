@@ -25,3 +25,12 @@ Before finishing:
 
 12. For indicator or timeframe changes, test 15m/30m/1h aggregation, duplicate/missing/off-grid timestamps, no future leakage, completed-boundary alignment, and chart vs backtest value parity.
 13. If warm-up behavior changes, test archived cross-segment history, missing-history warnings, historical cache invalidation, and identical overlapping values after sufficient warm-up.
+
+## V15.2 + V16 regression checks
+
+- Compare HTF chart/backtest values and strict/non-strict warm-up; test stale and fresh final quotes.
+- Verify mark-to-market bid/ask fee accounting and distinguish unresolved from realized P&L.
+- Test gzip analysis compatibility and paired execution-rejection deduplication.
+- Confirm all ablation references validate after indicator removal.
+- For V16 stress, 0% must match baseline; adverse stress should lower BUY/SELL P&L, skip invalid trades and report coverage; run backend tests + frontend build.
+- Check codex/CHANGE_IMPACT_MATRIX.md and keep AI prompts/schema in sync.

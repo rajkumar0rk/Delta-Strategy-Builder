@@ -66,8 +66,8 @@ def build_analysis(run_id: str) -> dict[str, Any]:
     path = _safe_run_dir(run_id)
     summary = _read_json(path / 'summary.json', {})
     trades = summary.get('trades') or _read_csv(path / 'trades.csv')
-    decisions = _read_csv(path / 'decision_events.csv')
-    markers = summary.get('markers') or _read_json(path / 'markers.json', [])
+    decisions = _read_csv(path / 'decision_events.csv') or _read_csv(path / 'decision_events.csv.gz')
+    markers = summary.get('markers') or _read_json(path / 'markers.json', []) or _read_json(path / 'markers.json.gz', [])
 
     winners = [t for t in trades if (_f(t.get('net_pnl_usd')) or 0) > 0]
     losers = [t for t in trades if (_f(t.get('net_pnl_usd')) or 0) < 0]
@@ -77,6 +77,12 @@ def build_analysis(run_id: str) -> dict[str, Any]:
     directions = Counter(str(t.get('direction') or 'UNKNOWN') for t in trades)
     rejection_reasons = Counter()
     failed_conditions = Counter()
+    seen_rejections: set[tuple[str, str, str]] = set()
+    def add_rejection(timestamp, direction, reason):
+        key = (str(timestamp or ''), str(direction or ''), str(reason or 'UNKNOWN'))
+        if key not in seen_rejections:
+            seen_rejections.add(key)
+            rejection_reasons[key[2]] += 1
     def bucket():
         return {'trades': 0, 'net_pnl_usd': 0.0, 'gross_pnl_usd': 0.0, 'fees_usd': 0.0, 'wins': 0, 'losses': 0}
     by_hour: dict[str, dict[str, float]] = defaultdict(bucket)
@@ -86,7 +92,7 @@ def build_analysis(run_id: str) -> dict[str, Any]:
 
     for d in decisions:
         if str(d.get('kind')) == 'EXECUTION' and str(d.get('passed', '')).lower() != 'true':
-            rejection_reasons[str(d.get('reason') or 'UNKNOWN')] += 1
+            add_rejection(d.get('timestamp'), d.get('direction'), d.get('reason'))
         if str(d.get('kind')) == 'ENTRY' and str(d.get('passed', '')).lower() != 'true':
             try:
                 tree = json.loads(d.get('details') or '{}')
@@ -120,7 +126,7 @@ def build_analysis(run_id: str) -> dict[str, Any]:
     reject_markers = [m for m in markers if str(m.get('kind')) == 'reject']
     for m in reject_markers:
         reason = str((m.get('details') or {}).get('reason') or m.get('text') or 'UNKNOWN')
-        rejection_reasons[reason] += 1
+        add_rejection(m.get('timestamp'), m.get('direction'), reason)
 
     def rows_for(container):
         return [
@@ -153,7 +159,7 @@ def build_analysis(run_id: str) -> dict[str, Any]:
         'daily_ist': rows_for(dict(sorted(by_day.items()))),
         'monthly_ist': rows_for(dict(sorted(by_month.items()))),
         'weekday_ist': rows_for({day: by_weekday[day] for day in weekday_order if day in by_weekday}),
-        'equity_curve': summary.get('equity_curve') or _read_csv(path / 'equity_curve.csv'),
+        'equity_curve': summary.get('equity_curve') or _read_csv(path / 'equity_curve.csv') or _read_csv(path / 'equity_curve.csv.gz'),
         'fee_model': summary.get('fee_model', {}),
     }
     analysis['observations'] = _observations(analysis)

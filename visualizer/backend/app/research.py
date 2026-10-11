@@ -254,11 +254,26 @@ def run_ablation(req: AblationRequest, progress: Callable[[str], None] | None = 
         payload = req.strategy.model_dump(mode='json')
         payload['indicators'] = [x for x in payload['indicators'] if x['id'] != indicator.id]
         removed_ids: set[str] = set()
-        for scope in ('call_entry','put_entry','call_exit','put_exit','no_trade'):
+        for scope in ('call_entry','put_entry','call_exit','put_exit','no_trade','call_no_trade','put_no_trade'):
             _remove_indicator_conditions(payload[scope], indicator.id, removed_ids)
-        for side in ('call_entry_behavior','put_entry_behavior'):
-            if payload[side].get('trigger_condition_id') in removed_ids:
-                payload[side]['trigger_condition_id'] = None
+        for side in ('call','put'):
+            for lifecycle in payload.get(f'{side}_entry_lifecycles', []):
+                if lifecycle.get('trigger_condition_id') in removed_ids:
+                    lifecycle['trigger_condition_id'] = None
+            behavior = payload.get(f'{side}_entry_behavior', {})
+            if behavior.get('trigger_condition_id') in removed_ids:
+                behavior['trigger_condition_id'] = None
+            score = payload.get(f'{side}_big_trend_score', {})
+            score['components'] = [c for c in score.get('components', []) if c.get('condition_id') not in removed_ids]
+            if score.get('enabled') and not score['components']:
+                score['enabled'] = False
+                payload.get(f'{side}_trend_phase', {})['enabled'] = False
+            breakout = payload.get(f'{side}_breakout_retest', {})
+            relevant = (breakout.get('breakout_condition_id') in removed_ids
+                or any(str(breakout.get(key) or '').split('.', 1)[0] == indicator.id
+                       for key in ('breakout_level_operand', 'atr_operand')))
+            if relevant:
+                breakout['enabled'] = False
         variants.append((f'WITHOUT {indicator.id}', StrategyConfig.model_validate(payload)))
     rows = []
     for index, (label, strategy) in enumerate(variants, start=1):

@@ -54,3 +54,7 @@ Keep logic deterministic and testable. Add focused tests for bug fixes and behav
 - Contract `min_quantity` and `size_increment` are always enforced. `risk.enforce_trade_budget_strict` controls only whether a valid minimum/fixed quantity may exceed `budget_usd`.
 - Result directories must be created exclusively with collision-proof IDs; never use `exist_ok=True` for a new run folder.
 - Preserve the LOW_FIDELITY_SYNTHETIC_BBO warning in results and AI/Codex context.
+
+## V15.2 + V16 change invariants
+
+Use codex/CHANGE_IMPACT_MATRIX.md for all edits. Keep request-level warm-up separate from StrategyConfig. Chart and backtest share no-lookahead completed-HTF indicators; do not trade pre-range. Preserve closed-trade versus quote-observed MTM drawdown. Do not close open positions against stale final quotes. Mark low-fidelity results RESEARCH_ONLY; V16 execution stress is **post-trade analysis**, not a new fill simulator. Synchronize AI prompt, backend tests, UI/API contracts and docs with relevant changes.

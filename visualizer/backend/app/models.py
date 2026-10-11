@@ -146,6 +146,7 @@ class ExecutionConfig(BaseModel):
     premium_fee_cap_percent: Literal[3.5] = 3.5
     gst_percent: Literal[18.0] = 18.0
     decision_log_mode: Literal["FULL", "EVENTS_ONLY"] = "FULL"
+    end_of_data_quote_max_age_seconds: int = Field(default=300, ge=0, le=3600)
     fee_edge_filter: FeeEdgeFilterConfig = Field(default_factory=FeeEdgeFilterConfig)
 
     @model_validator(mode="before")
@@ -547,6 +548,8 @@ class BacktestRequest(DatasetSelection):
     # keeps reproducible metrics/trades plus compressed diagnostics without
     # duplicating large arrays in summary.json.
     storage_mode: Literal["COMPACT", "ANALYSIS", "FULL_DEBUG"] = "FULL_DEBUG"
+    warmup_candles: int = Field(default=500, ge=0, le=20000)
+    warmup_policy: Literal["WARN", "REQUIRE"] = "WARN"
 
 
 class PreviewRequest(DatasetSelection):

@@ -45,7 +45,7 @@ def build_strategy_prompt(req: AiStrategyPromptRequest) -> str:
     current = req.strategy.model_dump()
     dataset = _dataset_context(req)
 
-    return f"""You are designing a BTC options strategy for BTC Strategy Lab V15.1.
+    return f"""You are designing a BTC options strategy for BTC Strategy Lab V15.2 / V16 research mode.
 
 IMPORTANT OUTPUT CONTRACT
 - Return ONE valid JSON object only. Do not return Python, Pine Script, prose around the JSON, markdown fences, comments, NaN, Infinity, or invented fields.
@@ -169,6 +169,7 @@ Contract selection is direction aware. CALL maps to CE and PUT maps to PE.
 EXECUTION
 - max_entry_quote_delay_seconds: 0..3600
 - max_exit_quote_delay_seconds: 0..3600
+- end_of_data_quote_max_age_seconds: 0..3600 (default 300); stale end quotes leave unresolved exposure, not an assumed exit.
 - slippage_ticks: 0..100
 - BUY entry = ASK + configured slippage ticks; BUY exit = BID - configured slippage ticks.
 - SELL entry = BID - configured slippage ticks; SELL exit = ASK + configured slippage ticks.
@@ -229,6 +230,14 @@ NO TRADE
 DATASET CONTEXT FOR THIS PROMPT
 {json.dumps(dataset, indent=2)}
 
+V15.2 ACCURACY & TRUST (BACKTEST SETTINGS ARE NOT STRATEGY FIELDS)
+- Indicator warm-up is loaded before the requested range; chart and backtest share completed-candle alignment. Warm-up data never permits entries.
+- warmup_candles (default 500) and warmup_policy (WARN or REQUIRE) are BacktestRequest fields only; keep schema_version=15 and do not insert them in StrategyConfig.
+- Closed-trade and sampled liquidation-value mark-to-market drawdown are separate metrics; the displayed equity curve is closed-trade equity.
+- Open trades without fresh end-of-data quotes remain unresolved. Realized P&L does not include their future outcome.
+- Research-only quality metadata flags synthetic quotes, unavailable depth/partial fills, margin and liquidation limitations.
+- V16 execution-cost sensitivity is analysis-only; do not invent a strategy.execution_stress property.
+
 DATA LIMITATIONS
 - The unified Delta archive is LOW_FIDELITY_SYNTHETIC_BBO: option bid/ask is reconstructed from 1m option candle closes using an estimated spread, and bid/ask sizes are synthetic. Backtest P&L is research/estimated P&L, NOT proof of historically executable fills.
 - SELL margin/collateral/liquidation requirements are not modeled.
@@ -236,7 +245,7 @@ DATA LIMITATIONS
 - Existing normalized option quote data can provide bid, ask, bid_size, ask_size, volume, and open_interest when present in the source rows.
 - V15.1 does NOT provide historical IV, delta, gamma, theta, vega, or rho. Do not reference them.
 - V15.1 can optionally append uncovered completed UTC days from the repository history archive before a backtest; strategy logic itself never fetches or uses future/incomplete data.
-- strategy.timeframe supports "5m" and "10m". 10m candles are aggregated from complete source 5m pairs; incomplete pairs are discarded.
+- strategy.timeframe supports "5m", "10m", "15m", "30m", "1h", with completed UTC 5m source aggregation.
 
 V15.1 STATEFUL BIG-TREND FEATURES
 - Big Trend score supports BINARY and CONTINUOUS components. CONTINUOUS maps a numeric left operand from zero_at to full_at and gives partial weight between them.
@@ -250,7 +259,7 @@ V15.1 STATEFUL BIG-TREND FEATURES
 V15.1 RESEARCH TOOLS
 - Identical backtests are cached by dataset fingerprint + selected range + full strategy JSON.
 - The UI can sweep one, two, or three numeric strategy/indicator/condition parameters, render 2D heatmaps (and 3D slices), score monthly consistency, and optionally run expanding walk-forward validation.
-- Indicator ablation removes one strategy indicator plus conditions that reference it, then compares the result to the full strategy.
+- Indicator ablation removes dependent entry/exit/directional no-trade conditions, lifecycle triggers and score components, then validates the changed configuration.
 - Saved backtest runs can be compared side by side.
 - These research tools do not change the strategy JSON schema; they generate controlled variants of it.
 
