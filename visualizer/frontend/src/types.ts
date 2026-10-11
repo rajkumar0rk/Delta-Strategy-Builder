@@ -45,3 +45,5 @@ export type StorageUsage={settings:StorageSettings;results_bytes:number;cache_by
 
 export type LiveMonitorScreen = {state:string;direction:string|null;candle_id:number;candle_close_utc:string;latest_completed_5m_close:number;last_15m_close:number;prior_24_high:number;prior_24_low:number;volume_ratio:number;rsi_15m:number;rsi_1h:number;breakout_level:number|null;explanation:string;ai?:{verdict:string;reason:string;model:string};telegram_delivery?:string;disclaimer?:string};
 export type LiveMonitorStatus={running:boolean;interval_minutes:number;gemini_configured:boolean;gemini_model:string;telegram_configured:boolean;last_checked_utc:string|null;last_screen:LiveMonitorScreen|null;last_error:string|null;signals:LiveMonitorScreen[]};
+
+export type LiveSignal = LiveMonitorScreen;
