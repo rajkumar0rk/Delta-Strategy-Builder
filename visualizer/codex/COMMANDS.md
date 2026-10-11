@@ -28,6 +28,21 @@ Set-Location C:\projects\workspace\Delta-Strategy-Builder\visualizer\frontend
 npm run build
 ```
 
+## Frontend regression tests
+
+Run from `visualizer/frontend`:
+
+```powershell
+npm run build
+npm run test
+```
+
+Vitest runs frontend unit and server-rendered component tests without a browser.
+Coverage includes strategy defaults (CALL/PUT separation, budget and fee settings)
+and V16 execution-stress report rendering (baseline/stress rows, exclusions,
+and missing values). This is **not** a replacement for the browser workflow
+and chart hover/timeframe smoke tests.
+
 ## History archive
 
 ```powershell
