@@ -231,3 +231,29 @@ def research_trend_discovery(req: TrendDiscoveryRequest):
 @app.get('/api/results')
 def results_list(limit: int = Query(100, ge=1, le=500)):
     return list_results(limit)
+
+
+# Independent signal-only BTC monitor. No broker order endpoints.
+from .live_monitor import live_monitor
+
+@app.get('/api/live-monitor')
+def live_monitor_status():
+    return live_monitor.status()
+
+@app.post('/api/live-monitor/start')
+def live_monitor_start():
+    try:
+        return live_monitor.start()
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+@app.post('/api/live-monitor/stop')
+def live_monitor_stop():
+    return live_monitor.stop()
+
+@app.post('/api/live-monitor/check')
+def live_monitor_check():
+    try:
+        return live_monitor.check_once()
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
