@@ -17,6 +17,7 @@ import {BigTrendDetector} from './components/BigTrendDetector';
 import {BigTrendAdvanced} from './components/BigTrendAdvanced';
 import {TrendDiscoveryPanel} from './components/TrendDiscoveryPanel';
 import {StorageManager} from './components/StorageManager';
+import {LiveMonitor} from './components/LiveMonitor';
 import './styles.css';
 
 const pad=(n:number)=>String(n).padStart(2,'0');
@@ -96,6 +97,7 @@ export default function App(){
  {preflight&&<section className={`preflight ${preflight.ok?'preflight-ok':'preflight-bad'}`}><div><b>{preflight.ok?'✓ Preflight passed':'✕ Preflight failed'}</b><span>{preflight.dataset_ids.length} dataset(s): {preflight.dataset_ids.join(', ')}</span></div>{preflight.warnings.map((x,i)=><p key={i}>⚠ {x}</p>)}{preflight.errors.map((x,i)=><p key={`e${i}`}>✕ {x}</p>)}</section>}
  <section className="card name-card"><label>Strategy name<input value={strategy.name} onChange={e=>setStrategy({...strategy,name:e.target.value})}/></label><label>Saved project strategy<select value={savedStrategyId} onChange={e=>setSavedStrategyId(e.target.value)}><option value="">Select saved strategy…</option>{savedStrategies.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select></label><div className="strategy-actions"><button onClick={async()=>{try{const x=await api.save(strategy);setStatus(`Saved to project: ${x.path}`);await refreshSaved()}catch(e){setStatus(String(e))}}}>Save to project</button><button disabled={!savedStrategyId} onClick={async()=>{try{const x=await api.loadProjectStrategy(savedStrategyId);setStrategy(x.strategy);setResult(null);setStatus(`Loaded project strategy: ${x.strategy.name}`)}catch(e){setStatus(String(e))}}}>Load selected</button><button className="ghost" onClick={()=>void refreshSaved()}>↻ Strategies</button><button onClick={exportStrategy}>Export strategy</button><button onClick={()=>importRef.current?.click()}>Import strategy</button><button className="ai-button" disabled={promptBusy} onClick={()=>void copyAiPrompt(false)}>✦ Copy AI strategy prompt</button><button className="ghost" disabled={promptBusy} onClick={()=>void copyAiPrompt(true)}>Download AI prompt</button><button className="ghost" onClick={()=>{setStrategy(defaultStrategy());setResult(null);setStatus('Reset to V15.1 default strategy.')}}>Reset</button><input ref={importRef} className="hidden-file" type="file" accept=".json,application/json" onChange={e=>{const f=e.target.files?.[0];if(f)void importStrategy(f);e.currentTarget.value=''}}/></div></section>
  <section className="ai-hint"><b>V15.1 research workflow:</b> keep the stateful V12 entry engine, then use Big Trend Outcome Discovery to label genuine future moves and compare their pre-move ADX/DMI, ATR expansion, EMA separation, slopes, score/state and other configured indicator features against fake strong-looking setups.</section>
+ <LiveMonitor/>
  <StorageManager onStatus={setStatus}/>
  <TradingChart payload={chart} strategy={strategy} onMoveIndicator={moveIndicator} onToggleIndicator={toggleIndicator}/>
  <BigTrendDetector payload={chart} strategy={strategy}/>
