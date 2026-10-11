@@ -81,3 +81,7 @@ The public archive is `LOW_FIDELITY_SYNTHETIC_BBO`: option bid/ask is reconstruc
 - Do not book stale end-of-range quote exits. Represent unresolved exposure explicitly.
 - V16 stress analysis only adjusts existing filled trades hypothetically; it does not re-run entries/stops or imply recorded depth, liquidity, margin, or execution probability.
 - Preserve the strategy import schema_version 15 and RESEARCH_ONLY warnings.
+
+## V16 execution stress
+
+Adverse premium scenarios are post-trade analysis only. They do not alter execution, stop timing, depth, historical dataset, margin or saved original trade P&L; synthetic quotes remain RESEARCH_ONLY.

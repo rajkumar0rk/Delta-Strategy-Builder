@@ -58,3 +58,7 @@ Keep logic deterministic and testable. Add focused tests for bug fixes and behav
 ## V15.2 + V16 change invariants
 
 Use codex/CHANGE_IMPACT_MATRIX.md for all edits. Keep request-level warm-up separate from StrategyConfig. Chart and backtest share no-lookahead completed-HTF indicators; do not trade pre-range. Preserve closed-trade versus quote-observed MTM drawdown. Do not close open positions against stale final quotes. Mark low-fidelity results RESEARCH_ONLY; V16 execution stress is **post-trade analysis**, not a new fill simulator. Synchronize AI prompt, backend tests, UI/API contracts and docs with relevant changes.
+
+## V16 phase 1 companion change rules
+
+Execution stress is analysis only. If changed, synchronize execution_stress.py, analysis.py, AnalysisPanel.tsx, ExecutionStressPanel.tsx, frontend types, AI strategy prompt, tests and codex/V16_EXECUTION_STRESS.md.

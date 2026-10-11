@@ -238,6 +238,10 @@ V15.2 ACCURACY & TRUST (BACKTEST SETTINGS ARE NOT STRATEGY FIELDS)
 - Research-only quality metadata flags synthetic quotes, unavailable depth/partial fills, margin and liquidation limitations.
 - V16 execution-cost sensitivity is analysis-only; do not invent a strategy.execution_stress property.
 
+V16 PHASE 1 EXECUTION-COST SENSITIVITY
+- Post-trade Research Analysis supports hypothetical additional adverse premium fills at entry and exit (0%, 0.5%, 1%, 2%, 5%). This changes only analysis output, not strategy signals or execution.
+- Execution stress is NOT part of StrategyConfig; never add a schema field or imply order-book replay, partial fills or margin validation.
+
 DATA LIMITATIONS
 - The unified Delta archive is LOW_FIDELITY_SYNTHETIC_BBO: option bid/ask is reconstructed from 1m option candle closes using an estimated spread, and bid/ask sizes are synthetic. Backtest P&L is research/estimated P&L, NOT proof of historically executable fills.
 - SELL margin/collateral/liquidation requirements are not modeled.

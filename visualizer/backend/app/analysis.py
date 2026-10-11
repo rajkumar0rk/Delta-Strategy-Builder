@@ -7,6 +7,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 from .config import result_root, cache_root
 from .storage import read_csv_any, read_json_any
+from .execution_stress import build_execution_stress
 
 IST = ZoneInfo('Asia/Kolkata')
 
@@ -161,6 +162,7 @@ def build_analysis(run_id: str) -> dict[str, Any]:
         'weekday_ist': rows_for({day: by_weekday[day] for day in weekday_order if day in by_weekday}),
         'equity_curve': summary.get('equity_curve') or _read_csv(path / 'equity_curve.csv') or _read_csv(path / 'equity_curve.csv.gz'),
         'fee_model': summary.get('fee_model', {}),
+        'execution_stress': build_execution_stress(trades, summary.get('fee_model') or {}, summary.get('reliability') or {}),
     }
     analysis['observations'] = _observations(analysis)
     analysis['ai_prompt'] = _ai_prompt(run_id)

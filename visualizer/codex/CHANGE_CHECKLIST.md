@@ -34,3 +34,7 @@ Before finishing:
 - Confirm all ablation references validate after indicator removal.
 - For V16 stress, 0% must match baseline; adverse stress should lower BUY/SELL P&L, skip invalid trades and report coverage; run backend tests + frontend build.
 - Check codex/CHANGE_IMPACT_MATRIX.md and keep AI prompts/schema in sync.
+
+## V16 execution sensitivity verification
+
+Check zero-stress P&L preservation, adverse BUY/SELL cost, invalid-trade coverage, fee/GST differences and frontend build. Keep strategy schema_version 15 and V16 analysis separate from fills.
