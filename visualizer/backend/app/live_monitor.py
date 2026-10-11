@@ -131,7 +131,7 @@ def gemini_review(signal: dict[str, Any]) -> dict[str, str]:
     key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not key:
         raise RuntimeError("GEMINI_API_KEY is not set; refusing AI review")
-    model = os.environ.get("BTC_MONITOR_GEMINI_MODEL", "gemini-3.1-flash-lite").strip()
+    model = os.environ.get("BTC_MONITOR_GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
     if not model or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._" for c in model):
         raise ValueError("Invalid Gemini model name")
     url = f"{GEMINI_URL}/{model}:generateContent"
@@ -201,7 +201,7 @@ class LiveMonitor:
                 "running": self._running,
                 "interval_minutes": 5,
                 "gemini_configured": bool(os.environ.get("GEMINI_API_KEY", "").strip()),
-                "gemini_model": os.environ.get("BTC_MONITOR_GEMINI_MODEL", "gemini-3.1-flash-lite"),
+                "gemini_model": os.environ.get("BTC_MONITOR_GEMINI_MODEL", "gemini-3.5-flash-lite"),
                 "telegram_configured": bool(os.environ.get("BTC_MONITOR_TELEGRAM_BOT_TOKEN") and os.environ.get("BTC_MONITOR_TELEGRAM_CHAT_ID")),
                 **dict(self._state),
                 "signals": list(self._state["signals"]),
@@ -212,7 +212,7 @@ class LiveMonitor:
             raise ValueError("Set GEMINI_API_KEY in the backend environment first")
         with self._lock:
             if self._running:
-                return self.status_unlocked()
+                return self._status_unlocked()
             if self._thread and self._thread.is_alive():
                 raise ValueError("Previous monitor run is still shutting down")
             stop_event = threading.Event()
@@ -222,8 +222,16 @@ class LiveMonitor:
             self._thread.start()
         return self.status()
 
-    def status_unlocked(self) -> dict[str, Any]:
-        return {"running": self._running, **self._state}
+    def _status_unlocked(self) -> dict[str, Any]:
+        return {
+            "running": self._running,
+            "interval_minutes": 5,
+            "gemini_configured": bool(os.environ.get("GEMINI_API_KEY", "").strip()),
+            "gemini_model": os.environ.get("BTC_MONITOR_GEMINI_MODEL", "gemini-3.5-flash-lite"),
+            "telegram_configured": bool(os.environ.get("BTC_MONITOR_TELEGRAM_BOT_TOKEN") and os.environ.get("BTC_MONITOR_TELEGRAM_CHAT_ID")),
+            **dict(self._state),
+            "signals": list(self._state["signals"]),
+        }
 
     def stop(self) -> dict[str, Any]:
         with self._lock:
@@ -271,11 +279,18 @@ class LiveMonitor:
                 self._state["last_error"] = None
             if result["state"] != "CANDIDATE" or already_seen or self._stop_event.is_set():
                 return self.status()
-            ai = gemini_review(result)
+            try:
+                ai = gemini_review(result)
+            except Exception as exc:
+                with self._lock:
+                    self._state["last_screen"] = {**result, "state": "AI_UNAVAILABLE", "explanation": "Gemini review unavailable; no actionable candidate"}
+                raise
             result = {**result, "ai": ai}
             with self._lock:
                 self._state["last_screen"] = result
             if ai["verdict"] != "PASS" or self._stop_event.is_set():
+                with self._lock:
+                    self._state["last_screen"] = {**result, "state": "REJECTED", "explanation": ai["reason"]}
                 return self.status()
             result["state"] = "MANUAL_REVIEW_ONLY"
             result["disclaimer"] = "Not a BUY signal. Delta India option bid/ask, expiry, fees, lot and <=$100 budget unverified."
@@ -296,10 +311,12 @@ class LiveMonitor:
                 self._state["signals"] = ([result] + self._state["signals"])[:25]
                 self._state["last_screen"] = result
             return self.status()
-        except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError, json.JSONDecodeError, RuntimeError) as exc:
+        except Exception as exc:  # A monitoring failure must never publish a trade alert.
             with self._lock:
                 self._state["last_checked_utc"] = utc_iso(int(time.time() * 1000))
                 self._state["last_error"] = f"{type(exc).__name__}: {str(exc)[:180] if not isinstance(exc, httpx.HTTPError) else 'network/API request failed'}"
+                if self._state["last_screen"] and self._state["last_screen"].get("state") == "CANDIDATE":
+                    self._state["last_screen"] = {**self._state["last_screen"], "state": "AI_UNAVAILABLE", "explanation": "Screen incomplete: do not act"}
             return self.status()
         finally:
             self._tick_lock.release()
