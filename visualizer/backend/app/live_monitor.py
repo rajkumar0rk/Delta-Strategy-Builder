@@ -51,7 +51,7 @@ def parse_closed_bars(raw: list[list[Any]], interval: str, now_ms: int) -> list[
         bars.append(Bar(opened, closed, o, h, l, c, v))
     if len(bars) < 80:
         raise ValueError("Insufficient completed market candles")
-    if any(b.open_ms - a.open_ms != period for a, b in zip(bars[-80:-1], bars[-79:])):
+    if any(b.open_ms - a.open_ms != period for a, b in zip(bars[:-1], bars[1:])):
         raise ValueError("Missing, duplicate or out-of-order market candles")
     return bars
 
@@ -131,7 +131,7 @@ def gemini_review(signal: dict[str, Any]) -> dict[str, str]:
     key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not key:
         raise RuntimeError("GEMINI_API_KEY is not set; refusing AI review")
-    model = os.environ.get("BTC_MONITOR_GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
+    model = os.environ.get("BTC_MONITOR_GEMINI_MODEL", "gemini-2.5-flash-lite").strip()
     if not model or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._" for c in model):
         raise ValueError("Invalid Gemini model name")
     url = f"{GEMINI_URL}/{model}:generateContent"
@@ -201,7 +201,7 @@ class LiveMonitor:
                 "running": self._running,
                 "interval_minutes": 5,
                 "gemini_configured": bool(os.environ.get("GEMINI_API_KEY", "").strip()),
-                "gemini_model": os.environ.get("BTC_MONITOR_GEMINI_MODEL", "gemini-3.5-flash-lite"),
+                "gemini_model": os.environ.get("BTC_MONITOR_GEMINI_MODEL", "gemini-2.5-flash-lite"),
                 "telegram_configured": bool(os.environ.get("BTC_MONITOR_TELEGRAM_BOT_TOKEN") and os.environ.get("BTC_MONITOR_TELEGRAM_CHAT_ID")),
                 **dict(self._state),
                 "signals": list(self._state["signals"]),
@@ -227,7 +227,7 @@ class LiveMonitor:
             "running": self._running,
             "interval_minutes": 5,
             "gemini_configured": bool(os.environ.get("GEMINI_API_KEY", "").strip()),
-            "gemini_model": os.environ.get("BTC_MONITOR_GEMINI_MODEL", "gemini-3.5-flash-lite"),
+            "gemini_model": os.environ.get("BTC_MONITOR_GEMINI_MODEL", "gemini-2.5-flash-lite"),
             "telegram_configured": bool(os.environ.get("BTC_MONITOR_TELEGRAM_BOT_TOKEN") and os.environ.get("BTC_MONITOR_TELEGRAM_CHAT_ID")),
             **dict(self._state),
             "signals": list(self._state["signals"]),
