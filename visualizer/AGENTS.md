@@ -1,6 +1,6 @@
 # BTC Strategy Lab — Codex instructions
 
-Read `codex/PROJECT.md`, `codex/ARCHITECTURE.md`, `codex/DATA_AND_BACKTEST_RULES.md`, and `codex/COMMANDS.md` before making non-trivial changes.
+Read `codex/PROJECT.md`, `codex/ARCHITECTURE.md`, `codex/DATA_AND_BACKTEST_RULES.md`, `codex/COMMANDS.md`, and **`codex/CHANGE_IMPACT_MATRIX.md`** before making non-trivial changes.
 
 ## Scope
 
@@ -19,6 +19,10 @@ This folder is the visual BTC options research/backtesting application inside th
 - Never delete pinned result runs. Do not delete quote SQLite indexes as part of result cleanup.
 - Prefer additive/migrating schema changes. Existing saved strategy JSON should continue to validate whenever practical.
 - Avoid new dependencies unless the feature cannot be implemented cleanly with the existing stack.
+
+## Mandatory companion-file rule
+
+Before editing any file, consult `codex/CHANGE_IMPACT_MATRIX.md`, search for actual producers/consumers, and inspect the mapped companion files. Update affected backend, frontend, schema, AI prompt, tests, and documentation **in the same change**. Do not edit unrelated files just to satisfy the matrix. In the final response, list what was changed, what was inspected, and what remains unverified.
 
 ## Required verification
 
