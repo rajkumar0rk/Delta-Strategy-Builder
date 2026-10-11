@@ -1,6 +1,8 @@
-import type {ChartPayload,Dataset,IndicatorDefinition,Strategy,AnalysisResult,PreflightResult,SavedStrategy,JobState,ArchiveInfo,ArchiveSyncPlan,StorageUsage,StorageSettings} from './types';
+import type {ChartPayload,Dataset,IndicatorDefinition,Strategy,AnalysisResult,PreflightResult,SavedStrategy,JobState,ArchiveInfo,ArchiveSyncPlan,StorageUsage,StorageSettings,LiveMonitorStatus} from './types';
 async function json<T>(r:Response):Promise<T>{if(!r.ok){const t=await r.text();throw new Error(t)}return r.json() as Promise<T>}
 export const api={
+ liveMonitorStatus:()=>fetch('/api/live-monitor').then(r=>json<LiveMonitorStatus>(r)),
+ liveMonitorAction:(action:'start'|'stop'|'check')=>fetch(`/api/live-monitor/${action}`,{method:'POST'}).then(r=>json<LiveMonitorStatus>(r)),
  datasets:()=>fetch('/api/datasets').then(r=>json<Dataset[]>(r)),
  archive:()=>fetch('/api/archive').then(r=>json<ArchiveInfo>(r)),
  archivePlan:(body:any)=>fetch('/api/archive/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>json<ArchiveSyncPlan>(r)),
