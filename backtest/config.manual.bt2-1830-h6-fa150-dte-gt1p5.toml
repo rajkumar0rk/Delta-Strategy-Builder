@@ -1,0 +1,22 @@
+name = "bt2_1830_1900_h6_fa150_dte_gt_1p5"
+bt_families = [2]
+exit_policy = "PLAIN"
+
+[filters]
+macd = false
+h6 = true
+h6_true_ranges = 6
+fee_aware_multiplier = 1.5
+m30 = false
+m30_minutes = 30
+stoch_momentum = false
+
+[option]
+# Reject contracts with 1.5 days (36 hours) or less remaining.
+min_days_to_expiry = 1.5
+min_days_to_expiry_inclusive = false
+max_days_to_expiry = 3.0
+
+[session]
+entry_windows_ist = ["18:30-19:00"]
+no_trade_days = []

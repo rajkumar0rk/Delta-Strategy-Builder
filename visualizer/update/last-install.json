@@ -1,0 +1,18 @@
+﻿{
+    "backups":  [
+                    {
+                        "OriginalSha256":  "9CC7908EAD99A92FCCA4C1CD11A823EDD67048F80BBB4C8091733119158401E8",
+                        "Backup":  "C:\\projects\\workspace\\Delta-Strategy-Builder\\backtest\\ema_vwap_research.py.before-decision-trace-20261006-073911",
+                        "Name":  "ema_vwap_research.py",
+                        "Target":  "C:\\projects\\workspace\\Delta-Strategy-Builder\\backtest\\ema_vwap_research.py"
+                    },
+                    {
+                        "OriginalSha256":  "EDA3235E20AB64493BACAA00C7E012CFCD2EAC031A88E7C7382B26667E0976BC",
+                        "Backup":  "C:\\projects\\workspace\\Delta-Strategy-Builder\\backtest\\plain_bt123_2026.py.before-decision-trace-20261006-073911",
+                        "Name":  "plain_bt123_2026.py",
+                        "Target":  "C:\\projects\\workspace\\Delta-Strategy-Builder\\backtest\\plain_bt123_2026.py"
+                    }
+                ],
+    "repo_root":  "C:\\projects\\workspace\\Delta-Strategy-Builder",
+    "installed_at":  "2026-10-06T07:39:12.2465583+05:30"
+}

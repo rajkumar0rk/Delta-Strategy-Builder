@@ -1,0 +1,410 @@
+--- /mnt/data/merge_work/ema_current.py	2026-10-06 01:55:19.473772349 +0000
++++ /mnt/data/decision-trace-merged/ema_vwap_research.py	2026-10-06 01:56:30.244851888 +0000
+@@ -861,11 +861,71 @@
+     )
+ 
+ 
++
++def _decision_float(value: Any) -> float | None:
++    try:
++        number = float(value)
++    except (TypeError, ValueError):
++        return None
++    return number if math.isfinite(number) else None
++
++
++def _append_decision_event(
++    target: list[dict[str, Any]] | None,
++    *,
++    timestamp: Any,
++    stage: str,
++    status: str,
++    reason: str,
++    direction: str,
++    row: Any | None = None,
++    entry_type: str = "",
++    symbol: str = "",
++) -> None:
++    if target is None:
++        return
++    values: dict[str, Any] = {}
++    if row is not None:
++        for key in (
++            "open", "high", "low", "close", "volume", "ema9", "ema20", "ema50",
++            "vwap", "rsi14", "atr14", "volume_median20_prior",
++        ):
++            value = _decision_float(row.get(key))
++            if value is not None:
++                values[key] = value
++        atr = _decision_float(row.get("atr14"))
++        close = _decision_float(row.get("close"))
++        vwap = _decision_float(row.get("vwap"))
++        ema9 = _decision_float(row.get("ema9"))
++        ema50 = _decision_float(row.get("ema50"))
++        volume = _decision_float(row.get("volume"))
++        volume_median = _decision_float(row.get("volume_median20_prior"))
++        if volume is not None and volume_median not in {None, 0.0}:
++            values["volume_ratio"] = volume / volume_median
++        if atr not in {None, 0.0}:
++            if ema9 is not None and ema50 is not None:
++                values["ema_strength_atr"] = abs(ema9 - ema50) / atr
++            if close is not None and vwap is not None:
++                values["vwap_displacement_atr"] = abs(close - vwap) / atr
++    time_text = timestamp.isoformat() if hasattr(timestamp, "isoformat") else str(timestamp)
++    target.append({
++        "timestamp": time_text,
++        "stage": stage,
++        "status": status,
++        "reason": reason,
++        "direction": direction,
++        "entry_type": entry_type,
++        "symbol": symbol,
++        **values,
++    })
++
++
+ def pullback_reversal_directions(
+     frame: pd.DataFrame,
+     config: PullbackReversalConfig,
+     diagnostics: dict[str, int] | None = None,
+     diagnostic_eligible: pd.Series | None = None,
++    decision_events: list[dict[str, Any]] | None = None,
+ ) -> pd.Series:
+     """Return confirmed CALL/PUT pullback reversals using completed candles."""
+     if not config.enabled:
+@@ -1139,6 +1199,58 @@
+                 )
+                 key = f"{direction}_QUALIFYING_CANDLES"
+                 diagnostics[key] = diagnostics.get(key, 0) + 1
++        collect_decisions = decision_events is not None and (
++            diagnostic_eligible is None or bool(diagnostic_eligible.iloc[position])
++        )
++        if collect_decisions:
++            for direction, stages in (
++                (
++                    "CALL",
++                    (
++                        bull_base_trend,
++                        bull_slope,
++                        bool(bull_raw_touches.any()),
++                        bool(bull_touches.any()),
++                        bull_rsi,
++                        bull_confirmation,
++                        bull_atr,
++                    ),
++                ),
++                (
++                    "PUT",
++                    (
++                        bear_base_trend,
++                        bear_slope,
++                        bool(bear_raw_touches.any()),
++                        bool(bear_touches.any()),
++                        bear_rsi,
++                        bear_confirmation,
++                        bear_atr,
++                    ),
++                ),
++            ):
++                base_trend, slope_ok, raw_touch, qualified_touch, rsi_ok, confirmation_ok, atr_ok = stages
++                if not base_trend:
++                    continue
++                reason = (
++                    "SLOPE_REJECTED" if not slope_ok
++                    else "TOUCH_REJECTED" if not raw_touch
++                    else "TOUCH_TOLERANCE_REJECTED" if not qualified_touch
++                    else "RSI_REJECTED" if not rsi_ok
++                    else "CONFIRMATION_REJECTED" if not confirmation_ok
++                    else "ATR_REJECTED" if not atr_ok
++                    else "QUALIFIED"
++                )
++                _append_decision_event(
++                    decision_events,
++                    timestamp=frame.index[position],
++                    stage="ZIGZAG",
++                    status="QUALIFIED" if reason == "QUALIFIED" else "REJECTED",
++                    reason=reason,
++                    direction=direction,
++                    row=row,
++                    entry_type="ZIGZAG",
++                )
+         directions[position] = (
+             "CALL" if call and not put else "PUT" if put and not call else ""
+         )
+@@ -1150,6 +1262,7 @@
+     config: MomentumBreakoutConfig,
+     diagnostics: dict[str, int] | None = None,
+     diagnostic_eligible: pd.Series | None = None,
++    decision_events: list[dict[str, Any]] | None = None,
+ ) -> pd.Series:
+     """Return trend-aligned range breakouts using completed 5-minute candles."""
+     if not config.enabled:
+@@ -1238,6 +1351,19 @@
+             ),
+         )
+         rejection = next((reason for passed, reason in checks if not passed), None)
++        if decision_events is not None and (
++            diagnostic_eligible is None or bool(diagnostic_eligible.iloc[position])
++        ):
++            _append_decision_event(
++                decision_events,
++                timestamp=frame.index[position],
++                stage="MOMENTUM",
++                status="REJECTED" if rejection is not None else "QUALIFIED",
++                reason=rejection or "QUALIFIED",
++                direction=direction,
++                row=row,
++                entry_type="MOMENTUM",
++            )
+         if rejection is not None:
+             if collect:
+                 diagnostics[rejection] = diagnostics.get(rejection, 0) + 1
+@@ -1273,6 +1399,7 @@
+     entry_mode: str = "BASELINE",
+     momentum_breakout: MomentumBreakoutConfig = MomentumBreakoutConfig(),
+     signal_diagnostics: dict[str, int] | None = None,
++    decision_events: list[dict[str, Any]] | None = None,
+ ) -> list[SignalEvent]:
+     if require_stoch_rsi_entry and require_stoch_rsi_momentum_entry:
+         raise ValueError("only one Stoch RSI entry relationship can be enabled")
+@@ -1314,6 +1441,7 @@
+             replace(pullback_reversal, enabled=True),
+             diagnostics=signal_diagnostics,
+             diagnostic_eligible=diagnostic_eligible,
++            decision_events=decision_events,
+         )
+         if require_macd:
+             pullback_direction = pd.Series(
+@@ -1360,6 +1488,7 @@
+             momentum_breakout,
+             diagnostics=signal_diagnostics if entry_mode == "MOMENTUM" else None,
+             diagnostic_eligible=diagnostic_eligible,
++            decision_events=decision_events,
+         )
+         if require_macd:
+             momentum_direction = pd.Series(
+@@ -1495,9 +1624,19 @@
+         direction = str(frame.iloc[position][direction_column])
+         confirmed_position = position + confirmation_candles
+         if confirmed_position >= len(frame):
++            _append_decision_event(
++                decision_events, timestamp=frame.index[position], stage="SIGNAL",
++                status="REJECTED", reason="CONFIRMATION_OUT_OF_RANGE",
++                direction=direction, row=frame.iloc[position], entry_type=str(entry_types.iloc[position]),
++            )
+             continue
+         confirmation = frame.iloc[position:confirmed_position + 1]
+         if not confirmation[direction_column].eq(direction).all():
++            _append_decision_event(
++                decision_events, timestamp=frame.index[confirmed_position], stage="SIGNAL",
++                status="REJECTED", reason="SIGNAL_CONFIRMATION_REJECTED",
++                direction=direction, row=frame.iloc[confirmed_position], entry_type=str(entry_types.iloc[position]),
++            )
+             continue
+         timestamp = frame.index[confirmed_position]
+         row = frame.iloc[confirmed_position]
+@@ -1506,6 +1645,11 @@
+             float(row["stoch_rsi_k"]),
+             float(row["stoch_rsi_d"]),
+         ):
++            _append_decision_event(
++                decision_events, timestamp=timestamp, stage="SIGNAL", status="REJECTED",
++                reason="STOCH_RSI_REJECTED", direction=direction, row=row,
++                entry_type=str(entry_types.iloc[position]),
++            )
+             continue
+         if (
+             require_stoch_rsi_momentum_entry
+@@ -1515,6 +1659,11 @@
+                 float(row["stoch_rsi_d"]),
+             )
+         ):
++            _append_decision_event(
++                decision_events, timestamp=timestamp, stage="SIGNAL", status="REJECTED",
++                reason="STOCH_RSI_MOMENTUM_REJECTED", direction=direction, row=row,
++                entry_type=str(entry_types.iloc[position]),
++            )
+             continue
+         if not _entry_time_allowed(
+             timestamp,
+@@ -1523,6 +1672,11 @@
+             entry_windows_ist_minutes=entry_windows_ist_minutes,
+             blocked_weekdays_ist=blocked_weekdays_ist,
+         ):
++            _append_decision_event(
++                decision_events, timestamp=timestamp, stage="SIGNAL", status="REJECTED",
++                reason="OUTSIDE_ENTRY_SESSION", direction=direction, row=row,
++                entry_type=str(entry_types.iloc[position]),
++            )
+             continue
+         signal_ns = int(timestamp.timestamp() * 1_000_000_000)
+         if not start_ns <= signal_ns < end_ns:
+@@ -1543,6 +1697,11 @@
+             max_days_to_expiry=max_days_to_expiry,
+         )
+         if option is not None:
++            _append_decision_event(
++                decision_events, timestamp=timestamp, stage="SIGNAL", status="QUALIFIED",
++                reason="SIGNAL_WITH_CONTRACT", direction=direction, row=row,
++                entry_type=str(entry_types.iloc[position]), symbol=option.symbol,
++            )
+             if signal_diagnostics is not None and pullback_reversal.enabled:
+                 signal_diagnostics["SIGNALS_WITH_CONTRACT"] = (
+                     signal_diagnostics.get("SIGNALS_WITH_CONTRACT", 0) + 1
+@@ -1556,10 +1715,16 @@
+                 ema_regime_start_ns=ema_regime_starts[confirmed_position],
+                 entry_type=str(entry_types.iloc[position]),
+             ))
+-        elif signal_diagnostics is not None and pullback_reversal.enabled:
+-            signal_diagnostics["NO_ELIGIBLE_OPTION_REJECTED"] = (
+-                signal_diagnostics.get("NO_ELIGIBLE_OPTION_REJECTED", 0) + 1
++        else:
++            _append_decision_event(
++                decision_events, timestamp=timestamp, stage="SIGNAL", status="REJECTED",
++                reason="NO_ELIGIBLE_OPTION_REJECTED", direction=direction, row=row,
++                entry_type=str(entry_types.iloc[position]),
+             )
++            if signal_diagnostics is not None and pullback_reversal.enabled:
++                signal_diagnostics["NO_ELIGIBLE_OPTION_REJECTED"] = (
++                    signal_diagnostics.get("NO_ELIGIBLE_OPTION_REJECTED", 0) + 1
++                )
+     return events
+ 
+ 
+@@ -2833,6 +2998,7 @@
+     )
+     events_by_configuration = {}
+     diagnostics_by_configuration = {}
++    decision_events_by_configuration: dict[Any, list[dict[str, Any]]] = {}
+     for (
+             candles,
+             require_macd,
+@@ -2868,6 +3034,7 @@
+             momentum_breakout,
+         )
+         diagnostics: dict[str, int] = {}
++        configuration_decisions: list[dict[str, Any]] = []
+         events_by_configuration[key] = signal_events(
+             frame,
+             specs,
+@@ -2889,8 +3056,10 @@
+             entry_mode=entry_mode,
+             momentum_breakout=momentum_breakout,
+             signal_diagnostics=diagnostics,
++            decision_events=configuration_decisions,
+         )
+         diagnostics_by_configuration[key] = diagnostics
++        decision_events_by_configuration[key] = configuration_decisions
+     capture_quotes(
+         directory / "option_quotes.csv",
+         [event for events in events_by_configuration.values() for event in events],
+@@ -2919,7 +3088,29 @@
+     results: list[dict[str, Any]] = []
+     all_trades: list[dict[str, Any]] = []
+     execution_attempts: list[dict[str, Any]] = []
++    all_decision_events: list[dict[str, Any]] = []
+     for scenario in selected_scenarios:
++        scenario_key = (
++            scenario.confirmation_candles,
++            scenario.require_macd,
++            scenario.require_stoch_rsi_entry,
++            scenario.require_stoch_rsi_momentum_entry,
++            scenario.entry_start_hour_utc,
++            scenario.entry_end_hour_utc,
++            scenario.entry_windows_ist_minutes,
++            scenario.blocked_weekdays_ist,
++            scenario.entry_min_conditions,
++            scenario.min_days_to_expiry,
++            scenario.min_days_to_expiry_inclusive,
++            scenario.max_days_to_expiry,
++            scenario.pullback_reversal,
++            scenario.entry_mode,
++            scenario.momentum_breakout,
++        )
++        all_decision_events.extend(
++            {**item, "scenario": scenario.name}
++            for item in decision_events_by_configuration.get(scenario_key, [])
++        )
+         events = events_by_configuration[
+             (
+                 scenario.confirmation_candles,
+@@ -2945,6 +3136,13 @@
+         traded_ema_regimes: set[tuple[str, int]] = set()
+         for event in events:
+             if event.timestamp_ns <= available_after_ns:
++                all_decision_events.append({
++                    "scenario": scenario.name,
++                    "timestamp": datetime.fromtimestamp(event.timestamp_ns / 1_000_000_000, UTC).isoformat(),
++                    "stage": "EXECUTION", "status": "REJECTED",
++                    "reason": "SIGNAL_DURING_OPEN_TRADE", "direction": event.direction,
++                    "entry_type": event.entry_type, "symbol": event.option.symbol,
++                })
+                 rejects["SIGNAL_DURING_OPEN_TRADE"] = (
+                     rejects.get("SIGNAL_DURING_OPEN_TRADE", 0) + 1
+                 )
+@@ -2955,6 +3153,13 @@
+                 and event.ema_regime_start_ns > 0
+                 and regime_key in traded_ema_regimes
+             ):
++                all_decision_events.append({
++                    "scenario": scenario.name,
++                    "timestamp": datetime.fromtimestamp(event.timestamp_ns / 1_000_000_000, UTC).isoformat(),
++                    "stage": "EXECUTION", "status": "REJECTED",
++                    "reason": "EMA_REGIME_ALREADY_TRADED", "direction": event.direction,
++                    "entry_type": event.entry_type, "symbol": event.option.symbol,
++                })
+                 rejects["EMA_REGIME_ALREADY_TRADED"] = (
+                     rejects.get("EMA_REGIME_ALREADY_TRADED", 0) + 1
+                 )
+@@ -2977,6 +3182,13 @@
+                 data_fidelity=data_fidelity,
+             )
+             if rejection:
++                all_decision_events.append({
++                    "scenario": scenario.name,
++                    "timestamp": datetime.fromtimestamp(event.timestamp_ns / 1_000_000_000, UTC).isoformat(),
++                    "stage": "EXECUTION", "status": "REJECTED",
++                    "reason": rejection, "direction": event.direction,
++                    "entry_type": event.entry_type, "symbol": event.option.symbol,
++                })
+                 if event.execution_attempt is not None:
+                     execution_attempts.append({
+                         **event.execution_attempt,
+@@ -3000,6 +3212,13 @@
+                 rejects[rejection] = rejects.get(rejection, 0) + 1
+                 continue
+             assert trade is not None
++            all_decision_events.append({
++                "scenario": scenario.name,
++                "timestamp": datetime.fromtimestamp(event.timestamp_ns / 1_000_000_000, UTC).isoformat(),
++                "stage": "EXECUTION", "status": "ACCEPTED",
++                "reason": "TRADE_ACCEPTED", "direction": event.direction,
++                "entry_type": event.entry_type, "symbol": event.option.symbol,
++            })
+             if event.execution_attempt is not None:
+                 execution_attempts.append({
+                     **event.execution_attempt,
+@@ -3079,6 +3298,7 @@
+         "results": results,
+         "trades": all_trades,
+         "execution_attempts": execution_attempts,
++        "decision_events": all_decision_events,
+     }
+ 
+ 
+@@ -3103,6 +3323,15 @@
+             writer = csv.DictWriter(handle, fieldnames=fieldnames)
+             writer.writeheader()
+             writer.writerows(attempts)
++    decisions = report.get("decision_events", [])
++    if decisions:
++        with (output / "decision_events.csv").open(
++            "w", encoding="utf-8", newline=""
++        ) as handle:
++            fieldnames = list(dict.fromkeys(key for row in decisions for key in row))
++            writer = csv.DictWriter(handle, fieldnames=fieldnames)
++            writer.writeheader()
++            writer.writerows(decisions)
+ 
+ 
+ def _summary_rows(report: dict[str, Any]) -> Iterable[dict[str, Any]]:

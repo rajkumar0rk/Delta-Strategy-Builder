@@ -1,0 +1,708 @@
+{
+  "schema_version": 15,
+  "app": "BTC Strategy Lab",
+  "strategy": {
+    "name": "BTC Big Trend Only template",
+    "timeframe": "10m",
+    "direction_mode": "BOTH",
+    "call_action": "BUY",
+    "put_action": "BUY",
+    "indicators": [
+      {
+        "id": "ema9",
+        "kind": "EMA",
+        "params": {
+          "period": 9,
+          "source": "close"
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "ema20",
+        "kind": "EMA",
+        "params": {
+          "period": 20,
+          "source": "close"
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "ema50",
+        "kind": "EMA",
+        "params": {
+          "period": 50,
+          "source": "close"
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "ema20h",
+        "kind": "EMA",
+        "params": {
+          "period": 20,
+          "source": "close"
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "1h"
+      },
+      {
+        "id": "ema50h",
+        "kind": "EMA",
+        "params": {
+          "period": 50,
+          "source": "close"
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "1h"
+      },
+      {
+        "id": "atr14",
+        "kind": "ATR",
+        "params": {
+          "period": 14
+        },
+        "visible": false,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "adx14",
+        "kind": "ADX_DMI",
+        "params": {
+          "period": 14
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "atrx",
+        "kind": "ATR_EXPANSION",
+        "params": {
+          "atr_period": 14,
+          "sma_period": 20,
+          "slope_bars": 5
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "candle",
+        "kind": "CANDLE_STRENGTH",
+        "params": {
+          "atr_period": 14
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "overext",
+        "kind": "OVEREXTENSION",
+        "params": {
+          "ema_period": 20,
+          "atr_period": 14,
+          "source": "close"
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "emaStrength",
+        "kind": "FORMULA",
+        "params": {
+          "expression": "(ema9 - ema50) / atr14"
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "don20",
+        "kind": "DONCHIAN",
+        "params": {
+          "period": 20
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      }
+    ],
+    "call_entry": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "groups": [],
+      "conditions": [
+        {
+          "id": "call-breakout",
+          "left": "close",
+          "operator": "CROSSES_ABOVE",
+          "right": "don20.upper",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "call-htf",
+          "left": "ema20h",
+          "operator": "GT",
+          "right": "ema50h",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "call-adx",
+          "left": "adx14.adx",
+          "operator": "GTE",
+          "right": null,
+          "value": 25,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "call-di",
+          "left": "adx14.plus_di",
+          "operator": "GT",
+          "right": "adx14.minus_di",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "call-strength",
+          "left": "emaStrength",
+          "operator": "GTE",
+          "right": null,
+          "value": 0.5,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "call-vol",
+          "left": "atrx.atr_ratio",
+          "operator": "GTE",
+          "right": null,
+          "value": 1.0,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "call-slope",
+          "left": "ema9",
+          "operator": "SLOPE_GT",
+          "right": null,
+          "value": 0,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "call-body",
+          "left": "candle.body_atr",
+          "operator": "GTE",
+          "right": null,
+          "value": 0.25,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "call-not-chasing",
+          "left": "overext.distance_atr",
+          "operator": "LTE",
+          "right": null,
+          "value": 1.5,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "call-bull-count",
+          "left": "bullish_close",
+          "operator": "COUNT_TRUE_GTE",
+          "right": null,
+          "value": 4,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 6
+        },
+        {
+          "id": "call-phase",
+          "left": "call_phase_big_trend",
+          "operator": "GTE",
+          "right": null,
+          "value": 1,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        }
+      ]
+    },
+    "put_entry": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "groups": [],
+      "conditions": [
+        {
+          "id": "put-breakout",
+          "left": "close",
+          "operator": "CROSSES_BELOW",
+          "right": "don20.lower",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "put-htf",
+          "left": "ema20h",
+          "operator": "LT",
+          "right": "ema50h",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "put-adx",
+          "left": "adx14.adx",
+          "operator": "GTE",
+          "right": null,
+          "value": 25,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "put-di",
+          "left": "adx14.minus_di",
+          "operator": "GT",
+          "right": "adx14.plus_di",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "put-strength",
+          "left": "emaStrength",
+          "operator": "LTE",
+          "right": null,
+          "value": -0.5,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "put-vol",
+          "left": "atrx.atr_ratio",
+          "operator": "GTE",
+          "right": null,
+          "value": 1.0,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "put-slope",
+          "left": "ema9",
+          "operator": "SLOPE_LT",
+          "right": null,
+          "value": 0,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "put-body",
+          "left": "candle.body_atr",
+          "operator": "GTE",
+          "right": null,
+          "value": 0.25,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "put-not-chasing",
+          "left": "overext.distance_atr",
+          "operator": "GTE",
+          "right": null,
+          "value": -1.5,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "put-bear-count",
+          "left": "bearish_close",
+          "operator": "COUNT_TRUE_GTE",
+          "right": null,
+          "value": 4,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 6
+        },
+        {
+          "id": "put-phase",
+          "left": "put_phase_big_trend",
+          "operator": "GTE",
+          "right": null,
+          "value": 1,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        }
+      ]
+    },
+    "call_entry_lifecycles": [
+      {
+        "id": "call-big-trend",
+        "name": "CALL big trend",
+        "enabled": true,
+        "trigger_condition_id": "call-htf",
+        "delay_bars": 0,
+        "max_wait_bars": 6,
+        "max_entries_per_activation": 1,
+        "cooldown_bars": 0
+      }
+    ],
+    "put_entry_lifecycles": [
+      {
+        "id": "put-big-trend",
+        "name": "PUT big trend",
+        "enabled": true,
+        "trigger_condition_id": "put-htf",
+        "delay_bars": 0,
+        "max_wait_bars": 6,
+        "max_entries_per_activation": 1,
+        "cooldown_bars": 0
+      }
+    ],
+    "call_big_trend_score": {
+      "enabled": true,
+      "threshold": 75,
+      "mode": "GATE",
+      "persistence_hits": 2,
+      "persistence_window": 3,
+      "require_current_threshold": true,
+      "components": [
+        {
+          "condition_id": "call-htf",
+          "weight": 15,
+          "scoring_mode": "BINARY",
+          "zero_at": null,
+          "full_at": null
+        },
+        {
+          "condition_id": "call-adx",
+          "weight": 20,
+          "scoring_mode": "CONTINUOUS",
+          "zero_at": 20,
+          "full_at": 40
+        },
+        {
+          "condition_id": "call-di",
+          "weight": 10,
+          "scoring_mode": "BINARY",
+          "zero_at": null,
+          "full_at": null
+        },
+        {
+          "condition_id": "call-strength",
+          "weight": 20,
+          "scoring_mode": "CONTINUOUS",
+          "zero_at": 0.2,
+          "full_at": 1.0
+        },
+        {
+          "condition_id": "call-vol",
+          "weight": 15,
+          "scoring_mode": "CONTINUOUS",
+          "zero_at": 0.9,
+          "full_at": 1.4
+        },
+        {
+          "condition_id": "call-body",
+          "weight": 10,
+          "scoring_mode": "CONTINUOUS",
+          "zero_at": 0.1,
+          "full_at": 0.7
+        },
+        {
+          "condition_id": "call-bull-count",
+          "weight": 10,
+          "scoring_mode": "BINARY",
+          "zero_at": null,
+          "full_at": null
+        }
+      ]
+    },
+    "put_big_trend_score": {
+      "enabled": true,
+      "threshold": 75,
+      "mode": "GATE",
+      "persistence_hits": 2,
+      "persistence_window": 3,
+      "require_current_threshold": true,
+      "components": [
+        {
+          "condition_id": "put-htf",
+          "weight": 15,
+          "scoring_mode": "BINARY",
+          "zero_at": null,
+          "full_at": null
+        },
+        {
+          "condition_id": "put-adx",
+          "weight": 20,
+          "scoring_mode": "CONTINUOUS",
+          "zero_at": 20,
+          "full_at": 40
+        },
+        {
+          "condition_id": "put-di",
+          "weight": 10,
+          "scoring_mode": "BINARY",
+          "zero_at": null,
+          "full_at": null
+        },
+        {
+          "condition_id": "put-strength",
+          "weight": 20,
+          "scoring_mode": "CONTINUOUS",
+          "zero_at": -0.2,
+          "full_at": -1.0
+        },
+        {
+          "condition_id": "put-vol",
+          "weight": 15,
+          "scoring_mode": "CONTINUOUS",
+          "zero_at": 0.9,
+          "full_at": 1.4
+        },
+        {
+          "condition_id": "put-body",
+          "weight": 10,
+          "scoring_mode": "CONTINUOUS",
+          "zero_at": 0.1,
+          "full_at": 0.7
+        },
+        {
+          "condition_id": "put-bear-count",
+          "weight": 10,
+          "scoring_mode": "BINARY",
+          "zero_at": null,
+          "full_at": null
+        }
+      ]
+    },
+    "call_exit": {
+      "mode": "ANY",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "call-exit-ema",
+          "left": "ema9",
+          "operator": "CROSSES_BELOW",
+          "right": "ema20",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        }
+      ],
+      "groups": []
+    },
+    "put_exit": {
+      "mode": "ANY",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "put-exit-ema",
+          "left": "ema9",
+          "operator": "CROSSES_ABOVE",
+          "right": "ema20",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        }
+      ],
+      "groups": []
+    },
+    "no_trade": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [],
+      "groups": []
+    },
+    "option": {
+      "strike_mode": "ATM",
+      "strike_steps": 0,
+      "min_dte_days": 0.25,
+      "max_dte_days": 3,
+      "min_premium": null,
+      "max_premium": null,
+      "max_spread_percent": 5,
+      "min_volume": null,
+      "min_open_interest": null
+    },
+    "execution": {
+      "max_entry_quote_delay_seconds": 90,
+      "max_exit_quote_delay_seconds": 90,
+      "slippage_ticks": 0,
+      "fee_model": "DELTA_OPTIONS",
+      "option_notional_fee_rate_percent": 0.01,
+      "premium_fee_cap_percent": 3.5,
+      "gst_percent": 18,
+      "decision_log_mode": "EVENTS_ONLY",
+      "fee_edge_filter": {
+        "enabled": false,
+        "expected_option_move_percent": 10,
+        "min_edge_multiple": 1.5,
+        "min_net_edge_usd": 0
+      }
+    },
+    "risk": {
+      "stop_loss": {
+        "mode": "OPTION_PERCENT",
+        "value": 15
+      },
+      "take_profit": {
+        "mode": "NONE",
+        "value": 30
+      },
+      "profit_protection": {
+        "mode": "PEAK_RETENTION",
+        "activation_percent": 20,
+        "retain_peak_percent": 50,
+        "trail_percent_points": 10
+      },
+      "max_hold_minutes": 240,
+      "starting_balance_usd": 100,
+      "quantity_mode": "FIXED",
+      "quantity": 10,
+      "budget_usd": 50,
+      "enforce_cash": true,
+      "max_daily_loss_percent": 10,
+      "max_trades_per_day": 5,
+      "max_consecutive_losses": 3,
+      "stop_trading_after_daily_loss_limit": true,
+      "enforce_trade_budget_strict": true
+    },
+    "session": {
+      "timezone": "Asia/Kolkata",
+      "start": "00:00",
+      "end": "23:59",
+      "blocked_weekdays": [],
+      "windows": [
+        {
+          "start": "00:00",
+          "end": "23:59"
+        }
+      ]
+    },
+    "conflict_policy": "SKIP",
+    "position_policy": "EXCLUSIVE",
+    "call_no_trade": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [],
+      "groups": []
+    },
+    "put_no_trade": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [],
+      "groups": []
+    },
+    "call_trend_phase": {
+      "enabled": true,
+      "compression_max_score": 45,
+      "ignition_min_score": 55,
+      "confirmation_min_score": 70,
+      "big_trend_min_score": 75,
+      "exhaustion_below_score": 55
+    },
+    "put_trend_phase": {
+      "enabled": true,
+      "compression_max_score": 45,
+      "ignition_min_score": 55,
+      "confirmation_min_score": 70,
+      "big_trend_min_score": 75,
+      "exhaustion_below_score": 55
+    },
+    "call_breakout_retest": {
+      "enabled": true,
+      "breakout_condition_id": "call-breakout",
+      "breakout_level_operand": "don20.upper",
+      "tolerance_mode": "ATR",
+      "tolerance_value": 0.35,
+      "atr_operand": "atr14",
+      "max_retest_wait_bars": 12,
+      "hold_bars": 1,
+      "require_retest_for_entry": true,
+      "false_breakout_window_bars": 3,
+      "false_breakout_buffer_points": 0,
+      "block_false_breakout_until_rearm": true,
+      "max_trend_age_bars": 24
+    },
+    "put_breakout_retest": {
+      "enabled": true,
+      "breakout_condition_id": "put-breakout",
+      "breakout_level_operand": "don20.lower",
+      "tolerance_mode": "ATR",
+      "tolerance_value": 0.35,
+      "atr_operand": "atr14",
+      "max_retest_wait_bars": 12,
+      "hold_bars": 1,
+      "require_retest_for_entry": true,
+      "false_breakout_window_bars": 3,
+      "false_breakout_buffer_points": 0,
+      "block_false_breakout_until_rearm": true,
+      "max_trend_age_bars": 24
+    }
+  }
+}

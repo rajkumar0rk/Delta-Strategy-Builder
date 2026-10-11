@@ -1,0 +1,72 @@
+--- /mnt/data/merge_work/plain_current.py	2026-10-06 01:55:19.477947452 +0000
++++ /mnt/data/decision-trace-merged/plain_bt123_2026.py	2026-10-06 01:56:30.869600569 +0000
+@@ -343,6 +343,7 @@
+     datasets: list[dict[str, Any]] = []
+     trades: list[dict[str, Any]] = []
+     execution_attempts: list[dict[str, Any]] = []
++    decision_events: list[dict[str, Any]] = []
+     for segment in active_segments:
+         print(f"[backtest] {segment.name}", flush=True)
+         report = run_dataset(
+@@ -362,6 +363,7 @@
+         datasets.append(report)
+         trades.extend(report["trades"])
+         execution_attempts.extend(report.get("execution_attempts", []))
++        decision_events.extend(report.get("decision_events", []))
+         write_report(report, output / "segments" / segment.name)
+ 
+     trades = _without_cross_segment_overlap(trades)
+@@ -478,6 +480,17 @@
+         }
+         for scenario in selected_scenarios
+     )
++
++    # Keep the potentially large timestamped decision trace out of summary.json.
++    # Each segment still writes its own decision_events.csv, and the combined run
++    # writes a root decision_events.csv below.
++    summary_datasets: list[dict[str, Any]] = []
++    for dataset in datasets:
++        compact = dict(dataset)
++        compact["decision_event_count"] = len(dataset.get("decision_events", []))
++        compact.pop("decision_events", None)
++        summary_datasets.append(compact)
++
+     result = {
+         "created_at": datetime.now(UTC).isoformat(),
+         "period": {
+@@ -517,7 +530,8 @@
+             for scenario in selected_scenarios
+         },
+         "exceptional_event_signal": EXCEPTIONAL_SIGNAL,
+-        "datasets": datasets,
++        "datasets": summary_datasets,
++        "decision_event_count": len(decision_events),
+     }
+     output.mkdir(parents=True, exist_ok=True)
+     (output / "summary.json").write_text(
+@@ -549,6 +563,25 @@
+                     key=lambda item: str(item["signal_time"]),
+                 )
+             )
++    if decision_events:
++        with (output / "decision_events.csv").open(
++            "w", encoding="utf-8", newline=""
++        ) as handle:
++            fieldnames = list(
++                dict.fromkeys(key for row in decision_events for key in row)
++            )
++            writer = csv.DictWriter(handle, fieldnames=fieldnames)
++            writer.writeheader()
++            writer.writerows(
++                sorted(
++                    decision_events,
++                    key=lambda item: (
++                        str(item.get("timestamp", "")),
++                        str(item.get("scenario", "")),
++                        str(item.get("stage", "")),
++                    ),
++                )
++            )
+     _write_markdown(result, output / "results.md")
+     result["trades"] = trades
+     return result

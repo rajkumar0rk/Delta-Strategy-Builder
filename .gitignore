@@ -1,0 +1,11 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.test-tmp/
+pytest-cache-files-*/
+backtest/reports/
+backtest/data/
+backtest/downloads/
+strategy-lab/
