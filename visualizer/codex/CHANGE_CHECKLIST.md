@@ -4,6 +4,7 @@ Before coding:
 
 1. Read `AGENTS.md` plus the relevant backend/frontend nested AGENTS file.
 2. Identify whether the task changes trading semantics, data semantics, persistence only, or UI only.
+2a. Read `codex/CHANGE_IMPACT_MATRIX.md` and identify all companion files, consumers, documentation and tests that might also require updates.
 3. Check backward compatibility for saved strategy JSON and old result folders.
 
 Before finishing:
@@ -16,6 +17,7 @@ Before finishing:
 6. If engine behavior changed, consider cache-version bump.
 7. If result persistence changed, confirm both legacy and V15/V15.1 compressed artifacts remain readable.
 8. Summarize exactly what changed and any limitations; do not claim unrun verification.
+8a. Confirm each applicable `codex/CHANGE_IMPACT_MATRIX.md` companion was inspected; state modified, inspected/unchanged, and deferred files separately.
 
 9. If candle/indicator timeframes changed, run start-time-invariance tests and a datetime64[us] HTF indicator test.
 10. If position sizing changed, test min quantity, size increment, strict-budget ON and OFF.
