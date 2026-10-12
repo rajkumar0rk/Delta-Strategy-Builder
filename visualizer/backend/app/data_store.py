@@ -710,8 +710,13 @@ class DataStore:
                 text = ', '.join(f"{g['start']} → {g['end_exclusive']}" for g in gaps[:4])
                 errors.append(f'Unified archive catalog has uncovered interval(s) in the requested range: {text}')
             missing_bars = [p.id for p in parts if not p.bars.exists()]
-            missing_inst = [p.id for p in parts if not (p.instruments and p.instruments.exists())]
-            missing_quotes = [p.id for p in parts if not (p.quotes and p.quotes.exists())]
+            order_needed = any(
+                direction in {"CALL", "PUT"} and
+                (strategy.call_signal_mode if direction == "CALL" else strategy.put_signal_mode) != "ALERT_ONLY"
+                for direction in (["CALL", "PUT"] if strategy.direction_mode == "BOTH" else [strategy.direction_mode])
+            )
+            missing_inst = [p.id for p in parts if order_needed and not (p.instruments and p.instruments.exists())]
+            missing_quotes = [p.id for p in parts if order_needed and not (p.quotes and p.quotes.exists())]
             checks.append({'name': 'Archive segment files', 'ok': not (missing_bars or missing_inst or missing_quotes), 'missing_bars': missing_bars, 'missing_instruments': missing_inst, 'missing_quotes': missing_quotes})
             if missing_bars:
                 errors.append('Archive segment(s) missing underlying_bars.csv: ' + ', '.join(missing_bars))
@@ -745,7 +750,7 @@ class DataStore:
 
         enabled_dirs = [
             direction for direction in (['CALL', 'PUT'] if strategy.direction_mode == 'BOTH' else [strategy.direction_mode])
-            if (strategy.call_action if direction == 'CALL' else strategy.put_action) != 'ALERT'
+            if (strategy.call_signal_mode if direction == 'CALL' else strategy.put_signal_mode) != 'ALERT_ONLY'
         ]
         if progress:
             progress('Preflight: checking option instruments for enabled direction(s)…')

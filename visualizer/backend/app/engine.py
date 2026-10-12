@@ -260,7 +260,7 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
 
 def _backtest_cache_key(req: BacktestRequest, paths) -> str:
     payload = {
-        'engine_version': 155,  # historical strategy alerts with isolated action and persistence
+        'engine_version': 156,  # orthogonal order/alert signal modes and existing-rule references
         'warmup_candles': req.warmup_candles,
         'warmup_policy': req.warmup_policy,
         'dataset': _dataset_fingerprint(paths),
@@ -873,7 +873,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
     report('Resolving downloaded datasets…', 9 if getattr(req, 'auto_download_missing_data', False) else 2, 'DATA_SELECTION', 'Preflight data validation')
     needs_options = any(
         direction in {'CALL', 'PUT'} and
-        (req.strategy.call_action if direction == 'CALL' else req.strategy.put_action) != 'ALERT'
+        (req.strategy.call_signal_mode if direction == 'CALL' else req.strategy.put_signal_mode) != 'ALERT_ONLY'
         for direction in (['CALL', 'PUT'] if req.strategy.direction_mode == 'BOTH' else [req.strategy.direction_mode])
     )
     parts = store.resolve_request(req, require_options=needs_options)
@@ -955,8 +955,8 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         and not next((i.chart_only for i in strategy.indicators if i.id == m['instance_id']), False)
     )
     event_counter = 0
-    call_enabled = strategy.direction_mode in {'CALL', 'BOTH'} and strategy.call_action != 'ALERT'
-    put_enabled = strategy.direction_mode in {'PUT', 'BOTH'} and strategy.put_action != 'ALERT'
+    call_enabled = strategy.direction_mode in {'CALL', 'BOTH'} and strategy.call_signal_mode != 'ALERT_ONLY'
+    put_enabled = strategy.direction_mode in {'PUT', 'BOTH'} and strategy.put_signal_mode != 'ALERT_ONLY'
     call_behaviors = _entry_behaviors(strategy, 'CALL') if call_enabled else []
     put_behaviors = _entry_behaviors(strategy, 'PUT') if put_enabled else []
     call_cycles = _cycle_states(call_behaviors)
@@ -1188,7 +1188,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
 
             if pos is not None:
                 exit_group = strategy.call_exit if pos.direction == 'CALL' else strategy.put_exit
-                if exit_group.configured():
+                if exit_group.configured() and (strategy.call_exit_signal_mode if pos.direction == 'CALL' else strategy.put_exit_signal_mode) != 'ALERT_ONLY':
                     tree = evaluate_group(frame, i, exit_group)
                     if strategy.execution.decision_log_mode == 'FULL' or tree['passed']:
                         decisions.append(_flatten_decision(next_event('decision'), pos.direction, ts, 'EXIT', tree, {'close': _finite(row.close)}))

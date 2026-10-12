@@ -1,51 +1,70 @@
-"""Independent, historical, completed-candle chart alerts.
+"""Historical alerts referencing the EXISTING strategy rule trees.
 
-Alert events never select options, execute orders or change strategy capital.
+Alert evaluation is read-only: no option lookup, orders, capital or positions.
 """
 from __future__ import annotations
 
 import pandas as pd
 
-from .models import AlertRule
-from .rules import evaluate_group
+from .models import AlertRule, ALERT_SOURCE_FIELDS
+from .rules import evaluate_condition, evaluate_group, find_condition
 
 MAX_MARKERS = 100_000
 
 
 def configured_alerts(strategy) -> list[AlertRule]:
     result = list(strategy.alerts)
-    if strategy.direction_mode in {"CALL", "BOTH"} and strategy.call_action == "ALERT":
-        result.append(AlertRule(id="action-call", name="CALL entry signal",
-                                message=strategy.call_alert_message, direction="CALL",
-                                conditions=strategy.call_entry))
-    if strategy.direction_mode in {"PUT", "BOTH"} and strategy.put_action == "ALERT":
-        result.append(AlertRule(id="action-put", name="PUT entry signal",
-                                message=strategy.put_alert_message, direction="PUT",
-                                conditions=strategy.put_entry))
+    for side in ("call", "put"):
+        enabled = strategy.direction_mode in {side.upper(), "BOTH"}
+        if not enabled:
+            continue
+        for event, name, message in (
+            ("entry", f"{side.upper()} entry signal", getattr(strategy, f"{side}_alert_message")),
+            ("exit", f"{side.upper()} exit signal", getattr(strategy, f"{side}_exit_alert_message")),
+        ):
+            key = f"{side}_{event}_signal_mode" if event == "exit" else f"{side}_signal_mode"
+            if getattr(strategy, key) in {"ALERT_ONLY", "BOTH"}:
+                result.append(AlertRule(
+                    id=f"builtin-{side}-{event}", name=name, message=message,
+                    direction=side.upper(), source=f"{side.upper()}_{event.upper()}",
+                ))
     return result
 
 
 def alert_markers(frame: pd.DataFrame, strategy, start: str, end: str) -> list[dict]:
-    """Evaluate independent named alerts before clipping warm-up candles.
+    """Alert transitions/cooldowns are seeded by warm-up, never emitted before From.
 
-    ON_ENTER fires on a false-to-true transition. EVERY_BAR fires on all passing
-    completed bars (subject to cooldown). No options/L1 history is required.
+    Individual alerts may reference a full existing RuleGroup or one condition
+    inside it. Existing V16.1 custom-condition alerts are supported for import.
     """
-    items = [a for a in configured_alerts(strategy) if a.enabled and a.conditions.configured()]
-    if not items or frame.empty:
+    entries = []
+    for alert in configured_alerts(strategy):
+        if not alert.enabled:
+            continue
+        group = (alert.conditions if alert.source == "LEGACY_CUSTOM"
+                 else getattr(strategy, ALERT_SOURCE_FIELDS[alert.source]))
+        if not group.configured():
+            continue
+        condition = find_condition(group, alert.condition_id) if alert.condition_id else None
+        entries.append((alert, group, condition))
+
+    if not entries or frame.empty:
         return []
+
     cutoff = pd.Timestamp(start)
     until = pd.Timestamp(end)
     cutoff = cutoff.tz_localize("UTC") if cutoff.tz is None else cutoff.tz_convert("UTC")
     until = until.tz_localize("UTC") if until.tz is None else until.tz_convert("UTC")
-    prev = {a.id: False for a in items}
+    prev = {a.id: False for a, _, _ in entries}
     last_trigger: dict[str, int] = {}
     result: list[dict] = []
     for i, (ts, _) in enumerate(frame.iterrows()):
         if ts >= until:
             break
-        for alert in items:
-            passed = bool(evaluate_group(frame, i, alert.conditions)["passed"])
+        for alert, group, condition in entries:
+            evaluated = (evaluate_condition(frame, i, condition) if condition is not None
+                         else evaluate_group(frame, i, group))
+            passed = bool(evaluated["passed"])
             entered = passed and not prev[alert.id]
             prev[alert.id] = passed
             if not passed or (alert.trigger_mode == "ON_ENTER" and not entered):
@@ -70,6 +89,8 @@ def alert_markers(frame: pd.DataFrame, strategy, start: str, end: str) -> list[d
                     "reason": "ALERT_CONDITIONS_MET",
                     "alert_id": alert.id,
                     "alert_name": alert.name,
+                    "source": alert.source,
+                    "condition_id": alert.condition_id,
                     "trigger_mode": alert.trigger_mode,
                     "cooldown_bars": alert.cooldown_bars,
                 },

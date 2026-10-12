@@ -64,7 +64,7 @@ def required_warmup_candles(instances, timeframe: str, *, minimum: int = 500, st
                      "no_trade", "call_no_trade", "put_no_trade"):
             required = max(required, rule_horizon(getattr(strategy, name, None)) + 2)
         for alert in getattr(strategy, "alerts", []):
-            if alert.enabled:
+            if alert.enabled and alert.source == "LEGACY_CUSTOM":
                 required = max(required, rule_horizon(alert.conditions) + 2)
         for side in ("call", "put"):
             score = getattr(strategy, f"{side}_big_trend_score", None)

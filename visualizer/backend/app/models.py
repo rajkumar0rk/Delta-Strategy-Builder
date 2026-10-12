@@ -79,6 +79,20 @@ class RuleGroup(BaseModel):
         return bool(self.conditions or self.groups)
 
 
+AlertSource = Literal[
+    "CALL_ENTRY", "PUT_ENTRY", "CALL_EXIT", "PUT_EXIT",
+    "NO_TRADE", "CALL_NO_TRADE", "PUT_NO_TRADE", "LEGACY_CUSTOM",
+]
+SignalMode = Literal["ORDER_ONLY", "ALERT_ONLY", "BOTH"]
+
+ALERT_SOURCE_FIELDS = {
+    "CALL_ENTRY": "call_entry", "PUT_ENTRY": "put_entry",
+    "CALL_EXIT": "call_exit", "PUT_EXIT": "put_exit",
+    "NO_TRADE": "no_trade", "CALL_NO_TRADE": "call_no_trade",
+    "PUT_NO_TRADE": "put_no_trade",
+}
+
+
 class AlertRule(BaseModel):
     """Independent completed-candle alert that never places an option order."""
     id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z][A-Za-z0-9_-]*$")
@@ -88,7 +102,19 @@ class AlertRule(BaseModel):
     direction: Literal["CALL", "PUT", "NEUTRAL"] = "NEUTRAL"
     trigger_mode: Literal["ON_ENTER", "EVERY_BAR"] = "ON_ENTER"
     cooldown_bars: int = Field(default=0, ge=0, le=10000)
+    source: AlertSource = "CALL_ENTRY"
+    # Optional reference to one EXISTING condition within the chosen rule tree.
+    # Empty means the entire existing AND/OR tree. No second rule builder.
+    condition_id: str | None = None
+    # Only for backward-compatible V16.1 JSON saved before source selection.
     conditions: RuleGroup = Field(default_factory=RuleGroup)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_independent_conditions(cls, value):
+        if isinstance(value, dict) and "source" not in value and value.get("conditions"):
+            return {**value, "source": "LEGACY_CUSTOM"}
+        return value
 
     @model_validator(mode="after")
     def validate_name(self):
@@ -374,8 +400,14 @@ class StrategyConfig(BaseModel):
     name: str = "New BTC options strategy"
     timeframe: Literal["5m", "10m", "15m", "30m", "1h"] = "5m"
     direction_mode: Literal["CALL", "PUT", "BOTH"] = "BOTH"
-    call_action: Literal["BUY", "SELL", "ALERT"] = "BUY"
-    put_action: Literal["BUY", "SELL", "ALERT"] = "BUY"
+    call_action: Literal["BUY", "SELL"] = "BUY"
+    put_action: Literal["BUY", "SELL"] = "BUY"
+    call_signal_mode: SignalMode = "ORDER_ONLY"
+    put_signal_mode: SignalMode = "ORDER_ONLY"
+    call_exit_signal_mode: SignalMode = "ORDER_ONLY"
+    put_exit_signal_mode: SignalMode = "ORDER_ONLY"
+    call_exit_alert_message: str = Field(default="CALL exit conditions triggered", max_length=500)
+    put_exit_alert_message: str = Field(default="PUT exit conditions triggered", max_length=500)
     call_alert_message: str = Field(default="CALL entry conditions triggered", max_length=500)
     put_alert_message: str = Field(default="PUT entry conditions triggered", max_length=500)
     alerts: list[AlertRule] = Field(default_factory=list, max_length=30)
@@ -437,8 +469,14 @@ class StrategyConfig(BaseModel):
             data["put_entry_lifecycles"] = [legacy]
         data.setdefault("position_policy", "EXCLUSIVE")
         data.setdefault("direction_mode", "BOTH")
-        data.setdefault("call_action", "BUY")
-        data.setdefault("put_action", "BUY")
+        # V16.1 represented an alert-only direction as call_action=ALERT.
+        # Migrate to orthogonal BUY/SELL trade direction + delivery mode.
+        for side in ("call", "put"):
+            key = f"{side}_action"
+            if data.get(key) == "ALERT":
+                data.setdefault(f"{side}_signal_mode", "ALERT_ONLY")
+                data[key] = "BUY"
+            data.setdefault(key, "BUY")
         data.setdefault("call_big_trend_score", {})
         data.setdefault("put_big_trend_score", {})
         data.setdefault("call_no_trade", {})
@@ -485,7 +523,17 @@ class StrategyConfig(BaseModel):
             if alert.id in seen_alerts:
                 raise ValueError(f"Alert ids must be unique: {alert.id}")
             seen_alerts.add(alert.id)
-            walk(alert.conditions)
+            if alert.source == "LEGACY_CUSTOM":
+                walk(alert.conditions)
+                if alert.condition_id:
+                    raise ValueError("Legacy alert cannot reference a source condition")
+            else:
+                source_tree = getattr(self, ALERT_SOURCE_FIELDS[alert.source])
+                if alert.condition_id and not find_condition_for_validation(source_tree, alert.condition_id):
+                    raise ValueError(
+                        f"Alert {alert.id} references missing condition id "
+                        f"{alert.condition_id} in {alert.source}"
+                    )
 
         for side, group, behaviors in (
             ("CALL", self.call_entry, self.call_entry_lifecycles),

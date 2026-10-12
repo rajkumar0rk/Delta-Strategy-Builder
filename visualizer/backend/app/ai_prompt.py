@@ -51,9 +51,9 @@ IMPORTANT OUTPUT CONTRACT
 - Return ONE valid JSON object only. Do not return Python, Pine Script, prose around the JSON, markdown fences, comments, NaN, Infinity, or invented fields.
 - Output shape: {{\"schema_version\":15,\"app\":\"BTC Strategy Lab\",\"strategy\":<StrategyConfig>}}.
 - The strategy must validate against the StrategyConfig schema included below.
-- direction_mode is CALL, PUT, or BOTH. position_policy=EXCLUSIVE means at most one actual option position is open. CALL and PUT actions are BUY, SELL, or ALERT. ALERT evaluates the corresponding entry RuleGroup on completed candles but does not place a trade. Multi-leg spreads are not supported.
+- direction_mode is CALL, PUT, or BOTH. position_policy=EXCLUSIVE means at most one actual option position is open. CALL and PUT trade actions are BUY or SELL. Separately call_signal_mode / put_signal_mode and call_exit_signal_mode / put_exit_signal_mode are ORDER_ONLY, ALERT_ONLY, or BOTH. ALERT_ONLY evaluates the existing entry/exit rule trees without executing that signal; BOTH keeps the original order path and adds a historical chart alert. Multi-leg spreads are not supported.
 - Use only data and indicators explicitly supported below. Do not invent historical IV, Greeks, funding, order-flow, or external/news data.
-- alerts is a list of up to 30 independent historical chart-only AlertRule entries: id, name, message, enabled, direction (CALL/PUT/NEUTRAL), trigger_mode (ON_ENTER/EVERY_BAR), cooldown_bars, and conditions (recursive RuleGroup). Each alert carries its OWN customizable message. They never open options, change P&L, or produce real-time push notifications. Multiple alerts may fire on the same completed candle. For CALL/PUT ALERT action, set call_alert_message/put_alert_message separately. Do not invent unsupported alert fields.
+- alerts is a list of up to 30 historical chart-only AlertRule entries: id, name, message, enabled, direction (CALL/PUT/NEUTRAL), trigger_mode (ON_ENTER/EVERY_BAR), cooldown_bars, source (CALL_ENTRY, PUT_ENTRY, CALL_EXIT, PUT_EXIT, NO_TRADE, CALL_NO_TRADE, PUT_NO_TRADE) and optional condition_id. Alerts REUSE an existing full rule tree or ONE condition from that tree; do not make a separate alert conditions rule tree. Each alert has its own message and enabled toggle. Multiple alerts can fire on the same completed candle without changing trades or P&L. Legacy saved custom alerts may use source=LEGACY_CUSTOM and conditions but do not create new ones. Built-in CALL/PUT entry alerts use call_alert_message/put_alert_message; exit alerts use call_exit_alert_message/put_exit_alert_message. No real-time push notifications.
 - Indicators marked chart_only=true are visual research indicators and MUST NOT be referenced by CALL entry, PUT entry, CALL exit, PUT exit, or NO TRADE rules.
 - Conditions are evaluated on COMPLETED strategy-timeframe candles. Supported strategy timeframes are 5m, 10m, 15m, 30m and 1h. Aggregated bars are built only from complete groups of downloaded 5m candles. There is no look-ahead.
 - Higher-timeframe candles and indicators are anchored to fixed UTC clock-close boundaries, independent of the requested From time. Example: 00:05 + 00:10 form the 10m candle ending 00:10. HTF values become usable only after that HTF candle closes.
@@ -175,7 +175,7 @@ EXECUTION
 - BUY entry = ASK + configured slippage ticks; BUY exit = BID - configured slippage ticks.
 - SELL entry = BID - configured slippage ticks; SELL exit = ASK + configured slippage ticks.
 - direction_mode: CALL | PUT | BOTH. A disabled direction does not require an enabled lifecycle and is not evaluated.
-- call_action / put_action: BUY | SELL | ALERT (chart signal only, no simulated options order).
+- call_action / put_action: BUY | SELL. Separate signal modes: ORDER_ONLY | ALERT_ONLY | BOTH, for each entry and exit.
 - decision_log_mode: FULL | EVENTS_ONLY. EVENTS_ONLY reduces decision-log volume for faster long-range runs.
 - Delta option fees are applied on BOTH entry and exit using this fixed model:
   notional fee = spot × quantity × contract value × 0.01%
