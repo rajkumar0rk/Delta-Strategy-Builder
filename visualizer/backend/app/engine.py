@@ -260,9 +260,10 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
 
 def _backtest_cache_key(req: BacktestRequest, paths) -> str:
     payload = {
-        'engine_version': 156,  # orthogonal order/alert signal modes and existing-rule references
+        'engine_version': 161,  # V16.1: candle/expiry/warmup/parity hardening
         'warmup_candles': req.warmup_candles,
         'warmup_policy': req.warmup_policy,
+        'bar_gap_policy': req.bar_gap_policy,
         'dataset': _dataset_fingerprint(paths),
         'dataset_id': getattr(req, 'dataset_id', None),
         'dataset_ids': [x.id for x in (paths if isinstance(paths, (list, tuple)) else [paths])],
@@ -896,6 +897,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         return cached
 
     report('Checking bars, option instruments and quote files before backtesting…', 5, 'PREFLIGHT', 'Load bars')
+    store._bar_gap_policy = req.bar_gap_policy
     preflight = store.preflight(
         parts, req.start, req.end, req.strategy,
         lambda msg: report(msg, 7, 'PREFLIGHT', 'Load bars'),
@@ -1134,8 +1136,13 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
 
     measured_start = pd.Timestamp(parse_time(req.start))
     for i, (ts, row) in enumerate(frame.iterrows()):
-        # Warm-up initializes indicators/strategy state; never trades before From.
+        # State transitions during warm-up must affect the first live candle.
+        # Never evaluate trade orders or record trades before From.
         if ts < measured_start:
+            if call_enabled:
+                _update_lifecycles(frame, i, strategy.call_entry, call_behaviors, call_cycles)
+            if put_enabled:
+                _update_lifecycles(frame, i, strategy.put_entry, put_behaviors, put_cycles)
             continue
         ensure_daily_state(ts)
         if i and i % max(250, len(frame)//100 or 1) == 0:
@@ -1607,6 +1614,9 @@ def chart_payload(req, run_result=None):
     until = pd.Timestamp(parse_time(req.end))
     # Alerts use the same complete/warmed frame for chart preview and backtest.
     preview_alerts = alert_markers(frame, strategy, req.start, req.end) if strategy is not None else []
+    # Preserve the fully warmed frame for lifecycle/condition diagnostics.
+    # Cropping first makes delayed lifecycles re-arm incorrectly at From.
+    full_signal_frame = frame
     # Keep earlier rows during computation, then exclude them from displayed data.
     frame = frame.loc[(frame.index >= cutoff) & (frame.index < until)].copy()
     if len(frame) > 30000:
@@ -1689,18 +1699,20 @@ def chart_payload(req, run_result=None):
         call_cycles = _cycle_states(call_behaviors)
         put_cycles = _cycle_states(put_behaviors)
         disabled_tree = {'mode': 'DISABLED', 'passed': False, 'passed_count': 0, 'total': 0, 'conditions': [], 'groups': []}
-        for i, (ts, _) in enumerate(frame.iterrows()):
-            call = evaluate_group(frame, i, strategy.call_entry, _entry_ignore_ids(strategy,'CALL')) if call_enabled else disabled_tree
-            put = evaluate_group(frame, i, strategy.put_entry, _entry_ignore_ids(strategy,'PUT')) if put_enabled else disabled_tree
-            call_bt = _big_trend_score(frame, i, strategy.call_entry, strategy.call_big_trend_score, 'CALL') if call_enabled else {'enabled':False,'score':None,'passed':True}
-            put_bt = _big_trend_score(frame, i, strategy.put_entry, strategy.put_big_trend_score, 'PUT') if put_enabled else {'enabled':False,'score':None,'passed':True}
-            call_rows = _update_lifecycles(frame, i, strategy.call_entry, call_behaviors, call_cycles) if call_enabled else []
-            put_rows = _update_lifecycles(frame, i, strategy.put_entry, put_behaviors, put_cycles) if put_enabled else []
+        for i, (ts, _) in enumerate(full_signal_frame.iterrows()):
+            call = evaluate_group(full_signal_frame, i, strategy.call_entry, _entry_ignore_ids(strategy,'CALL')) if call_enabled else disabled_tree
+            put = evaluate_group(full_signal_frame, i, strategy.put_entry, _entry_ignore_ids(strategy,'PUT')) if put_enabled else disabled_tree
+            call_bt = _big_trend_score(full_signal_frame, i, strategy.call_entry, strategy.call_big_trend_score, 'CALL') if call_enabled else {'enabled':False,'score':None,'passed':True}
+            put_bt = _big_trend_score(full_signal_frame, i, strategy.put_entry, strategy.put_big_trend_score, 'PUT') if put_enabled else {'enabled':False,'score':None,'passed':True}
+            call_rows = _update_lifecycles(full_signal_frame, i, strategy.call_entry, call_behaviors, call_cycles) if call_enabled else []
+            put_rows = _update_lifecycles(full_signal_frame, i, strategy.put_entry, put_behaviors, put_cycles) if put_enabled else []
+            if ts < cutoff or ts >= until:
+                continue
             call_summary = _lifecycle_summary(call_rows)
             put_summary = _lifecycle_summary(put_rows)
-            no_trade = evaluate_group(frame, i, strategy.no_trade) if strategy.no_trade.configured() else {'passed_count': 0, 'total': 0, 'passed': False}
-            call_nt = evaluate_group(frame, i, strategy.call_no_trade) if call_enabled and strategy.call_no_trade.configured() else {'passed_count':0,'total':0,'passed':False}
-            put_nt = evaluate_group(frame, i, strategy.put_no_trade) if put_enabled and strategy.put_no_trade.configured() else {'passed_count':0,'total':0,'passed':False}
+            no_trade = evaluate_group(full_signal_frame, i, strategy.no_trade) if strategy.no_trade.configured() else {'passed_count': 0, 'total': 0, 'passed': False}
+            call_nt = evaluate_group(full_signal_frame, i, strategy.call_no_trade) if call_enabled and strategy.call_no_trade.configured() else {'passed_count':0,'total':0,'passed':False}
+            put_nt = evaluate_group(full_signal_frame, i, strategy.put_no_trade) if put_enabled and strategy.put_no_trade.configured() else {'passed_count':0,'total':0,'passed':False}
             cp, ct, cpass = _score(call)
             pp, pt, ppass = _score(put)
             np, nt, nactive = _score(no_trade)
@@ -1712,12 +1724,12 @@ def chart_payload(req, run_result=None):
                 'call_passed': _score_entry_pass(call, call_bt, strategy.call_big_trend_score) if call_enabled else False,
                 'call_big_trend_score': call_bt.get('score'),
                 'call_big_trend_score_passed': call_bt.get('passed'),
-                'call_big_trend_persistence_count': _finite(frame.iloc[i].get('call_big_trend_score_persistence_count')),
-                'call_trend_phase': {0:'COMPRESSION',1:'IGNITION',2:'CONFIRMATION',3:'BIG_TREND',4:'EXHAUSTION'}.get(int(_finite(frame.iloc[i].get('call_trend_phase_code')) or 0),'COMPRESSION'),
-                'call_breakout_level': _finite(frame.iloc[i].get('call_breakout_level')),
-                'call_bars_since_breakout': _finite(frame.iloc[i].get('call_bars_since_breakout')),
-                'call_retest_ready': bool((_finite(frame.iloc[i].get('call_retest_ready')) or 0)>0.5),
-                'call_false_breakout': bool((_finite(frame.iloc[i].get('call_false_breakout')) or 0)>0.5),
+                'call_big_trend_persistence_count': _finite(full_signal_frame.iloc[i].get('call_big_trend_score_persistence_count')),
+                'call_trend_phase': {0:'COMPRESSION',1:'IGNITION',2:'CONFIRMATION',3:'BIG_TREND',4:'EXHAUSTION'}.get(int(_finite(full_signal_frame.iloc[i].get('call_trend_phase_code')) or 0),'COMPRESSION'),
+                'call_breakout_level': _finite(full_signal_frame.iloc[i].get('call_breakout_level')),
+                'call_bars_since_breakout': _finite(full_signal_frame.iloc[i].get('call_bars_since_breakout')),
+                'call_retest_ready': bool((_finite(full_signal_frame.iloc[i].get('call_retest_ready')) or 0)>0.5),
+                'call_false_breakout': bool((_finite(full_signal_frame.iloc[i].get('call_false_breakout')) or 0)>0.5),
                 'call_no_trade_active': bool(call_nt.get('passed')),
                 'call_trigger_passed': bool(call_summary['trigger_passed']),
                 'call_activation_age_bars': call_summary['activation_age_bars'],
@@ -1730,12 +1742,12 @@ def chart_payload(req, run_result=None):
                 'put_passed': _score_entry_pass(put, put_bt, strategy.put_big_trend_score) if put_enabled else False,
                 'put_big_trend_score': put_bt.get('score'),
                 'put_big_trend_score_passed': put_bt.get('passed'),
-                'put_big_trend_persistence_count': _finite(frame.iloc[i].get('put_big_trend_score_persistence_count')),
-                'put_trend_phase': {0:'COMPRESSION',1:'IGNITION',2:'CONFIRMATION',3:'BIG_TREND',4:'EXHAUSTION'}.get(int(_finite(frame.iloc[i].get('put_trend_phase_code')) or 0),'COMPRESSION'),
-                'put_breakout_level': _finite(frame.iloc[i].get('put_breakout_level')),
-                'put_bars_since_breakout': _finite(frame.iloc[i].get('put_bars_since_breakout')),
-                'put_retest_ready': bool((_finite(frame.iloc[i].get('put_retest_ready')) or 0)>0.5),
-                'put_false_breakout': bool((_finite(frame.iloc[i].get('put_false_breakout')) or 0)>0.5),
+                'put_big_trend_persistence_count': _finite(full_signal_frame.iloc[i].get('put_big_trend_score_persistence_count')),
+                'put_trend_phase': {0:'COMPRESSION',1:'IGNITION',2:'CONFIRMATION',3:'BIG_TREND',4:'EXHAUSTION'}.get(int(_finite(full_signal_frame.iloc[i].get('put_trend_phase_code')) or 0),'COMPRESSION'),
+                'put_breakout_level': _finite(full_signal_frame.iloc[i].get('put_breakout_level')),
+                'put_bars_since_breakout': _finite(full_signal_frame.iloc[i].get('put_bars_since_breakout')),
+                'put_retest_ready': bool((_finite(full_signal_frame.iloc[i].get('put_retest_ready')) or 0)>0.5),
+                'put_false_breakout': bool((_finite(full_signal_frame.iloc[i].get('put_false_breakout')) or 0)>0.5),
                 'put_no_trade_active': bool(put_nt.get('passed')),
                 'put_trigger_passed': bool(put_summary['trigger_passed']),
                 'put_activation_age_bars': put_summary['activation_age_bars'],

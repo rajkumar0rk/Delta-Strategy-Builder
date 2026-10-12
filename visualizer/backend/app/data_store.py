@@ -730,20 +730,40 @@ class DataStore:
         try:
             bars5 = self.load_bars_many(parts, start, end, '5m')
             actual = len(bars5)
-            expected = max(1, int((e - s).total_seconds() // 300))
-            missing = max(0, expected - actual)
-            coverage = actual / expected * 100.0 if expected else 100.0
-            checks.append({'name': 'Underlying 5m bars', 'ok': actual > 0, 'actual': actual, 'expected': expected, 'missing': missing, 'coverage_percent': coverage})
+            # Compare UTC 5m close timestamps, not merely row counts: a
+            # duplicated/off-grid candle cannot compensate for a missing close.
+            expected_index = pd.date_range(
+                start=pd.Timestamp(s).ceil('5min'),
+                end=pd.Timestamp(e) - pd.Timedelta(nanoseconds=1),
+                freq='5min', tz='UTC',
+            )
+            actual_index = pd.DatetimeIndex(bars5.index)
+            missing_index = expected_index.difference(actual_index)
+            off_grid = actual_index.difference(expected_index)
+            expected = len(expected_index)
+            missing = len(missing_index)
+            coverage = (expected - missing) / expected * 100.0 if expected else 100.0
+            policy = getattr(strategy, 'bar_gap_policy', None)
+            # Request-scoped policy passed explicitly by run_backtest; preflight
+            # can also be invoked standalone with its historical WARN default.
+            policy = getattr(self, '_bar_gap_policy', policy or 'WARN')
+            checks.append({
+                'name': 'Underlying 5m bars', 'ok': actual > 0 and missing == 0 and len(off_grid) == 0,
+                'actual': actual, 'expected': expected, 'missing': missing,
+                'off_grid': len(off_grid), 'coverage_percent': coverage,
+                'missing_timestamps_sample': [x.isoformat() for x in missing_index[:10]],
+                'off_grid_timestamps_sample': [x.isoformat() for x in off_grid[:10]],
+                'gap_policy': policy,
+            })
             if actual == 0:
                 errors.append('No underlying bars are available in the requested range')
-            elif coverage < 99.0:
-                warnings.append(f'Underlying bar coverage is {coverage:.2f}% ({missing:,} expected 5m timestamps missing).')
-            first = bars5.index[0].to_pydatetime()
-            last = bars5.index[-1].to_pydatetime()
-            if first > s + timedelta(minutes=5):
-                errors.append(f'Underlying data begins at {iso(first)}, after requested start {iso(s)}')
-            if last < e - timedelta(minutes=10):
-                errors.append(f'Underlying data ends at {iso(last)}, before requested end {iso(e)}')
+            elif missing or len(off_grid):
+                message = (
+                    f'Underlying 5m close grid incomplete: {missing} missing and '
+                    f'{len(off_grid)} off-grid candle(s); coverage {coverage:.2f}%. '
+                    f'First missing closes: {", ".join(x.isoformat() for x in missing_index[:4]) or "none"}.'
+                )
+                (errors if policy == 'REQUIRE' else warnings).append(message)
         except Exception as exc:
             errors.append(f'Underlying data check failed: {exc}')
             bars5 = None

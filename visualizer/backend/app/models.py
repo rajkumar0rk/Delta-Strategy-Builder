@@ -626,6 +626,9 @@ class BacktestRequest(DatasetSelection):
     storage_mode: Literal["COMPACT", "ANALYSIS", "FULL_DEBUG"] = "FULL_DEBUG"
     warmup_candles: int = Field(default=500, ge=0, le=20000)
     warmup_policy: Literal["WARN", "REQUIRE"] = "WARN"
+    # Require complete 5m candle-close coverage to avoid silently trading across
+    # missing history. WARN is an explicit compatibility/research override.
+    bar_gap_policy: Literal["WARN", "REQUIRE"] = "REQUIRE"
 
 
 class PreviewRequest(DatasetSelection):
