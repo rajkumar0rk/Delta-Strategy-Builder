@@ -953,6 +953,8 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
     pos: Position | None = None
     pos_quotes = None
     q_cursor = 0
+    quote_gap_count = 0
+    maximum_quote_gap_seconds = 0.0
     end_dt = parse_time(req.end)
     atr_keys = sorted(
         m['key'] for m in series_meta
@@ -1394,6 +1396,20 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         daily_state['entries'] = int(daily_state['entries']) + 1
         record_mtm(q, pos.entry_time)  # immediately price liquidation against spread + fees
         pos_quotes = store.quotes_between_many(parts, pos.symbol, pos.entry_time, iso(end_dt))
+        # Record missing-option-quote exposure rather than interpolating a
+        # fictional bid/ask. This is a diagnostic, not a fill simulator.
+        observed_times = [
+            pd.Timestamp(parse_time(pos.entry_time)),
+            *(pd.Timestamp(t) for t in pos_quotes.timestamp
+              if pd.Timestamp(t) < pd.Timestamp(spec['expiration'])),
+        ]
+        if len(observed_times) > 1:
+            deltas = [
+                (b - a).total_seconds()
+                for a, b in zip(observed_times, observed_times[1:])
+            ]
+            quote_gap_count += sum(g > strategy.execution.max_exit_quote_delay_seconds for g in deltas)
+            maximum_quote_gap_seconds = max(maximum_quote_gap_seconds, *deltas)
         q_cursor = 0
         while q_cursor < len(pos_quotes) and pos_quotes.iloc[q_cursor].timestamp <= pd.Timestamp(parse_time(pos.entry_time)):
             q_cursor += 1
@@ -1497,6 +1513,8 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         'minimum_mark_to_market_equity_usd': mtm_low,
         'mark_to_market_quote_samples': mtm_samples,
         'unresolved_position_count': int(unresolved_position is not None),
+        'observed_quote_gap_count': quote_gap_count,
+        'max_observed_quote_gap_seconds': maximum_quote_gap_seconds,
         'avg_mfe_percent': (sum(t['mfe_percent'] for t in trades) / len(trades) if trades else 0),
         'avg_mae_percent': (sum(t['mae_percent'] for t in trades) / len(trades) if trades else 0),
         'daily_risk_blocks': int(daily_state['blocked_count']),
@@ -1533,6 +1551,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 'SELL margin, liquidation and actual depth are not modeled',
                 'MTM drawdown is sampled only at available historical quotes',
                 'Expired contracts without verified settlement remain unresolved and are not marked to stale quotes',
+                'Option quote gaps are reported but cannot be converted into known bid/ask or liquidity',
             ] + (['Warm-up incomplete'] if not warmup['contiguous'] else [])
               + (['Open position unresolved at end'] if unresolved_position else []),
         },
