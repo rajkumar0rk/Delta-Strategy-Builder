@@ -1011,6 +1011,21 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             'details': _json_safe(details),
         })
 
+    def first_valid_exit_quote(position: Position, at: str) -> dict[str, Any] | None:
+        """Never let a historical quote at/after expiration settle an option.
+
+        Missing eligible pre-expiry quotes keep the position open and unresolved,
+        rather than crashing or treating post-expiry ticks as executable bids.
+        """
+        if parse_time(at) >= parse_time(str(position.spec['expiration'])):
+            return None
+        quote = store.first_quote_many(
+            parts, position.symbol, at, strategy.execution.max_exit_quote_delay_seconds,
+        )
+        if quote is None or parse_time(str(quote['timestamp'])) >= parse_time(str(position.spec['expiration'])):
+            return None
+        return quote
+
     def spot_at(timestamp_text: str) -> float:
         target = pd.Timestamp(parse_time(timestamp_text))
         eligible = frame.loc[frame.index <= target, 'close']
@@ -1190,14 +1205,14 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 else:
                     hit = row.close >= pos.entry_spot + distance if pos.action == 'BUY' else row.close <= pos.entry_spot - distance
                 if hit:
-                    q = store.first_quote_many(parts, pos.symbol, ts.isoformat(), strategy.execution.max_exit_quote_delay_seconds)
+                    q = first_valid_exit_quote(pos, ts.isoformat())
                     if q:
                         close_position(q['timestamp'], _executable_exit_price(pos, q, strategy), 'UNDERLYING_ATR_STOP')
                         closed_this_candle = True
 
             if pos is not None and strategy.risk.max_hold_minutes is not None:
                 if (ts.to_pydatetime() - parse_time(pos.entry_time)).total_seconds() >= strategy.risk.max_hold_minutes * 60:
-                    q = store.first_quote_many(parts, pos.symbol, ts.isoformat(), strategy.execution.max_exit_quote_delay_seconds)
+                    q = first_valid_exit_quote(pos, ts.isoformat())
                     if q:
                         close_position(q['timestamp'], _executable_exit_price(pos, q, strategy), 'TIME_STOP')
                         closed_this_candle = True
@@ -1209,7 +1224,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                     if strategy.execution.decision_log_mode == 'FULL' or tree['passed']:
                         decisions.append(_flatten_decision(next_event('decision'), pos.direction, ts, 'EXIT', tree, {'close': _finite(row.close)}))
                     if tree['passed']:
-                        q = store.first_quote_many(parts, pos.symbol, ts.isoformat(), strategy.execution.max_exit_quote_delay_seconds)
+                        q = first_valid_exit_quote(pos, ts.isoformat())
                         if q:
                             close_position(q['timestamp'], _executable_exit_price(pos, q, strategy), 'CONDITION_EXIT', tree)
                             closed_this_candle = True
