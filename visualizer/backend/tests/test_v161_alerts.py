@@ -117,7 +117,8 @@ def test_reference_existing_condition_by_id_without_custom_rules():
     early=[r for r in rows if r['details']['alert_id']=='early']
     confirm=[r for r in rows if r['details']['alert_id']=='confirm']
     assert len(early)==3
-    assert len(confirm)==1
+    # close > 110 first holds at 111, resets at 99, then holds again at 120.
+    assert len(confirm)==2
     assert early[0]['details']['message']=='Watch 100'
     assert confirm[0]['details']['message']=='Watch 110'
 
