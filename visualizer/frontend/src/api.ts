@@ -20,6 +20,8 @@ export const api={
  analysisPackageUrl:(runId:string)=>`/api/results/${runId}/analysis-package`,
  aiStrategyPrompt:(body:any)=>fetch('/api/ai/strategy-prompt',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>json<{prompt:string}>(r)),
  researchSweep:(body:any)=>fetch('/api/research/sweep',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>json<{job_id:string}>(r)),
+ executionReplay:(body:any)=>fetch('/api/research/execution-replay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>json<{job_id:string}>(r)),
+ researchHoldout:(body:any)=>fetch('/api/research/holdout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>json<{job_id:string}>(r)),
  researchAblation:(body:any)=>fetch('/api/research/ablation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>json<{job_id:string}>(r)),
  trendDiscovery:(body:any)=>fetch('/api/research/trend-discovery',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>json<{job_id:string}>(r)),
  results:()=>fetch('/api/results').then(r=>json<any[]>(r)),

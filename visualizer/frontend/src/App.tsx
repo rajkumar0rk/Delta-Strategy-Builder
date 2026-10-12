@@ -7,6 +7,7 @@ import {RuleBuilder} from './components/RuleBuilder';
 import {AlertEditor} from './components/AlertEditor';
 import {EntryBehaviorEditor} from './components/EntryBehaviorEditor';
 import {RiskOptions} from './components/RiskOptions';
+import {ReplayResearchPanel} from './components/ReplayResearchPanel';
 import {TradingChart} from './components/TradingChart';
 import {Results} from './components/Results';
 import {EquityDrawdown} from './components/EquityDrawdown';
@@ -112,6 +113,7 @@ export default function App(){
  <div className={`${directionClass} lifecycle-columns`}>{strategy.direction_mode!=='PUT'&&<EntryBehaviorEditor side="CALL" group={strategy.call_entry} value={strategy.call_entry_lifecycles} onChange={call_entry_lifecycles=>setStrategy({...strategy,call_entry_lifecycles})}/>} {strategy.direction_mode!=='CALL'&&<EntryBehaviorEditor side="PUT" group={strategy.put_entry} value={strategy.put_entry_lifecycles} onChange={put_entry_lifecycles=>setStrategy({...strategy,put_entry_lifecycles})}/>}</div>
  <div className={directionClass}>{strategy.direction_mode!=='PUT'&&<RuleBuilder title="CALL exit" value={strategy.call_exit} operands={operands} onChange={call_exit=>setStrategy({...strategy,call_exit})} description={`Only manages an open ${strategy.call_action} CALL.`}/>} {strategy.direction_mode!=='CALL'&&<RuleBuilder title="PUT exit" value={strategy.put_exit} operands={operands} onChange={put_exit=>setStrategy({...strategy,put_exit})} description={`Only manages an open ${strategy.put_action} PUT.`}/>}</div>
  <RuleBuilder title="Shared NO TRADE conditions" value={strategy.no_trade} operands={operands} onChange={no_trade=>setStrategy({...strategy,no_trade})} description="If this group passes, both CALL and PUT entries are blocked on that completed candle."/><div className={directionClass}>{strategy.direction_mode!=='PUT'&&<RuleBuilder title="CALL NO TRADE" value={strategy.call_no_trade} operands={operands} onChange={call_no_trade=>setStrategy({...strategy,call_no_trade})} description="Blocks CALL entries only; PUT can still trade."/>}{strategy.direction_mode!=='CALL'&&<RuleBuilder title="PUT NO TRADE" value={strategy.put_no_trade} operands={operands} onChange={put_no_trade=>setStrategy({...strategy,put_no_trade})} description="Blocks PUT entries only; CALL can still trade."/>}</div>
+ <ReplayResearchPanel strategy={strategy} selection={selectionBody()} start={researchRange.start} end={researchRange.end} onStatus={setStatus}/>
  <Results r={result}/><EquityDrawdown result={result}/><AnalysisPanel runId={result?.run_id||null}/>{researchRange.start&&datasetMode==='SINGLE'&&<ResearchPanel datasetId={datasetId} start={researchRange.start} end={researchRange.end} strategy={strategy} onStatus={setStatus}/>}<DecisionLog runId={result?.run_id||null}/>
  <footer>The unified delta-history archive is normally read-only; V15.1 may append missing completed history only when you explicitly request it or enable auto-download. V15.1 keeps result artifacts compact and provides explicit storage cleanup controls inside the current app folder.</footer></main>
 }
