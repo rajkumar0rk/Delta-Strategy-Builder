@@ -1033,6 +1033,8 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
     def close_position(exit_time: str, exit_price: float, reason: str, exit_rule: dict[str, Any] | None = None):
         nonlocal pos, balance, equity, peak_equity, max_dd, max_dd_percent, pos_quotes, q_cursor
         assert pos
+        if parse_time(exit_time) >= parse_time(str(pos.spec['expiration'])):
+            raise ValueError('Cannot execute a quote-based option exit at or after contract expiry')
         cv = float(pos.spec['contract_value'])
         exit_spot = spot_at(exit_time)
         exit_fee_details = _delta_fee(exit_spot, exit_price, pos.quantity, cv, strategy.execution)
