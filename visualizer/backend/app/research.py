@@ -1,7 +1,7 @@
 from __future__ import annotations
 import itertools, json, statistics
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Callable
 from .models import ResearchSweepRequest, AblationRequest, StrategyConfig, BacktestRequest, ExecutionReplayRequest, HoldoutResearchRequest
@@ -338,6 +338,8 @@ def run_execution_replay(req: ExecutionReplayRequest, progress: Callable[[str], 
         combos = [(0.0, 0), *combos]
     if len(combos) > 12:
         raise ValueError('Baseline plus scenarios must not exceed 12 runs')
+    if req.strategy.execution.extra_half_spread_percent + max(v for v, _ in combos) > 25:
+        raise ValueError('Total assumed half-spread cannot exceed 25 percent')
     for index, (half_spread, extra_ticks) in enumerate(combos, start=1):
         if progress:
             progress(f'V16.2 execution replay {index}/{len(combos)} · +{half_spread}% half-spread, +{extra_ticks} ticks…')
@@ -392,8 +394,8 @@ def run_holdout(req: HoldoutResearchRequest, progress: Callable[[str], None] | N
     train_bars = int(total_candles*req.train_fraction)
     if train_bars < 3 or total_candles-train_bars-embargo < 3:
         raise ValueError('Holdout needs at least three train/test candles after embargo')
-    train_end = start + (end-start)*0 + __import__('datetime').timedelta(seconds=step*train_bars)
-    test_start = train_end + __import__('datetime').timedelta(seconds=step*embargo)
+    train_end = start + timedelta(seconds=step*train_bars)
+    test_start = train_end + timedelta(seconds=step*embargo)
     if progress:progress('Training-period reference backtest…')
     selection=req.model_dump(include={'dataset_mode','dataset_id','dataset_ids','auto_download_missing_data'})
     before=run_backtest(BacktestRequest(**selection,start=_iso(start),end=_iso(train_end),strategy=req.strategy,storage_mode='COMPACT',bar_gap_policy=req.bar_gap_policy))
