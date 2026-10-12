@@ -11,6 +11,7 @@ from .models import BacktestRequest, StrategyConfig
 from .data_store import DataStore, parse_time, iso
 from .indicators import compute_indicators
 from .warmup import required_warmup_candles, historical_bar_sources, warmup_diagnostics
+from .alerts import alert_markers
 from .rules import evaluate_group, evaluate_condition, find_condition
 from .config import result_root, cache_root
 from .storage import write_json_gz, write_csv_gz, load_result, maybe_auto_cleanup
@@ -259,7 +260,7 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
 
 def _backtest_cache_key(req: BacktestRequest, paths) -> str:
     payload = {
-        'engine_version': 154,  # MTF warm-up + V15.2 quote-risk/finality semantics
+        'engine_version': 155,  # historical strategy alerts with isolated action and persistence
         'warmup_candles': req.warmup_candles,
         'warmup_policy': req.warmup_policy,
         'dataset': _dataset_fingerprint(paths),
@@ -870,7 +871,12 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         store = DataStore()
 
     report('Resolving downloaded datasets…', 9 if getattr(req, 'auto_download_missing_data', False) else 2, 'DATA_SELECTION', 'Preflight data validation')
-    parts = store.resolve_request(req, require_options=True)
+    needs_options = any(
+        direction in {'CALL', 'PUT'} and
+        (req.strategy.call_action if direction == 'CALL' else req.strategy.put_action) != 'ALERT'
+        for direction in (['CALL', 'PUT'] if req.strategy.direction_mode == 'BOTH' else [req.strategy.direction_mode])
+    )
+    parts = store.resolve_request(req, require_options=needs_options)
 
     # Cache lookup happens before expensive CSV preflight. The key fingerprints
     # every selected source file, so a cached result is reused only while the
@@ -909,13 +915,14 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             f"(need {warmup_count} contiguous). Early values/signals can vary with selected range."
         )
     report('Loading and de-duplicating option instruments…', 18, 'LOAD_INSTRUMENTS', 'Calculate indicators')
-    inst = store.load_instruments_many(parts)
+    inst = store.load_instruments_many(parts) if needs_options else pd.DataFrame()
     report('Calculating selected indicators and V15.1 trend state…', 25, 'INDICATORS', 'Prepare option quote indexes')
     strategy = req.strategy
     frame, series_meta = compute_indicators(bars, strategy.indicators, strategy.timeframe)
     _prepare_strategy_state(frame, strategy)
     report('Preparing reusable option quote indexes…', 32, 'QUOTE_INDEX', 'Evaluate strategy candles')
-    store.ensure_indexes(parts, lambda msg: report(msg, 32, 'QUOTE_INDEX', 'Evaluate strategy candles'))
+    if needs_options:
+        store.ensure_indexes(parts, lambda msg: report(msg, 32, 'QUOTE_INDEX', 'Evaluate strategy candles'))
 
     balance = float(strategy.risk.starting_balance_usd)
     equity = balance
@@ -936,7 +943,8 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
     }]
     trades: list[dict[str, Any]] = []
     decisions: list[dict[str, Any]] = []
-    markers: list[dict[str, Any]] = []
+    alert_events = alert_markers(frame, strategy, req.start, req.end)
+    markers: list[dict[str, Any]] = list(alert_events)
     pos: Position | None = None
     pos_quotes = None
     q_cursor = 0
@@ -947,8 +955,8 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         and not next((i.chart_only for i in strategy.indicators if i.id == m['instance_id']), False)
     )
     event_counter = 0
-    call_enabled = strategy.direction_mode in {'CALL', 'BOTH'}
-    put_enabled = strategy.direction_mode in {'PUT', 'BOTH'}
+    call_enabled = strategy.direction_mode in {'CALL', 'BOTH'} and strategy.call_action != 'ALERT'
+    put_enabled = strategy.direction_mode in {'PUT', 'BOTH'} and strategy.put_action != 'ALERT'
     call_behaviors = _entry_behaviors(strategy, 'CALL') if call_enabled else []
     put_behaviors = _entry_behaviors(strategy, 'PUT') if put_enabled else []
     call_cycles = _cycle_states(call_behaviors)
@@ -1449,6 +1457,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
     gl = -sum(min(0, t['net_pnl_usd']) for t in trades)
     metrics = {
         'trades': len(trades),
+        'alerts_triggered': len(alert_events),
         'wins': wins,
         'losses': losses,
         'win_rate_percent': (wins / len(trades) * 100 if trades else 0),
@@ -1555,6 +1564,11 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         if decisions:
             write_csv_gz(out / 'decision_events.csv.gz', decisions)
             manifest['decisions'] = 'decision_events.csv.gz'
+    # COMPACT normally drops diagnostics; keep historical alerts as they cannot
+    # be reconstructed from the option trades.
+    if storage_mode == 'COMPACT' and alert_events:
+        write_json_gz(out / 'markers.json.gz', alert_events)
+        manifest['markers'] = 'markers.json.gz'
     # COMPACT keeps only summary + strategy + trades. Cache replays reconstruct
     # trade entry/exit markers; detailed reject markers and decision traces are
     # intentionally not retained.
@@ -1591,6 +1605,8 @@ def chart_payload(req, run_result=None):
         _prepare_strategy_state(frame, strategy)
     cutoff = pd.Timestamp(parse_time(req.start))
     until = pd.Timestamp(parse_time(req.end))
+    # Alerts use the same complete/warmed frame for chart preview and backtest.
+    preview_alerts = alert_markers(frame, strategy, req.start, req.end) if strategy is not None else []
     # Keep earlier rows during computation, then exclude them from displayed data.
     frame = frame.loc[(frame.index >= cutoff) & (frame.index < until)].copy()
     if len(frame) > 30000:
@@ -1735,7 +1751,10 @@ def chart_payload(req, run_result=None):
     return {
         'bars': chart_bars,
         'series': series,
-        'markers': (run_result or {}).get('markers', []),
+        'markers': [
+            *(m for m in (run_result or {}).get('markers', []) if m.get('kind') != 'alert'),
+            *preview_alerts,
+        ],
         'study_markers': study_markers,
         'condition_states': condition_states,
         'warmup': warmup,

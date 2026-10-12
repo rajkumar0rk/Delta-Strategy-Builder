@@ -743,12 +743,15 @@ class DataStore:
             errors.append(f'Underlying data check failed: {exc}')
             bars5 = None
 
-        enabled_dirs = ['CALL', 'PUT'] if strategy.direction_mode == 'BOTH' else [strategy.direction_mode]
+        enabled_dirs = [
+            direction for direction in (['CALL', 'PUT'] if strategy.direction_mode == 'BOTH' else [strategy.direction_mode])
+            if (strategy.call_action if direction == 'CALL' else strategy.put_action) != 'ALERT'
+        ]
         if progress:
             progress('Preflight: checking option instruments for enabled direction(s)…')
         try:
-            inst = self.load_instruments_many(parts)
-            types = set(inst.option_type.astype(str).str.upper())
+            inst = self.load_instruments_many(parts) if enabled_dirs else None
+            types = set(inst.option_type.astype(str).str.upper()) if inst is not None else set()
             for direction in enabled_dirs:
                 required = 'CE' if direction == 'CALL' else 'PE'
                 ok = required in types
@@ -765,16 +768,16 @@ class DataStore:
         if progress:
             progress('Preflight: checking option quote files and reusable indexes…')
         quote_parts = [p for p in parts if p.quotes and p.quotes.exists() and p.quotes.stat().st_size > 0]
-        checks.append({'name': 'Option quote files', 'ok': bool(quote_parts), 'count': len(quote_parts)})
-        if not quote_parts:
+        checks.append({'name': 'Option quote files', 'ok': bool(quote_parts) or not enabled_dirs, 'count': len(quote_parts)})
+        if enabled_dirs and not quote_parts:
             errors.append('No option quote files are available for the selected datasets')
 
-        indexed = sum(self.index_valid(p) for p in quote_parts)
-        checks.append({'name': 'Quote indexes ready', 'ok': indexed == len(quote_parts), 'ready': indexed, 'total': len(quote_parts)})
-        if indexed < len(quote_parts):
+        indexed = sum(self.index_valid(p) for p in quote_parts) if enabled_dirs else 0
+        checks.append({'name': 'Quote indexes ready', 'ok': indexed == len(quote_parts) or not enabled_dirs, 'ready': indexed, 'total': len(quote_parts) if enabled_dirs else 0})
+        if enabled_dirs and indexed < len(quote_parts):
             warnings.append(f'{len(quote_parts) - indexed} quote file(s) need a one-time SQLite index build before the backtest loop starts.')
 
-        if strategy.call_action == 'SELL' or strategy.put_action == 'SELL':
+        if ('CALL' in enabled_dirs and strategy.call_action == 'SELL') or ('PUT' in enabled_dirs and strategy.put_action == 'SELL'):
             warnings.append('SELL option backtests model executable bid/ask, fees and P&L, but exchange/broker margin requirements are not modeled; fixed/budget sizing is not a margin calculator.')
 
         return {

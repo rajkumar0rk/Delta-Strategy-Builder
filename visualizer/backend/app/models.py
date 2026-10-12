@@ -79,6 +79,24 @@ class RuleGroup(BaseModel):
         return bool(self.conditions or self.groups)
 
 
+class AlertRule(BaseModel):
+    """Independent completed-candle alert that never places an option order."""
+    id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z][A-Za-z0-9_-]*$")
+    name: str = Field(min_length=1, max_length=100)
+    message: str = Field(default="", max_length=500)
+    enabled: bool = True
+    direction: Literal["CALL", "PUT", "NEUTRAL"] = "NEUTRAL"
+    trigger_mode: Literal["ON_ENTER", "EVERY_BAR"] = "ON_ENTER"
+    cooldown_bars: int = Field(default=0, ge=0, le=10000)
+    conditions: RuleGroup = Field(default_factory=RuleGroup)
+
+    @model_validator(mode="after")
+    def validate_name(self):
+        if not self.name.strip():
+            raise ValueError("Alert name must not be blank")
+        return self
+
+
 class EntryBehavior(BaseModel):
     """One independent entry lifecycle.
 
@@ -356,8 +374,11 @@ class StrategyConfig(BaseModel):
     name: str = "New BTC options strategy"
     timeframe: Literal["5m", "10m", "15m", "30m", "1h"] = "5m"
     direction_mode: Literal["CALL", "PUT", "BOTH"] = "BOTH"
-    call_action: Literal["BUY", "SELL"] = "BUY"
-    put_action: Literal["BUY", "SELL"] = "BUY"
+    call_action: Literal["BUY", "SELL", "ALERT"] = "BUY"
+    put_action: Literal["BUY", "SELL", "ALERT"] = "BUY"
+    call_alert_message: str = Field(default="CALL entry conditions triggered", max_length=500)
+    put_alert_message: str = Field(default="PUT entry conditions triggered", max_length=500)
+    alerts: list[AlertRule] = Field(default_factory=list, max_length=30)
     indicators: list[IndicatorInstance] = Field(default_factory=list)
     call_entry: RuleGroup = Field(default_factory=RuleGroup)
     put_entry: RuleGroup = Field(default_factory=RuleGroup)
@@ -459,6 +480,12 @@ class StrategyConfig(BaseModel):
 
         for group in (self.call_entry, self.put_entry, self.call_exit, self.put_exit, self.no_trade, self.call_no_trade, self.put_no_trade):
             walk(group)
+        seen_alerts: set[str] = set()
+        for alert in self.alerts:
+            if alert.id in seen_alerts:
+                raise ValueError(f"Alert ids must be unique: {alert.id}")
+            seen_alerts.add(alert.id)
+            walk(alert.conditions)
 
         for side, group, behaviors in (
             ("CALL", self.call_entry, self.call_entry_lifecycles),
@@ -475,7 +502,8 @@ class StrategyConfig(BaseModel):
                     raise ValueError(
                         f"{side} trigger_condition_id '{behavior.trigger_condition_id}' does not exist in the {side} entry rule tree"
                     )
-            if enabled_side and not any(x.enabled for x in behaviors):
+            action = self.call_action if side == "CALL" else self.put_action
+            if enabled_side and action != "ALERT" and not any(x.enabled for x in behaviors):
                 raise ValueError(f"{side} requires at least one enabled entry lifecycle when direction_mode includes {side}")
         for side, group, score in (("CALL", self.call_entry, self.call_big_trend_score), ("PUT", self.put_entry, self.put_big_trend_score)):
             if not score.enabled:

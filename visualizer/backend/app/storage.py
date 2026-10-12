@@ -407,6 +407,10 @@ def load_result(run_id: str) -> dict[str, Any] | None:
     if not isinstance(equity, list):
         equity = _typed_csv(read_csv_any(path / 'equity_curve.csv'))
     result['trades'] = trades
+    if result.get('storage_mode') == 'COMPACT' and any(m.get('kind') == 'alert' for m in markers):
+        # In COMPACT mode only alert markers are persisted; rebuild trade
+        # markers separately without discarding independent alerts.
+        markers = [*markers, *trade_markers_from_trades(trades)]
     result['markers'] = markers
     result['equity_curve'] = equity
     result.setdefault('series_meta', [])
