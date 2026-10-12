@@ -1,26 +1,22 @@
-# V16.1 — Independent strategy alerts
+# Strategy-rule alerts (revised V16.1)
 
-The strategy editor supports `BUY`, `SELL` or `ALERT` independently for
-CALL and PUT. Selecting `ALERT` marks completed entry-rule transitions without
-creating a position. Each direction has a separate editable message.
+The existing strategy builder is the only editor for conditions. CALL/PUT
+BUY/SELL actions remain distinct from per-direction entry/exit signal delivery:
+ORDER_ONLY / ALERT_ONLY / BOTH.
 
-An additional **Strategy alerts** editor permits up to 30 independently named
-alerts. Each alert has a stable ID, enabled toggle, **individual message** (up
-to 500 characters), direction/marker placement, recursive rule tree,
-`ON_ENTER` or `EVERY_BAR` mode, and cooldown in completed strategy candles.
+ORDER_ONLY executes the normal simulated signal. ALERT_ONLY shows a historical
+chart alert without executing that specific signal. For exits, protective risk
+exits still apply. BOTH executes the order and shows an alert.
 
-Every triggered alert is its own marker containing its own text and message.
-The chart includes an Alerts visibility toggle. Selecting a bar with multiple
-events reveals event choices so each alert can be inspected separately.
+Each entry/exit signal has a separate editable message. Up to 30 additional
+named warning alerts can reference an existing CALL/PUT entry/exit, shared or
+directional NO TRADE rule, or an existing condition ID within one of these.
+No duplicate conditions need to be created. Each warning has an independent
+enabled switch, message, trigger mode, cooldown and marker placement.
 
-- No broker order, capital, fees or P&L changes from alerts.
-- Alert conditions are evaluated against completed strategy candles only.
-- Preview and saved backtest use the same warm-up and rule evaluation.
-- Alerts can fire while a simulated option position is open and during
-  entry-session pauses; they are observation-only.
-- Historical chart alerts are **not** real-time email/SMS/push notifications.
-- The default empty alert list preserves existing strategy imports.
-- `ANALYSIS` and `FULL_DEBUG` results persist alert markers; `COMPACT`
-  also stores its alert markers separately from trade markers.
-- No historical L1 quotes are needed for observation-only alerts.
-- Strategy JSON remains `schema_version=15`; new alert fields are optional.
+Historical alerts are observation-only and do not require recorded L1.
+Built-in entry alert rules reflect raw RuleGroup conditions: a real order
+may still be blocked by risk, position, session, or liquidity.
+Old V16.1 standalone alert conditions import as LEGACY_CUSTOM; new alerts
+only reference already configured strategy rules. Old call_action=ALERT
+migrates to BUY with ALERT_ONLY. Strategy schema_version stays 15.
