@@ -3,7 +3,7 @@ let n=0;let life=0;export const cond=(left='close',operator='GT',right:string|nu
 export const group=(mode:'ALL'|'ANY'|'AT_LEAST'='ALL',conditions:Condition[]=[]):RuleGroup=>({mode,min_pass:1,conditions,groups:[]});
 export const behavior=(side:'CALL'|'PUT'='CALL'):EntryBehavior=>{const i=++life;return {id:`${side.toLowerCase()}-life-${i}`,name:`${side} lifecycle ${i}`,enabled:true,trigger_condition_id:null,delay_bars:0,max_wait_bars:null,max_entries_per_activation:1,cooldown_bars:0}};
 export const defaultStrategy=():Strategy=>{const callLife=behavior('CALL'),putLife=behavior('PUT');return ({
- name:'BTC EMA VWAP momentum',timeframe:'5m',direction_mode:'BOTH',call_action:'BUY',put_action:'BUY',
+ name:'BTC EMA VWAP momentum',timeframe:'5m',direction_mode:'BOTH',call_action:'BUY',put_action:'BUY',call_alert_message:'CALL entry conditions triggered',put_alert_message:'PUT entry conditions triggered',alerts:[],
  indicators:[
   {id:'ema9',kind:'EMA',params:{period:9,source:'close'},visible:true,chart_only:false,timeframe:'strategy'},{id:'ema20',kind:'EMA',params:{period:20,source:'close'},visible:true,chart_only:false,timeframe:'strategy'},{id:'ema50',kind:'EMA',params:{period:50,source:'close'},visible:true,chart_only:false,timeframe:'strategy'},{id:'vwap',kind:'VWAP',params:{},visible:true,chart_only:false,timeframe:'strategy'},{id:'rsi14',kind:'RSI',params:{period:14},visible:true,chart_only:false,timeframe:'strategy'},{id:'atr14',kind:'ATR',params:{period:14},visible:false,chart_only:false},{id:'volRatio',kind:'VOLUME_RATIO',params:{period:20},visible:true,chart_only:false,timeframe:'strategy'}
  ],
