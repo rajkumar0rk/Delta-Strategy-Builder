@@ -7,6 +7,7 @@ from typing import Any, Callable
 from .models import ResearchSweepRequest, AblationRequest, StrategyConfig, BacktestRequest, ExecutionReplayRequest, HoldoutResearchRequest
 from .engine import run_backtest
 from .config import result_root
+from .robustness_v163 import analyze_trade_robustness
 
 UTC = timezone.utc
 
@@ -217,8 +218,21 @@ def run_sweep(req: ResearchSweepRequest, progress: Callable[[str], None] | None 
         })
     rows.sort(key=lambda x: ((x['robustness'].get('positive_month_ratio') or 0.0), (x['metrics'].get('net_pnl_usd') or 0.0), (x['metrics'].get('profit_factor') or 0.0)), reverse=True)
     walk_forward = _walk_forward(req, combos, progress)
+    # Stability across nearby tested parameter cells; this is in-sample
+    # descriptive robustness, not proof of generalization.
+    finite_nets=[float(row['metrics'].get('net_pnl_usd') or 0) for row in rows]
+    stability={
+        'combinations':len(rows),
+        'positive_fraction_percent':100*sum(x>0 for x in finite_nets)/len(finite_nets) if finite_nets else 0,
+        'median_net_pnl_usd':statistics.median(finite_nets) if finite_nets else None,
+        'worst_net_pnl_usd':min(finite_nets) if finite_nets else None,
+        'best_net_pnl_usd':max(finite_nets) if finite_nets else None,
+        'best_minus_median_usd':max(finite_nets)-statistics.median(finite_nets) if finite_nets else None,
+        'note':'Describes all supplied parameter cells, not an independent holdout.',
+    }
     return {
         'kind': 'PARAMETER_SWEEP',
+        'parameter_stability':stability,
         'count': len(rows),
         'dimensions': [d.model_dump() for d in req.dimensions],
         'rows': rows,
@@ -362,4 +376,37 @@ def run_execution_replay(req: ExecutionReplayRequest, progress: Callable[[str], 
             'extra half-spread widens midpoint BBO symmetrically; extra ticks worsen '
             'fills. No recorded L1 depth, queue modeling, or proven fill probability.'
         ),
+    }
+
+
+
+def run_holdout(req: HoldoutResearchRequest, progress: Callable[[str], None] | None = None) -> dict[str, Any]:
+    """Chronological unoptimized train/holdout check with configurable embargo."""
+    start, end = _parse_dt(req.start), _parse_dt(req.end)
+    if end <= start:
+        raise ValueError('End must follow start')
+    tf_minutes = {'5m':5, '10m':10, '15m':15, '30m':30, '1h':60}[req.strategy.timeframe]
+    step = tf_minutes*60
+    total_candles = int((end-start).total_seconds()//step)
+    embargo = req.embargo_bars
+    train_bars = int(total_candles*req.train_fraction)
+    if train_bars < 3 or total_candles-train_bars-embargo < 3:
+        raise ValueError('Holdout needs at least three train/test candles after embargo')
+    train_end = start + (end-start)*0 + __import__('datetime').timedelta(seconds=step*train_bars)
+    test_start = train_end + __import__('datetime').timedelta(seconds=step*embargo)
+    if progress:progress('Training-period reference backtest…')
+    selection=req.model_dump(include={'dataset_mode','dataset_id','dataset_ids','auto_download_missing_data'})
+    before=run_backtest(BacktestRequest(**selection,start=_iso(start),end=_iso(train_end),strategy=req.strategy,storage_mode='COMPACT',bar_gap_policy=req.bar_gap_policy))
+    if progress:progress('Untouched holdout backtest…')
+    after=run_backtest(BacktestRequest(**selection,start=_iso(test_start),end=_iso(end),strategy=req.strategy,storage_mode='COMPACT',bar_gap_policy=req.bar_gap_policy))
+    return {
+        'kind':'CHRONOLOGICAL_HOLDOUT','research_only':True,
+        'train':{'start':_iso(start),'end':_iso(train_end),'run_id':before['run_id'],'metrics':before['metrics'],
+                 'robustness':analyze_trade_robustness(before.get('trades') or [])},
+        'holdout':{'start':_iso(test_start),'end':_iso(end),'run_id':after['run_id'],'metrics':after['metrics'],
+                   'robustness':analyze_trade_robustness(after.get('trades') or [])},
+        'embargo_bars':embargo,
+        'note':'Same frozen strategy is used in chronological train and unseen holdout. '
+               'No model selection happens here; warm-up may use earlier bars, and '
+               'capital is reset between windows. No guarantee of future profit.',
     }

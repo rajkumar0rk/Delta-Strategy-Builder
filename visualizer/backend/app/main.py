@@ -12,7 +12,7 @@ from .jobs import jobs
 from .config import project_root, result_root
 from .analysis import build_analysis, build_analysis_package
 from .ai_prompt import build_strategy_prompt
-from .research import run_sweep, run_ablation, list_results, run_execution_replay
+from .research import run_sweep, run_ablation, list_results, run_execution_replay, run_holdout
 from .trend_discovery import run_trend_discovery
 from .archive_sync import plan_archive_sync, ensure_archive_data
 from .storage import storage_usage, save_settings, optimize_existing, cleanup_unpinned, pin_run, iter_csv_any
@@ -220,6 +220,12 @@ def research_sweep(req: ResearchSweepRequest):
 @app.post('/api/research/execution-replay')
 def execution_replay(req: ExecutionReplayRequest):
     jid = jobs.create(lambda progress: run_execution_replay(req, progress))
+    return {'job_id': jid}
+
+
+@app.post('/api/research/holdout')
+def research_holdout(req: HoldoutResearchRequest):
+    jid = jobs.create(lambda progress: run_holdout(req, progress))
     return {'job_id': jid}
 
 

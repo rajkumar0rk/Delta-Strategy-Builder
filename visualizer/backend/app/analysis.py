@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from .config import result_root, cache_root
 from .storage import read_csv_any, read_json_any
 from .execution_stress import build_execution_stress
+from .robustness_v163 import analyze_trade_robustness
 
 IST = ZoneInfo('Asia/Kolkata')
 
@@ -163,6 +164,7 @@ def build_analysis(run_id: str) -> dict[str, Any]:
         'equity_curve': summary.get('equity_curve') or _read_csv(path / 'equity_curve.csv') or _read_csv(path / 'equity_curve.csv.gz'),
         'fee_model': summary.get('fee_model', {}),
         'execution_stress': build_execution_stress(trades, summary.get('fee_model') or {}, summary.get('reliability') or {}),
+        'robustness_v163': analyze_trade_robustness(trades),
     }
     analysis['observations'] = _observations(analysis)
     analysis['ai_prompt'] = _ai_prompt(run_id)
