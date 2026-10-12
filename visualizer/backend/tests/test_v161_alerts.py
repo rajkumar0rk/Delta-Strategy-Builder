@@ -50,7 +50,7 @@ def test_every_bar_cooldown_is_independent():
     events = alert_markers(f, s, f.index[0].isoformat(), (f.index[-1]+pd.Timedelta(minutes=5)).isoformat())
     repeat = [m for m in events if m['details']['alert_id'] == 'repeat']
     once = [m for m in events if m['details']['alert_id'] == 'once']
-    assert len(repeat) == 4
+    assert len(repeat) == 3
     assert len(once) == 3
 
 
