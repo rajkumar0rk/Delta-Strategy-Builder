@@ -129,6 +129,24 @@ def _quote_stats(q: dict[str, Any]) -> dict[str, float | None]:
     }
 
 
+def _effective_quote(q: dict[str, Any], execution) -> dict[str, Any]:
+    """Additional adverse half-spread around the *observed/estimated* BBO midpoint.
+
+    Does not fabricate order-book depth or liquidity. For 0% the input is
+    unchanged; for nonzero values, worsen bid and ask symmetrically so that
+    entry/exit gates, stops and mark-to-market all observe the same assumption.
+    """
+    extra = float(getattr(execution, 'extra_half_spread_percent', 0.0))
+    if extra <= 0:
+        return q
+    bid, ask = float(q['bid']), float(q['ask'])
+    if not (math.isfinite(bid) and math.isfinite(ask) and 0 <= bid <= ask):
+        raise ValueError('Invalid recorded/estimated option BBO')
+    midpoint = (bid + ask) / 2.0
+    allowance = midpoint * extra / 100.0
+    return {**q, 'bid': max(0.0, bid - allowance), 'ask': ask + allowance}
+
+
 def _quote_ok(q, cfg, action: str = 'BUY') -> tuple[bool, str]:
     stats = _quote_stats(q)
     premium = stats['ask'] if action == 'BUY' else stats['bid']
@@ -158,7 +176,7 @@ def _select_option(store, parts, inst, ts, spot, direction, strategy, action: st
         if pd.Timestamp(q['timestamp']) >= pd.Timestamp(row.expiration):
             last = 'QUOTE_AT_OR_AFTER_EXPIRY'
             continue
-        ok, why = _quote_ok(q, strategy.option, action)
+        ok, why = _quote_ok(_effective_quote(q, strategy.execution), strategy.option, action)
         if not ok:
             last = why
             continue
@@ -263,7 +281,7 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
 
 def _backtest_cache_key(req: BacktestRequest, paths) -> str:
     payload = {
-        'engine_version': 161,  # V16.1: candle/expiry/warmup/parity hardening
+        'engine_version': 162,  # V16.2: synthetic spread affects decisions, stops and net P&L
         'warmup_candles': req.warmup_candles,
         'warmup_policy': req.warmup_policy,
         'bar_gap_policy': req.bar_gap_policy,
@@ -305,8 +323,9 @@ def _write_cache(key: str, run_id: str) -> None:
 def _executable_exit_price(pos: Position, q: dict[str, Any], strategy) -> float:
     inc = float(pos.spec.get('price_increment') or 0.0)
     ticks = float(strategy.execution.slippage_ticks) * inc
+    effective = _effective_quote(q, strategy.execution)
     # Long option exits SELL at bid; short option exits BUY-to-close at ask.
-    return max(0.0, float(q['bid']) - ticks) if pos.action == 'BUY' else float(q['ask']) + ticks
+    return max(0.0, float(effective['bid']) - ticks) if pos.action == 'BUY' else float(effective['ask']) + ticks
 
 
 def _position_return_percent(pos: Position, exit_price: float) -> float:
@@ -1377,7 +1396,9 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
 
         inc = float(spec['price_increment'])
         slip = strategy.execution.slippage_ticks * inc
-        entry = float(q['ask']) + slip if action == 'BUY' else max(0.0, float(q['bid']) - slip)
+        effective_entry_quote = _effective_quote(q, strategy.execution)
+        entry = (float(effective_entry_quote['ask']) + slip if action == 'BUY'
+                 else max(0.0, float(effective_entry_quote['bid']) - slip))
         qty, cost, quantity_reject = _quantity(strategy, spec, entry, float(row.close), balance, action)
         if qty <= 0:
             why = quantity_reject or 'INSUFFICIENT_CASH'
@@ -1389,7 +1410,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             )
             continue
 
-        edge_ok, edge_reason, edge_details = _fee_edge_check(strategy, spec, q, float(row.close), entry, qty)
+        edge_ok, edge_reason, edge_details = _fee_edge_check(strategy, spec, effective_entry_quote, float(row.close), entry, qty)
         if not edge_ok:
             decision_tree = {'mode': 'EXECUTION', 'passed': False, 'passed_count': 0, 'total': 1, 'conditions': [], 'groups': []}
             decisions.append(_flatten_decision(next_event('decision'), direction, ts, 'EXECUTION', decision_tree, {'close': _finite(row.close), 'reason': edge_reason, **edge_details}))
@@ -1429,7 +1450,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         while q_cursor < len(pos_quotes) and pos_quotes.iloc[q_cursor].timestamp <= pd.Timestamp(parse_time(pos.entry_time)):
             q_cursor += 1
 
-        qs = _quote_stats(q)
+        qs = _quote_stats(effective_entry_quote)
         dte = (pd.Timestamp(spec['expiration']) - ts).total_seconds() / 86400.0
         decision_tree = {'mode': 'EXECUTION', 'passed': True, 'passed_count': 1, 'total': 1, 'conditions': [], 'groups': []}
         decisions.append(_flatten_decision(next_event('decision'), direction, ts, 'EXECUTION', decision_tree, {
@@ -1569,6 +1590,11 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 'Option quote gaps are reported but cannot be converted into known bid/ask or liquidity',
             ] + (['Warm-up incomplete'] if not warmup['contiguous'] else [])
               + (['Open position unresolved at end'] if unresolved_position else []),
+        },
+        'execution_assumptions': {
+            'extra_half_spread_percent': strategy.execution.extra_half_spread_percent,
+            'slippage_ticks': strategy.execution.slippage_ticks,
+            'source': 'SYNTHETIC_BBO_ASSUMPTION',
         },
         'fee_model': {
             'name': 'DELTA_OPTIONS',

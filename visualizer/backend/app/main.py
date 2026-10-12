@@ -6,13 +6,13 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import ORJSONResponse, FileResponse
 from .data_store import DataStore
 from .indicators import catalog_payload
-from .models import BacktestRequest, PreviewRequest, SaveStrategyRequest, AiStrategyPromptRequest, ResearchSweepRequest, AblationRequest, TrendDiscoveryRequest, ArchiveSyncRequest
+from .models import BacktestRequest, PreviewRequest, SaveStrategyRequest, AiStrategyPromptRequest, ResearchSweepRequest, AblationRequest, TrendDiscoveryRequest, ArchiveSyncRequest, ExecutionReplayRequest, HoldoutResearchRequest
 from .engine import run_backtest, chart_payload
 from .jobs import jobs
 from .config import project_root, result_root
 from .analysis import build_analysis, build_analysis_package
 from .ai_prompt import build_strategy_prompt
-from .research import run_sweep, run_ablation, list_results
+from .research import run_sweep, run_ablation, list_results, run_execution_replay
 from .trend_discovery import run_trend_discovery
 from .archive_sync import plan_archive_sync, ensure_archive_data
 from .storage import storage_usage, save_settings, optimize_existing, cleanup_unpinned, pin_run, iter_csv_any
@@ -214,6 +214,12 @@ def analysis_package(run_id: str):
 @app.post('/api/research/sweep')
 def research_sweep(req: ResearchSweepRequest):
     jid = jobs.create(lambda progress: run_sweep(req, progress))
+    return {'job_id': jid}
+
+
+@app.post('/api/research/execution-replay')
+def execution_replay(req: ExecutionReplayRequest):
+    jid = jobs.create(lambda progress: run_execution_replay(req, progress))
     return {'job_id': jid}
 
 

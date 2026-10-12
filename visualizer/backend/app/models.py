@@ -185,6 +185,9 @@ class ExecutionConfig(BaseModel):
     max_entry_quote_delay_seconds: int = Field(default=90, ge=0, le=3600)
     max_exit_quote_delay_seconds: int = Field(default=90, ge=0, le=3600)
     slippage_ticks: int = Field(default=0, ge=0, le=100)
+    # V16.2 research-only: additional symmetric half-spread around each
+    # historical quote midpoint. Never treated as a recorded L1 spread.
+    extra_half_spread_percent: float = Field(default=0.0, ge=0, le=25)
     fee_model: Literal["DELTA_OPTIONS"] = "DELTA_OPTIONS"
     option_notional_fee_rate_percent: Literal[0.01] = 0.01
     premium_fee_cap_percent: Literal[3.5] = 3.5
@@ -692,12 +695,49 @@ class ResearchSweepRequest(BaseModel):
     dimensions: list[SweepDimension] = Field(min_length=1, max_length=3)
     max_combinations: int = Field(default=40, ge=1, le=200)
     walk_forward_folds: int = Field(default=0, ge=0, le=4)
+    walk_forward_embargo_bars: int = Field(default=0, ge=0, le=288)
 
     @model_validator(mode="after")
     def validate_walk_forward(self):
         if self.walk_forward_folds == 1:
             raise ValueError("walk_forward_folds must be 0 (off) or 2..4")
         return self
+
+
+class ExecutionReplayRequest(DatasetSelection):
+    """V16.2 full backtest replay under alternative quote-execution assumptions."""
+    start: str
+    end: str
+    strategy: StrategyConfig
+    extra_half_spread_percent: list[float] = Field(
+        default_factory=lambda: [0.0, 0.5, 1.0, 2.0], min_length=1, max_length=8,
+    )
+    extra_slippage_ticks: list[int] = Field(
+        default_factory=lambda: [0], min_length=1, max_length=4,
+    )
+    bar_gap_policy: Literal["WARN", "REQUIRE"] = "REQUIRE"
+
+    @model_validator(mode="after")
+    def validate_scenarios(self):
+        if len(self.extra_half_spread_percent) * len(self.extra_slippage_ticks) > 12:
+            raise ValueError("Execution replay supports up to 12 scenarios")
+        if any(not (0 <= x <= 25) for x in self.extra_half_spread_percent):
+            raise ValueError("Extra half-spread must be between 0 and 25 percent")
+        if any(not (0 <= x <= 100) for x in self.extra_slippage_ticks):
+            raise ValueError("Extra slippage ticks must be between 0 and 100")
+        if self.strategy.execution.slippage_ticks + max(self.extra_slippage_ticks) > 100:
+            raise ValueError("Combined slippage must not exceed 100 ticks")
+        return self
+
+
+class HoldoutResearchRequest(DatasetSelection):
+    """V16.3 fixed-strategy chronological train/holdout comparison."""
+    start: str
+    end: str
+    strategy: StrategyConfig
+    train_fraction: float = Field(default=0.70, ge=0.50, le=0.90)
+    embargo_bars: int = Field(default=0, ge=0, le=288)
+    bar_gap_policy: Literal["WARN", "REQUIRE"] = "REQUIRE"
 
 
 class AblationRequest(BaseModel):

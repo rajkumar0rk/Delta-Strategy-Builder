@@ -4,7 +4,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
-from .models import ResearchSweepRequest, AblationRequest, StrategyConfig, BacktestRequest
+from .models import ResearchSweepRequest, AblationRequest, StrategyConfig, BacktestRequest, ExecutionReplayRequest, HoldoutResearchRequest
 from .engine import run_backtest
 from .config import result_root
 
@@ -314,3 +314,52 @@ def list_results(limit: int = 100) -> list[dict[str, Any]]:
             continue
     rows.sort(key=lambda x: x['run_id'], reverse=True)
     return rows[:limit]
+
+
+def run_execution_replay(req: ExecutionReplayRequest, progress: Callable[[str], None] | None = None) -> dict[str, Any]:
+    """Full decision/position replays; never mutate the input strategy or L1 archive."""
+    rows = []
+    combos = list(itertools.product(req.extra_half_spread_percent, req.extra_slippage_ticks))
+    if (0.0, 0) not in combos:
+        combos = [(0.0, 0), *combos]
+    if len(combos) > 12:
+        raise ValueError('Baseline plus scenarios must not exceed 12 runs')
+    for index, (half_spread, extra_ticks) in enumerate(combos, start=1):
+        if progress:
+            progress(f'V16.2 execution replay {index}/{len(combos)} · +{half_spread}% half-spread, +{extra_ticks} ticks…')
+        config = req.strategy.model_copy(deep=True)
+        config.execution.extra_half_spread_percent += half_spread
+        config.execution.slippage_ticks += extra_ticks
+        case = BacktestRequest(
+            **req.model_dump(include={'dataset_mode','dataset_id','dataset_ids','auto_download_missing_data'}),
+            start=req.start, end=req.end, strategy=config,
+            storage_mode='COMPACT', bar_gap_policy=req.bar_gap_policy,
+        )
+        result = run_backtest(case)
+        rows.append({
+            'extra_half_spread_percent': half_spread,
+            'extra_slippage_ticks': extra_ticks,
+            'run_id': result['run_id'], 'cache_hit': bool(result.get('cache_hit')),
+            'metrics': result['metrics'],
+            'unresolved_position': result.get('unresolved_position'),
+            'trades': len(result.get('trades') or []),
+        })
+    baseline = rows[0]['metrics']
+    for row in rows:
+        row['delta_net_pnl_usd'] = (
+            float(row['metrics'].get('net_pnl_usd') or 0.0) -
+            float(baseline.get('net_pnl_usd') or 0.0)
+        )
+        row['delta_trades'] = int(row['trades']) - int(rows[0]['trades'])
+    return {
+        'kind': 'FULL_EXECUTION_REPLAY', 'mode': 'LOW_FIDELITY_RESEARCH_ONLY',
+        'scenario_count': len(rows), 'scenarios': rows,
+        'base_slippage_ticks': req.strategy.execution.slippage_ticks,
+        'base_extra_half_spread_percent': req.strategy.execution.extra_half_spread_percent,
+        'note': (
+            'Each case reruns entry selection, spread rejection, position sizing, '
+            'stops, fee gates and exits from original synthetic/unverified quotes; '
+            'extra half-spread widens midpoint BBO symmetrically; extra ticks worsen '
+            'fills. No recorded L1 depth, queue modeling, or proven fill probability.'
+        ),
+    }
