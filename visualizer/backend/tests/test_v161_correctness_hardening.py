@@ -122,3 +122,42 @@ def test_chart_and_backtest_lifecycle_warmup_match_at_first_requested_bar(tmp_pa
     assert first['call_activation_age_bars'] >= 2
     assert result['metrics']['trades'] >= 1
     assert result['trades'][0]['signal_time'].startswith('2026-01-01T00:10:00')
+
+
+
+def test_chart_signal_matches_full_backtest_decision_log(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch, expiration='2026-01-02T00:00:00Z')
+    st = _strategy()
+    st.execution.decision_log_mode = 'FULL'
+    start = '2026-01-01T00:10:00Z'
+    end = '2026-01-01T00:40:00Z'
+    result = run_backtest(BacktestRequest(
+        dataset_id='sample', start=start, end=end, strategy=st, storage_mode='FULL_DEBUG',
+    ))
+    chart = chart_payload(PreviewRequest(
+        dataset_id='sample', start=start, end=end, strategy=st, timeframe='5m',
+    ))
+    scores = {pd.Timestamp(c['time'], unit='s', tz='UTC'): c
+              for c in chart['condition_states']}
+    with open(Path(result['result_dir'])/'decision_events.csv', newline='', encoding='utf-8') as handle:
+        decisions = list(csv.DictReader(handle))
+    entries = [r for r in decisions if r['direction']=='CALL' and r['kind']=='ENTRY']
+    assert entries
+    for row in entries:
+        stamp = pd.Timestamp(row['timestamp'])
+        assert stamp in scores
+        chart_row = scores[stamp]
+        assert float(row['passed_count']) == chart_row['call_passed_count']
+        assert float(row['total']) == chart_row['call_total']
+
+
+def test_time_stop_does_not_attempt_post_expiry_quote(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch, expiration='2026-01-01T00:18:00Z')
+    st = _strategy()
+    st.risk.max_hold_minutes = 10
+    result = run_backtest(BacktestRequest(
+        dataset_id='sample', start='2026-01-01T00:00:00Z',
+        end='2026-01-01T00:40:00Z', strategy=st,
+    ))
+    assert result['unresolved_position']['reason'] == 'EXPIRY_SETTLEMENT_UNAVAILABLE'
+    assert result['metrics']['trades'] == 0
