@@ -155,6 +155,9 @@ def _select_option(store, parts, inst, ts, spot, direction, strategy, action: st
         if not q:
             last = 'NO_FRESH_QUOTE'
             continue
+        if pd.Timestamp(q['timestamp']) >= pd.Timestamp(row.expiration):
+            last = 'QUOTE_AT_OR_AFTER_EXPIRY'
+            continue
         ok, why = _quote_ok(q, strategy.option, action)
         if not ok:
             last = why
@@ -1024,7 +1027,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         mtm_samples += 1
 
     def record_mtm(q: dict[str, Any], stamp: str):
-        if pos is not None:
+        if pos is not None and parse_time(stamp) < parse_time(str(pos.spec['expiration'])):
             record_mtm_value(_mark_to_market_value(pos, q, balance, strategy, spot_at(stamp)))
 
     def close_position(exit_time: str, exit_price: float, reason: str, exit_rule: dict[str, Any] | None = None):
@@ -1165,6 +1168,8 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             while q_cursor < len(pos_quotes) and pos_quotes.iloc[q_cursor].timestamp <= ts:
                 q = pos_quotes.iloc[q_cursor].to_dict()
                 q_cursor += 1
+                if parse_time(str(q['timestamp'])) >= parse_time(str(pos.spec['expiration'])):
+                    continue
                 record_mtm(q, pd.Timestamp(q['timestamp']).isoformat())
                 reason, _ = _stop_reason(pos, q, strategy)
                 if reason:
@@ -1431,6 +1436,8 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         while q_cursor < len(pos_quotes) and pd.Timestamp(pos_quotes.iloc[q_cursor].timestamp) <= pd.Timestamp(end_dt):
             last_q = pos_quotes.iloc[q_cursor].to_dict()
             q_cursor += 1
+            if parse_time(str(last_q['timestamp'])) >= parse_time(str(pos.spec['expiration'])):
+                continue
             stamp = pd.Timestamp(last_q['timestamp']).isoformat()
             record_mtm(last_q, stamp)
             reason, _ = _stop_reason(pos, last_q, strategy)
@@ -1440,11 +1447,15 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
 
     unresolved_position = None
     if pos is not None:
-        last = pos_quotes.iloc[-1] if pos_quotes is not None and len(pos_quotes) else None
+        valid_quotes = (pos_quotes.loc[pos_quotes.timestamp < pd.Timestamp(pos.spec['expiration'])]
+                        if pos_quotes is not None and len(pos_quotes) else None)
+        last = valid_quotes.iloc[-1] if valid_quotes is not None and len(valid_quotes) else None
         last_ts = pd.Timestamp(last.timestamp) if last is not None else None
         quote_age = (pd.Timestamp(end_dt) - last_ts).total_seconds() if last_ts is not None else None
         allowed_age = strategy.execution.end_of_data_quote_max_age_seconds
-        if last is not None and quote_age is not None and 0 <= quote_age <= allowed_age:
+        contract_expiry = pd.Timestamp(pos.spec['expiration'])
+        expired_before_end = contract_expiry <= pd.Timestamp(end_dt)
+        if not expired_before_end and last is not None and quote_age is not None and 0 <= quote_age <= allowed_age:
             record_mtm(last.to_dict(), last_ts.isoformat())
             close_position(last_ts.isoformat(), _executable_exit_price(pos, last.to_dict(), strategy), 'END_OF_DATA')
         else:
@@ -1455,7 +1466,8 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 'last_quote_timestamp': last_ts.isoformat() if last_ts is not None else None,
                 'quote_age_seconds': quote_age,
                 'max_allowed_quote_age_seconds': allowed_age,
-                'reason': 'NO_FRESH_FINAL_QUOTE',
+                'expiration': contract_expiry.isoformat(),
+                'reason': 'EXPIRY_SETTLEMENT_UNAVAILABLE' if expired_before_end else 'NO_FRESH_FINAL_QUOTE',
             }
 
     wins = sum(t['net_pnl_usd'] > 0 for t in trades)
@@ -1518,6 +1530,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 'Synthetic/unverified quotes cannot confirm real fills',
                 'SELL margin, liquidation and actual depth are not modeled',
                 'MTM drawdown is sampled only at available historical quotes',
+                'Expired contracts without verified settlement remain unresolved and are not marked to stale quotes',
             ] + (['Warm-up incomplete'] if not warmup['contiguous'] else [])
               + (['Open position unresolved at end'] if unresolved_position else []),
         },
