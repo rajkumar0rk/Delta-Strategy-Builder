@@ -84,13 +84,13 @@ def test_gap_policy_defaults_to_reject_but_allows_explicit_research_warning(tmp_
 
 
 def test_expired_first_quote_rejected_even_when_signal_precedes_expiry(tmp_path, monkeypatch):
-    _seed(tmp_path, monkeypatch, expiration='2026-01-01T00:13:00Z')
+    _seed(tmp_path, monkeypatch, expiration='2026-01-01T00:09:45Z')
     store=DataStore()
     parts=[store.resolve('sample')]
     store.ensure_indexes(parts)
     inst=store.load_instruments_many(parts)
     s=_strategy()
-    _,quote,why=_select_option(store,parts,inst,pd.Timestamp('2026-01-01T00:11:00Z'),
+    _,quote,why=_select_option(store,parts,inst,pd.Timestamp('2026-01-01T00:09:30Z'),
                                100,'CALL',s)
     assert quote is None
     assert why == 'QUOTE_AT_OR_AFTER_EXPIRY'
