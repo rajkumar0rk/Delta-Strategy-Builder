@@ -38,3 +38,7 @@ Before finishing:
 ## V16 execution sensitivity verification
 
 Check zero-stress P&L preservation, adverse BUY/SELL cost, invalid-trade coverage, fee/GST differences and frontend build. Keep strategy schema_version 15 and V16 analysis separate from fills.
+
+## Strategy alert integration verification
+
+When editing strategy alert rules, verify per-alert messages, independent same-candle triggers, ON_ENTER/EVERY_BAR, cooldown, warm-up, chart visibility, saved-result markers, and no effect on trades/P&L. Keep model/engine/preview/frontend/AI prompt/schema consumers aligned. Run backend tests and frontend build/tests.
