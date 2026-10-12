@@ -152,6 +152,14 @@ def _walk_forward(req: ResearchSweepRequest, combos: list[tuple[float, ...]], pr
     for fold in range(1, folds + 1):
         train_start, train_end = boundaries[0], boundaries[fold]
         test_start, test_end = boundaries[fold], boundaries[fold + 1]
+        # Embargo is a temporal gap between training and holdout evaluation;
+        # it must never be used in either period's strategy selection.
+        test_start += timedelta(
+            minutes={'5m':5,'10m':10,'15m':15,'30m':30,'1h':60}[req.strategy.timeframe]
+            * req.walk_forward_embargo_bars,
+        )
+        if test_start >= test_end:
+            raise ValueError('Walk-forward embargo consumes the entire test fold')
         candidates: list[dict[str, Any]] = []
         for index, combo in enumerate(combos, start=1):
             if progress:
@@ -237,6 +245,7 @@ def run_sweep(req: ResearchSweepRequest, progress: Callable[[str], None] | None 
         'dimensions': [d.model_dump() for d in req.dimensions],
         'rows': rows,
         'walk_forward': walk_forward,
+        'walk_forward_embargo_bars': req.walk_forward_embargo_bars,
     }
 
 
