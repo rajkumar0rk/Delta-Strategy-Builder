@@ -99,3 +99,51 @@ def test_chart_only_indicator_references_disallowed():
                 conditions=[Condition(left='hidden',operator='GT',value=1)]
             ))],
         )
+
+
+def test_reference_existing_condition_by_id_without_custom_rules():
+    base=RuleGroup(conditions=[
+        Condition(id='slow',left='close',operator='GT',value=100),
+        Condition(id='fast',left='close',operator='GT',value=110),
+    ])
+    s=StrategyConfig(call_entry=base, alerts=[
+        AlertRule(id='early',name='Early warning',message='Watch 100',
+                  source='CALL_ENTRY',condition_id='slow'),
+        AlertRule(id='confirm',name='Confirm',message='Watch 110',
+                  source='CALL_ENTRY',condition_id='fast'),
+    ])
+    f=frame()
+    rows=alert_markers(f,s,f.index[0].isoformat(),(f.index[-1]+pd.Timedelta(minutes=5)).isoformat())
+    early=[r for r in rows if r['details']['alert_id']=='early']
+    confirm=[r for r in rows if r['details']['alert_id']=='confirm']
+    assert len(early)==3
+    assert len(confirm)==1
+    assert early[0]['details']['message']=='Watch 100'
+    assert confirm[0]['details']['message']=='Watch 110'
+
+
+def test_order_and_alert_modes_keep_independent_messages():
+    f=frame()
+    s=StrategyConfig(direction_mode='CALL',call_entry=group(),
+        call_signal_mode='BOTH',call_alert_message='Entry and alert',
+        call_exit=group(107),call_exit_signal_mode='ALERT_ONLY',
+        call_exit_alert_message='Warning only, do not condition-exit')
+    rows=alert_markers(f,s,f.index[0].isoformat(),(f.index[-1]+pd.Timedelta(minutes=5)).isoformat())
+    assert {r['details']['message'] for r in rows}=={
+        'Entry and alert','Warning only, do not condition-exit'}
+    assert all(r['kind']=='alert' for r in rows)
+
+
+def test_missing_condition_reference_rejected():
+    with pytest.raises(ValidationError,match='missing condition id'):
+        StrategyConfig(alerts=[
+            AlertRule(id='nope',name='Missing',source='CALL_ENTRY',
+                      condition_id='not_in_existing_tree')
+        ])
+
+
+def test_legacy_action_alert_migrates_to_separate_signal_mode():
+    s=StrategyConfig.model_validate({'call_action':'ALERT','put_action':'BUY'})
+    assert s.call_action=='BUY'
+    assert s.call_signal_mode=='ALERT_ONLY'
+    assert s.put_signal_mode=='ORDER_ONLY'
