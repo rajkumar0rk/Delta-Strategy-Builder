@@ -339,7 +339,40 @@ def list_results(limit: int = 100) -> list[dict[str, Any]]:
     return rows[:limit]
 
 
-def run_execution_replay(req: ExecutionReplayRequest, progress: Callable[[str], None] | None = None) -> dict[str, Any]:
+def _research_subrun_progress(
+    progress: Callable[..., None] | None,
+    label: str,
+    index: int,
+    total: int,
+    stage: str,
+) -> Callable[..., None] | None:
+    """Translate a sub-backtest's 0..100 percent into its parent job interval.
+
+    The outer JobManager callback is also the cooperative cancellation
+    checkpoint. Never swallow JobCancelled or substitute time-based estimates.
+    """
+    if progress is None:
+        return None
+
+    def forward(
+        message: str,
+        percent: float | None = None,
+        inner_stage: str | None = None,
+        next_step: str | None = None,
+    ) -> None:
+        bounded = max(0.0, min(100.0, float(percent))) if percent is not None else 0.0
+        parent_percent = (index - 1 + bounded / 100.0) / total * 100.0
+        progress(
+            f'{label} ({index}/{total}): {message}',
+            parent_percent,
+            stage,
+            next_step or inner_stage or 'Run historical backtest',
+        )
+
+    return forward
+
+
+def run_execution_replay(req: ExecutionReplayRequest, progress: Callable[..., None] | None = None) -> dict[str, Any]:
     """Full decision/position replays; never mutate the input strategy or L1 archive."""
     rows = []
     combos = list(itertools.product(req.extra_half_spread_percent, req.extra_slippage_ticks))
@@ -350,8 +383,17 @@ def run_execution_replay(req: ExecutionReplayRequest, progress: Callable[[str], 
     if req.strategy.execution.extra_half_spread_percent + max(v for v, _ in combos) > 25:
         raise ValueError('Total assumed half-spread cannot exceed 25 percent')
     for index, (half_spread, extra_ticks) in enumerate(combos, start=1):
+        label = (
+            f'Execution scenario +{half_spread:g}% half-spread '
+            f'/ +{extra_ticks} ticks'
+        )
         if progress:
-            progress(f'V16.2 execution replay {index}/{len(combos)} · +{half_spread}% half-spread, +{extra_ticks} ticks…')
+            progress(
+                f'{label} ({index}/{len(combos)}): starting',
+                (index - 1) / len(combos) * 100.0,
+                'EXECUTION_REPLAY',
+                'Run entry, exit and risk evaluation',
+            )
         config = req.strategy.model_copy(deep=True)
         config.execution.extra_half_spread_percent += half_spread
         config.execution.slippage_ticks += extra_ticks
@@ -360,7 +402,19 @@ def run_execution_replay(req: ExecutionReplayRequest, progress: Callable[[str], 
             start=req.start, end=req.end, strategy=config,
             storage_mode='COMPACT', bar_gap_policy=req.bar_gap_policy,
         )
-        result = run_backtest(case)
+        result = run_backtest(
+            case,
+            _research_subrun_progress(
+                progress, label, index, len(combos), 'EXECUTION_REPLAY',
+            ),
+        )
+        if progress:
+            progress(
+                f'{label} ({index}/{len(combos)}): complete',
+                index / len(combos) * 100.0,
+                'EXECUTION_REPLAY',
+                'Next scenario' if index < len(combos) else 'Finalize replay results',
+            )
         rows.append({
             'extra_half_spread_percent': half_spread,
             'extra_slippage_ticks': extra_ticks,
@@ -391,7 +445,7 @@ def run_execution_replay(req: ExecutionReplayRequest, progress: Callable[[str], 
 
 
 
-def run_holdout(req: HoldoutResearchRequest, progress: Callable[[str], None] | None = None) -> dict[str, Any]:
+def run_holdout(req: HoldoutResearchRequest, progress: Callable[..., None] | None = None) -> dict[str, Any]:
     """Chronological unoptimized train/holdout check with configurable embargo."""
     start, end = _parse_dt(req.start), _parse_dt(req.end)
     if end <= start:
@@ -405,11 +459,40 @@ def run_holdout(req: HoldoutResearchRequest, progress: Callable[[str], None] | N
         raise ValueError('Holdout needs at least three train/test candles after embargo')
     train_end = start + timedelta(seconds=step*train_bars)
     test_start = train_end + timedelta(seconds=step*embargo)
-    if progress:progress('Training-period reference backtest…')
-    selection=req.model_dump(include={'dataset_mode','dataset_id','dataset_ids','auto_download_missing_data'})
-    before=run_backtest(BacktestRequest(**selection,start=_iso(start),end=_iso(train_end),strategy=req.strategy,storage_mode='COMPACT',bar_gap_policy=req.bar_gap_policy))
-    if progress:progress('Untouched holdout backtest…')
-    after=run_backtest(BacktestRequest(**selection,start=_iso(test_start),end=_iso(end),strategy=req.strategy,storage_mode='COMPACT',bar_gap_policy=req.bar_gap_policy))
+    if progress:
+        progress('Training reference (1/2): starting', 0.0,
+                 'HOLDOUT_TRAIN', 'Evaluate earlier training interval')
+    selection = req.model_dump(include={
+        'dataset_mode', 'dataset_id', 'dataset_ids', 'auto_download_missing_data',
+    })
+    before = run_backtest(
+        BacktestRequest(
+            **selection, start=_iso(start), end=_iso(train_end),
+            strategy=req.strategy, storage_mode='COMPACT',
+            bar_gap_policy=req.bar_gap_policy,
+        ),
+        _research_subrun_progress(
+            progress, 'Training reference', 1, 2, 'HOLDOUT_TRAIN',
+        ),
+    )
+    if progress:
+        progress('Training reference (1/2): complete', 50.0,
+                 'HOLDOUT_TRAIN', 'Start untouched holdout')
+        progress('Unseen holdout (2/2): starting', 50.0,
+                 'HOLDOUT_TEST', 'Evaluate holdout interval')
+    after = run_backtest(
+        BacktestRequest(
+            **selection, start=_iso(test_start), end=_iso(end),
+            strategy=req.strategy, storage_mode='COMPACT',
+            bar_gap_policy=req.bar_gap_policy,
+        ),
+        _research_subrun_progress(
+            progress, 'Unseen holdout', 2, 2, 'HOLDOUT_TEST',
+        ),
+    )
+    if progress:
+        progress('Unseen holdout (2/2): complete', 100.0,
+                 'HOLDOUT_TEST', 'Build robustness summary')
     return {
         'kind':'CHRONOLOGICAL_HOLDOUT','research_only':True,
         'train':{'start':_iso(start),'end':_iso(train_end),'run_id':before['run_id'],'metrics':before['metrics'],

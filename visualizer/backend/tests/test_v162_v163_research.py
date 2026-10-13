@@ -58,7 +58,7 @@ def test_no_closed_trades_never_claims_positive_odds():
 
 def test_full_replay_calls_backtest_for_each_scenario(monkeypatch):
     seen=[]
-    def fake(req):
+    def fake(req, progress=None):
         seen.append((req.strategy.execution.extra_half_spread_percent,
                      req.strategy.execution.slippage_ticks))
         return {'run_id':str(len(seen)),'trades':[{'net_pnl_usd':1}],
@@ -75,7 +75,7 @@ def test_full_replay_calls_backtest_for_each_scenario(monkeypatch):
 
 def test_holdout_has_nonoverlapping_contiguous_utc_blocks(monkeypatch):
     called=[]
-    def fake(req):
+    def fake(req, progress=None):
         called.append(req)
         return {'run_id':str(len(called)),'trades':[],'metrics':{'trades':0,'net_pnl_usd':0}}
     monkeypatch.setattr('app.research.run_backtest',fake)
@@ -85,3 +85,86 @@ def test_holdout_has_nonoverlapping_contiguous_utc_blocks(monkeypatch):
     assert called[0].end < called[1].start
     assert result['holdout']['robustness']['status']=='INSUFFICIENT_TRADES'
     assert result['embargo_bars']==12
+
+
+
+def test_replay_progress_scales_inner_backtests_monotonically(monkeypatch):
+    snapshots = []
+    runs = []
+
+    def fake(req, progress=None):
+        runs.append(req)
+        if progress:
+            progress('Loading quotes', 25, 'LOAD_BARS', 'Index quotes')
+            progress('Evaluating candles', 80, 'BACKTEST_LOOP', 'Finalize')
+        return {'run_id':str(len(runs)), 'trades':[], 'metrics':{'net_pnl_usd':0}}
+
+    monkeypatch.setattr('app.research.run_backtest', fake)
+    req = ExecutionReplayRequest(
+        **_range(), extra_half_spread_percent=[0, 1],
+        extra_slippage_ticks=[0],
+    )
+
+    def collect(message, percent=None, stage=None, next_step=None):
+        snapshots.append((message, percent, stage, next_step))
+
+    result = run_execution_replay(req, collect)
+    assert result['scenario_count'] == 2
+    assert len(runs) == 2
+    assert [e[1] for e in snapshots] == sorted(e[1] for e in snapshots)
+    assert snapshots[0][1] == 0
+    assert snapshots[-1][1] == 100
+    assert any('1/2' in row[0] and row[1] == 12.5 for row in snapshots)
+    assert any('2/2' in row[0] and row[1] == 62.5 for row in snapshots)
+    assert all(row[2] == 'EXECUTION_REPLAY' for row in snapshots)
+
+
+def test_holdout_progress_runs_train_then_holdout(monkeypatch):
+    snapshots = []
+    runs = []
+
+    def fake(req, progress=None):
+        runs.append(req)
+        if progress:
+            progress('Calculating indicators', 50, 'INDICATORS', 'Evaluate')
+        return {'run_id':str(len(runs)), 'trades':[], 'metrics':{'net_pnl_usd':0}}
+
+    monkeypatch.setattr('app.research.run_backtest', fake)
+    req = HoldoutResearchRequest(**_range(), train_fraction=0.7, embargo_bars=12)
+    result = run_holdout(
+        req,
+        lambda msg, pct, stage, next_step: snapshots.append((msg,pct,stage)),
+    )
+    assert result['kind'] == 'CHRONOLOGICAL_HOLDOUT'
+    assert len(runs) == 2
+    assert [x[1] for x in snapshots] == sorted(x[1] for x in snapshots)
+    assert [x[1] for x in snapshots if 'Calculating indicators' in x[0]] == [25,75]
+    assert snapshots[0][1] == 0
+    assert snapshots[-1][1] == 100
+    assert snapshots[-1][2] == 'HOLDOUT_TEST'
+
+
+def test_replay_cancellation_interrupts_between_inner_checkpoints(monkeypatch):
+    runs = []
+
+    def fake(req, progress=None):
+        runs.append(req)
+        if progress:
+            progress('Loading quotes', 25, 'LOAD_BARS', 'Index quotes')
+        return {'run_id':str(len(runs)), 'trades':[], 'metrics':{'net_pnl_usd':0}}
+
+    class Cancelled(RuntimeError):
+        pass
+
+    monkeypatch.setattr('app.research.run_backtest', fake)
+    req = ExecutionReplayRequest(
+        **_range(), extra_half_spread_percent=[0,1],
+        extra_slippage_ticks=[0],
+    )
+    def interrupt(message, percent=None, stage=None, next_step=None):
+        if 'Loading quotes' in message:
+            raise Cancelled('Stopped')
+
+    with pytest.raises(Cancelled, match='Stopped'):
+        run_execution_replay(req, interrupt)
+    assert len(runs) == 1

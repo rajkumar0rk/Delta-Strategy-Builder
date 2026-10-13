@@ -37,3 +37,17 @@ UI: new V16.2/V16.3 research panel and Analysis robustness readout.
 The current V16.1 data-quality safeguards and expiry finality carry over.
 No V17 live feed/real-time paper trading implemented.
 Run backend pytest and frontend build/Vitest before historical review.
+
+
+## Research job progress and cancellation
+
+Execution replay maps the original backtest's 0–100% callbacks onto equal
+per-scenario intervals of the parent job. The message includes scenario
+number, total scenarios, assumed spread/slippage and the underlying backtest
+stage. Holdout maps training to 0–50% and unseen testing to 50–100%.
+These percentages are **work-phase fractions, not wall-clock ETAs**. Cached
+runs can make an interval finish immediately.
+
+Research callbacks are forwarded to the standard JobManager so Stop requests
+take effect at the next safe inner-backtest checkpoint. The UI polls the
+existing backtest job endpoints; no new transport or data persistence.
