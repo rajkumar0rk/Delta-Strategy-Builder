@@ -1,14 +1,19 @@
-import {useState} from 'react';
+import {useEffect,useRef,useState} from 'react';
 import {api} from '../api';
-import type {Strategy} from '../types';
+import type {JobState,Strategy} from '../types';
 
-async function wait(id:string,onStatus:(message:string)=>void){
- for(;;){
-  await new Promise(r=>setTimeout(r,750));
-  const result=await api.job(id);onStatus(result.message||result.status);
-  if(result.status==='COMPLETE')return result.result as any;
-  if(result.status==='FAILED'||result.status==='CANCELLED')throw new Error(result.error||result.message||result.status);
- }
+type Kind='replay'|'holdout';
+type ResearchProgress={kind:Kind;jobId:string;job:JobState};
+const done=['COMPLETE','FAILED','CANCELLED'];
+export function ResearchJobProgress({job,onStop}:{job:JobState;onStop:()=>void}){
+ const percent=Math.max(0,Math.min(100,Number(job.progress_percent??0)));
+ return <div className="research-job-progress" role="status" aria-live="polite">
+  <div className="research-job-heading"><strong>{job.stage||job.status}</strong><span>{percent.toFixed(0)}%</span></div>
+  <progress value={percent} max={100} aria-label="Research job progress"/>
+  <p>{job.message||'Waiting for research progress…'}</p>
+  {job.next_step&&<small>Next: {job.next_step}</small>}
+  <button className="danger" disabled={done.includes(job.status)||job.status==='CANCELLING'} onClick={onStop}>{job.status==='CANCELLING'?'Stopping…':'■ Stop research'}</button>
+ </div>;
 }
 const num=(value:any)=>{const n=Number(value);return Number.isFinite(n)?n.toFixed(2):'—'};
 export function ReplayResearchPanel({strategy,selection,start,end,onStatus}:{strategy:Strategy;selection:any;start:string;end:string;onStatus:(s:string)=>void}){
@@ -16,20 +21,86 @@ export function ReplayResearchPanel({strategy,selection,start,end,onStatus}:{str
  const [ticks,setTicks]=useState('0,1');
  const [train,setTrain]=useState(.7);
  const [embargo,setEmbargo]=useState(0);
- const [working,setWorking]=useState(false);
+ const [active,setActive]=useState<ResearchProgress|null>(null);
  const [replay,setReplay]=useState<any>(null);
  const [holdout,setHoldout]=useState<any>(null);
- const parse=(value:string)=>value.split(',').map(x=>Number(x.trim()));
- const simulate=async()=>{try{setWorking(true);const hs=parse(spread),ts=parse(ticks);if(!hs.length||!ts.length||hs.some(x=>!Number.isFinite(x)||x<0)||ts.some(x=>!Number.isInteger(x)||x<0))throw Error('Use nonnegative numeric half-spreads and integer tick counts');const {job_id}=await api.executionReplay({...selection,start,end,strategy,extra_half_spread_percent:hs,extra_slippage_ticks:ts});setReplay(await wait(job_id,onStatus))}catch(e){onStatus(String(e))}finally{setWorking(false)}};
- const validate=async()=>{try{setWorking(true);const {job_id}=await api.researchHoldout({...selection,start,end,strategy,train_fraction:train,embargo_bars:embargo});setHoldout(await wait(job_id,onStatus))}catch(e){onStatus(String(e))}finally{setWorking(false)}};
- return <section className="card"><h2>V16.2 / V16.3 · Execution replay &amp; robustness</h2>
+ const [feedback,setFeedback]=useState('');
+ const alive=useRef(true);
+ const activeId=useRef<string|null>(null);
+ const generation=useRef(0);
+ useEffect(()=>{alive.current=true;return ()=>{alive.current=false;generation.current+=1}},[]);
+ async function run(kind:Kind,payload:any){
+  if(activeId.current)return;
+  const token=++generation.current;
+  try{
+   setFeedback('');
+   const reply=kind==='replay'?await api.executionReplay(payload):await api.researchHoldout(payload);
+   if(!alive.current||generation.current!==token)return;
+   const id=reply.job_id;
+   activeId.current=id;
+   setActive({kind,jobId:id,job:{id,status:'QUEUED',message:'Queued',stage:'QUEUED',progress_percent:0}});
+   for(;;){
+    const job=await api.job(id);
+    if(!alive.current||generation.current!==token)return;
+    setActive({kind,jobId:id,job});
+    if(done.includes(job.status)){
+     if(job.status==='COMPLETE'){
+      if(kind==='replay')setReplay(job.result);
+      else setHoldout(job.result);
+      setFeedback(kind==='replay'?'Execution replay completed.':'Holdout comparison completed.');
+     }else if(job.status==='CANCELLED'){
+      setFeedback('Research stopped at a safe checkpoint. Existing results are preserved.');
+     }else{throw Error(job.error||job.message||'Research failed')}
+     break;
+    }
+    await new Promise(resolve=>setTimeout(resolve,750));
+   }
+  }catch(e){
+   if(alive.current&&generation.current===token){
+    setFeedback(String(e));onStatus(String(e));
+   }
+  }finally{
+   if(generation.current===token){
+    activeId.current=null;
+    if(alive.current)setActive(null);
+   }
+  }
+ }
+ function replayNow(){
+  if(activeId.current)return;
+  const parse=(v:string)=>v.split(',').map(x=>Number(x.trim()));
+  const hs=parse(spread),ts=parse(ticks);
+  if(hs.some(x=>!Number.isFinite(x)||x<0)||ts.some(x=>!Number.isInteger(x)||x<0)||!hs.length||!ts.length){
+   setFeedback('Use nonnegative half-spreads and integer tick values.');return;
+  }
+  void run('replay',{...selection,start,end,strategy,extra_half_spread_percent:hs,extra_slippage_ticks:ts});
+ }
+ function holdoutNow(){
+  if(activeId.current)return;
+  void run('holdout',{...selection,start,end,strategy,train_fraction:train,embargo_bars:embargo});
+ }
+ async function stop(){
+  const id=activeId.current;if(!id)return;
+  try{
+   const job=await api.stop(id);
+   if(!alive.current||activeId.current!==id)return;
+   setActive(current=>current?.jobId===id?{...current,job}:current);
+  }catch(e){if(alive.current)setFeedback('Stop failed: '+String(e))}
+ }
+ const running=!!active;
+ return <section className="card">
+ <h2>V16.2 / V16.3 · Execution replay &amp; robustness</h2>
  <p>Research-only, synthetic/unverified BBO. Execution replay reruns all strategy decisions under additional adverse bid/ask spread and slippage. No historical L1 depth or fill probability is invented.</p>
- <div className="form-grid"><label>Extra half-spread % scenarios<input value={spread} onChange={e=>setSpread(e.target.value)}/></label><label>Extra ticks (each side)<input value={ticks} onChange={e=>setTicks(e.target.value)}/></label></div>
- <button disabled={working||!start||!end} onClick={()=>void simulate()}>{working?'Running…':'Run full execution replay'}</button>
+ <div className="form-grid"><label>Extra half-spread % scenarios<input disabled={running} value={spread} onChange={e=>setSpread(e.target.value)}/></label><label>Extra ticks (each side)<input disabled={running} value={ticks} onChange={e=>setTicks(e.target.value)}/></label></div>
+ <button disabled={running||!start||!end} onClick={replayNow}>{active?.kind==='replay'?'Running replay…':'Run full execution replay'}</button>
+ {active?.kind==='replay'&&<ResearchJobProgress job={active.job} onStop={()=>void stop()}/>}
  {replay&&<div className="table-wrap"><p>{replay.note}</p><table><thead><tr><th>Half spread +%</th><th>Extra ticks</th><th>Trades</th><th>Net $</th><th>Change $</th><th>Unresolved</th></tr></thead><tbody>{(replay.scenarios||[]).map((r:any,i:number)=><tr key={i}><td>{r.extra_half_spread_percent}</td><td>{r.extra_slippage_ticks}</td><td>{r.trades}</td><td>{num(r.metrics?.net_pnl_usd)}</td><td>{num(r.delta_net_pnl_usd)}</td><td>{r.unresolved_position?'Yes':'No'}</td></tr>)}</tbody></table></div>}
- <h3>Chronological train / unseen holdout</h3><p>Freeze strategy parameters before comparing periods. The test segment never selects parameters using its results.</p>
- <div className="form-grid"><label>Training fraction<select value={train} onChange={e=>setTrain(Number(e.target.value))}><option value={.6}>60%</option><option value={.7}>70%</option><option value={.8}>80%</option></select></label><label>Embargo candles<input type="number" min={0} max={288} value={embargo} onChange={e=>setEmbargo(Number(e.target.value))}/></label></div>
- <button disabled={working||!start||!end} onClick={()=>void validate()}>{working?'Running…':'Run holdout comparison'}</button>
+ <h3>Chronological train / unseen holdout</h3>
+ <p>Freeze strategy parameters before comparing periods. The test segment never selects parameters using its results.</p>
+ <div className="form-grid"><label>Training fraction<select disabled={running} value={train} onChange={e=>setTrain(Number(e.target.value))}><option value={.6}>60%</option><option value={.7}>70%</option><option value={.8}>80%</option></select></label><label>Embargo candles<input disabled={running} type="number" min={0} max={288} value={embargo} onChange={e=>setEmbargo(Number(e.target.value))}/></label></div>
+ <button disabled={running||!start||!end} onClick={holdoutNow}>{active?.kind==='holdout'?'Running holdout…':'Run holdout comparison'}</button>
+ {active?.kind==='holdout'&&<ResearchJobProgress job={active.job} onStop={()=>void stop()}/>}
  {holdout&&<div className="table-wrap"><p>{holdout.note}</p><table><thead><tr><th>Period</th><th>Dates</th><th>Trades</th><th>Net $</th><th>PF</th></tr></thead><tbody>{(['train','holdout'] as const).map(key=><tr key={key}><td>{key}</td><td>{holdout[key].start.slice(0,10)} to {holdout[key].end.slice(0,10)}</td><td>{holdout[key].metrics.trades}</td><td>{num(holdout[key].metrics.net_pnl_usd)}</td><td>{num(holdout[key].metrics.profit_factor)}</td></tr>)}</tbody></table></div>}
- </section>
+ {feedback&&<p className="research-job-feedback" role="status">{feedback}</p>}
+ </section>;
 }

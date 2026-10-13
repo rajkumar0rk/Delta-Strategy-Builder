@@ -104,3 +104,11 @@
 
 /* V15 storage manager */
 .storage-manager{margin-top:14px}.storage-metrics{display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:10px;margin:12px 0}.storage-metrics>div{border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:rgba(255,255,255,.025);display:flex;flex-direction:column;gap:4px}.storage-metrics span{font-size:12px;color:var(--muted)}.storage-metrics strong{font-size:18px}.storage-policy{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:10px;align-items:end}.storage-policy .switch{grid-column:1/-1}.storage-job{margin:12px 0;display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center}.storage-job progress{width:100%}.storage-run-table{max-height:320px;margin-top:12px}.storage-run-table td small{display:block;color:var(--muted);margin-top:2px}.storage-note{font-size:12px;color:var(--muted);margin-top:10px}@media(max-width:900px){.storage-metrics,.storage-policy{grid-template-columns:1fr 1fr}}@media(max-width:620px){.storage-metrics,.storage-policy{grid-template-columns:1fr}.storage-job{grid-template-columns:1fr}.storage-policy .switch{grid-column:auto}}
+
+/* V16.2/V16.3 research progress */
+.research-job-progress{margin:12px 0;padding:12px;display:grid;gap:8px;border:1px solid #304763;border-radius:9px;background:#0a1523}
+.research-job-heading{display:flex;justify-content:space-between;gap:12px;color:#dce7f7;font-size:12px}
+.research-job-progress progress{width:100%;height:11px;accent-color:#4d7cff}
+.research-job-progress p,.research-job-progress small{font-size:11px;color:#97aac4;overflow-wrap:anywhere}
+.research-job-progress button{justify-self:end}
+.research-job-feedback{margin-top:12px;padding:8px 10px;border:1px solid #33445e;border-radius:7px}
