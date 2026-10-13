@@ -27,10 +27,12 @@ export function ReplayResearchPanel({strategy,selection,start,end,onStatus}:{str
  const [feedback,setFeedback]=useState('');
  const alive=useRef(true);
  const activeId=useRef<string|null>(null);
+ const submitting=useRef(false);
  const generation=useRef(0);
  useEffect(()=>{alive.current=true;return ()=>{alive.current=false;generation.current+=1}},[]);
  async function run(kind:Kind,payload:any){
-  if(activeId.current)return;
+  if(activeId.current||submitting.current)return;
+  submitting.current=true;
   const token=++generation.current;
   try{
    setFeedback('');
@@ -38,6 +40,7 @@ export function ReplayResearchPanel({strategy,selection,start,end,onStatus}:{str
    if(!alive.current||generation.current!==token)return;
    const id=reply.job_id;
    activeId.current=id;
+   submitting.current=false;
    setActive({kind,jobId:id,job:{id,status:'QUEUED',message:'Queued',stage:'QUEUED',progress_percent:0}});
    for(;;){
     const job=await api.job(id);
@@ -61,13 +64,14 @@ export function ReplayResearchPanel({strategy,selection,start,end,onStatus}:{str
    }
   }finally{
    if(generation.current===token){
+    submitting.current=false;
     activeId.current=null;
     if(alive.current)setActive(null);
    }
   }
  }
  function replayNow(){
-  if(activeId.current)return;
+  if(activeId.current||submitting.current)return;
   const parse=(v:string)=>v.split(',').map(x=>Number(x.trim()));
   const hs=parse(spread),ts=parse(ticks);
   if(hs.some(x=>!Number.isFinite(x)||x<0)||ts.some(x=>!Number.isInteger(x)||x<0)||!hs.length||!ts.length){
@@ -76,7 +80,7 @@ export function ReplayResearchPanel({strategy,selection,start,end,onStatus}:{str
   void run('replay',{...selection,start,end,strategy,extra_half_spread_percent:hs,extra_slippage_ticks:ts});
  }
  function holdoutNow(){
-  if(activeId.current)return;
+  if(activeId.current||submitting.current)return;
   void run('holdout',{...selection,start,end,strategy,train_fraction:train,embargo_bars:embargo});
  }
  async function stop(){
