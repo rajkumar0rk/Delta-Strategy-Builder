@@ -85,3 +85,23 @@ The public archive is `LOW_FIDELITY_SYNTHETIC_BBO`: option bid/ask is reconstruc
 ## V16 execution stress
 
 Adverse premium scenarios are post-trade analysis only. They do not alter execution, stop timing, depth, historical dataset, margin or saved original trade P&L; synthetic quotes remain RESEARCH_ONLY.
+
+
+## Optional SELL collateral & leverage (research estimates)
+SELL strategies may opt into `risk.sell_margin` with explicitly supplied
+initial/maintenance percentages of BTC notional, a maximum assumed notional
+leverage (which only imposes an **initial collateral floor**), an optional
+collateral buffer, fee reserve and isolated/cross scenario. The field is OFF
+by default to preserve existing strategy imports. Enabled scenarios enforce
+estimated available collateral when opening positions and can close simulated
+positions at observed-quote estimated maintenance breaches. Closed-trade
+balance, unrealized quote P&L and fee allowances remain distinct.
+
+**Never label these calculations as Delta-verified margin, leverage, exchange
+liquidations, or live-risk numbers.** Delta portfolio margin is risk-dependent;
+the actual venue may account for option Greeks, volatility shifts, offsets,
+auto-top-up and other account state unavailable to the historical lab.
+Historical quote gaps may conceal threshold crossings; liquidation fills and
+fees are NOT recreated. Margin research does not convert options SELL into
+futures leverage or change option payout algebra. The original $50 trade
+budget is only a research limit, not an exchange margin quote.

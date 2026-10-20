@@ -57,7 +57,7 @@ IMPORTANT OUTPUT CONTRACT
 - Indicators marked chart_only=true are visual research indicators and MUST NOT be referenced by CALL entry, PUT entry, CALL exit, PUT exit, or NO TRADE rules.
 - Conditions are evaluated on COMPLETED strategy-timeframe candles. Supported strategy timeframes are 5m, 10m, 15m, 30m and 1h. Aggregated bars are built only from complete groups of downloaded 5m candles. There is no look-ahead.
 - Higher-timeframe candles and indicators are anchored to fixed UTC clock-close boundaries, independent of the requested From time. Example: 00:05 + 00:10 form the 10m candle ending 00:10. HTF values become usable only after that HTF candle closes.
-- BUY option entry fills use historical ASK + slippage and exits SELL at historical BID - slippage. SELL option entry fills at historical BID - slippage and exits BUY-to-close at historical ASK + slippage. SELL margin requirements are venue/account specific and are NOT modeled; do not present the result as a margin estimate.
+- BUY option entry fills use historical ASK + slippage and exits SELL at historical BID - slippage. SELL option entry fills at historical BID - slippage and exits BUY-to-close at historical ASK + slippage. SELL margin requirements are venue/account specific; optional research-only user-calibrated collateral/leverage assumptions are not exchange validated. Never present them as actual Delta initial margin, leverage entitlement, or liquidation.
 - Protective stop/take-profit/profit-protection checks are quote driven when applicable.
 - A configured NO TRADE group blocks new entries when that group passes. It does not close an already-open position.
 - CALL and PUT have separate exit rule groups.
@@ -245,7 +245,7 @@ V16 PHASE 1 EXECUTION-COST SENSITIVITY
 
 DATA LIMITATIONS
 - The unified Delta archive is LOW_FIDELITY_SYNTHETIC_BBO: option bid/ask is reconstructed from 1m option candle closes using an estimated spread, and bid/ask sizes are synthetic. Backtest P&L is research/estimated P&L, NOT proof of historically executable fills.
-- SELL margin/collateral/liquidation requirements are not modeled.
+- SELL margin modeling is OFF by default. risk.sell_margin can enable user-calibrated initial_margin_percent, maintenance_margin_percent, max_notional_leverage, collateral_buffer_percent, reserve_exit_fee, margin_mode ISOLATED_ESTIMATE/CROSS_ESTIMATE, check_margin_on_quotes. These are scenario-based notional-percent assumptions only, NOT verified Delta margin or exchange liquidation. Enabled margin enforces estimated initial collateral and tests estimated quote-level maintenance breaches; actual portfolio margin, Greeks, orderbook gaps, auto-topup and exchange liquidation remain unmodeled.
 - Existing underlying data provides OHLCV.
 - Existing normalized option quote data can provide bid, ask, bid_size, ask_size, volume, and open_interest when present in the source rows.
 - V15.1 does NOT provide historical IV, delta, gamma, theta, vega, or rho. Do not reference them.
