@@ -296,7 +296,7 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
 
 def _backtest_cache_key(req: BacktestRequest, paths) -> str:
     payload = {
-        'engine_version': 170,  # optional short-margin/leverage scenario affects entries and exits
+        'engine_version': 171,  # selectable portfolio proxy changes collateral/rejection semantics
         'warmup_candles': req.warmup_candles,
         'warmup_policy': req.warmup_policy,
         'bar_gap_policy': req.bar_gap_policy,
@@ -1662,7 +1662,13 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             'enabled': strategy.risk.sell_margin.enabled,
             'venue_verified': False,
             'config': strategy.risk.sell_margin.model_dump(mode='json'),
-            'note': 'User-entered collateral and leverage assumptions only. No live Delta margin validation, maintenance recalculation, auto-top-up or liquidation fees.',
+            'note': (
+                'Explicit user-entered research collateral assumptions only. '
+                'PORTFOLIO_ESTIMATE uses pooled single-strategy balance with '
+                'manually supplied rates, NOT Delta 29-scenario portfolio stress, '
+                'account position offsets, real-time risk margin or UCF. '
+                'No actual liquidation simulation, auto-top-up or liquidation fees.'
+            ),
         },
         'execution_assumptions': {
             'extra_half_spread_percent': strategy.execution.extra_half_spread_percent,

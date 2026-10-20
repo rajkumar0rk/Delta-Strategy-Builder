@@ -315,7 +315,7 @@ class SellMarginConfig(BaseModel):
     override the user-calibrated initial or maintenance margin percentages.
     """
     enabled: bool = False
-    margin_mode: Literal["ISOLATED_ESTIMATE", "CROSS_ESTIMATE"] = "ISOLATED_ESTIMATE"
+    margin_mode: Literal["ISOLATED_ESTIMATE", "CROSS_ESTIMATE", "PORTFOLIO_ESTIMATE"] = "ISOLATED_ESTIMATE"
     initial_margin_percent: float | None = Field(default=None, gt=0, le=100)
     maintenance_margin_percent: float | None = Field(default=None, gt=0, le=100)
     max_notional_leverage: float | None = Field(default=None, ge=1, le=100)
@@ -330,6 +330,11 @@ class SellMarginConfig(BaseModel):
                 raise ValueError("Enabled SELL margin research requires explicit initial and maintenance rates")
             if self.maintenance_margin_percent > self.initial_margin_percent:
                 raise ValueError("Maintenance margin cannot exceed initial margin")
+            if self.margin_mode == "PORTFOLIO_ESTIMATE" and self.max_notional_leverage is not None:
+                raise ValueError(
+                    "Portfolio margin research has no fixed leverage setting. "
+                    "Remove max_notional_leverage and supply manual IM/MM stress assumptions."
+                )
             if self.max_notional_leverage is not None:
                 # A leverage cap is an initial margin floor, not an exchange fact.
                 effective_initial = max(self.initial_margin_percent, 100 / self.max_notional_leverage)

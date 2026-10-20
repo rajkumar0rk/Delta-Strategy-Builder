@@ -83,6 +83,44 @@ def test_invalid_maintenance_and_missing_rates_fail_closed():
         SellMarginConfig(enabled=True,initial_margin_percent=10,maintenance_margin_percent=20)
 
 
+def test_portfolio_mode_requires_manual_rates_and_forbids_fake_fixed_leverage():
+    with pytest.raises(ValidationError, match="requires explicit initial"):
+        SellMarginConfig(enabled=True,margin_mode='PORTFOLIO_ESTIMATE')
+    with pytest.raises(ValidationError, match="no fixed leverage"):
+        SellMarginConfig(
+            enabled=True,margin_mode='PORTFOLIO_ESTIMATE',
+            initial_margin_percent=20,maintenance_margin_percent=10,
+            max_notional_leverage=5,
+        )
+
+
+def test_portfolio_mode_uses_pooled_account_proxy_not_isolated_collateral():
+    s=_strategy(initial=20,maintenance=10,leverage=None)
+    s.risk.sell_margin.margin_mode='PORTFOLIO_ESTIMATE'
+    m=short_margin_details(s.risk.sell_margin,100000,1000,1,.001)
+    assert m['mode']=='PORTFOLIO_ESTIMATE'
+    assert m['initial_margin_usd']==pytest.approx(20)
+    assert m['venue_verified'] is False
+    assert m['portfolio_stress_scenarios_computed'] is False
+    h=short_margin_health(s.risk.sell_margin,m,100,0,-15,0)
+    assert h['breached'] is False
+    assert 'MANUAL_PORTFOLIO_PROXY' in h['assumption']
+
+
+def test_portfolio_mode_roundtrips_strategy_json_without_changing_signals():
+    s=StrategyConfig()
+    s.risk.sell_margin=SellMarginConfig(
+        enabled=True,margin_mode='PORTFOLIO_ESTIMATE',
+        initial_margin_percent=20,maintenance_margin_percent=10,
+    )
+    exported=s.model_dump(mode='json')
+    restored=StrategyConfig.model_validate(exported)
+    assert restored.risk.sell_margin.margin_mode=='PORTFOLIO_ESTIMATE'
+    assert restored.call_entry==s.call_entry
+    assert restored.put_entry==s.put_entry
+    assert restored.risk.sell_margin.max_notional_leverage is None
+
+
 def test_buy_premium_cost_unchanged_when_sell_margin_enabled():
     s=_strategy()
     s.risk.quantity=1

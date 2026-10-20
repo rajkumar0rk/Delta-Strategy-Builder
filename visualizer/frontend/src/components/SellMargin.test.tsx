@@ -26,6 +26,20 @@ describe('SELL margin scenario editor',()=>{
   expect(changed.maintenance_margin_percent).toBe(10);
  });
 
+ it('supports portfolio margin as a distinct mode without a fixed leverage control',()=>{
+  const s=defaultStrategy();
+  s.call_action='SELL';
+  s.risk.sell_margin=mergeSellMargin(s.risk.sell_margin,{
+   margin_mode:'PORTFOLIO_ESTIMATE',enabled:true,
+   initial_margin_percent:20,maintenance_margin_percent:10,max_notional_leverage:null,
+  });
+  const html=renderToStaticMarkup(<RiskOptions value={s} onChange={()=>{}}/>);
+  expect(html).toContain('Portfolio Margin — manual research proxy');
+  expect(html).toContain('Portfolio Margin selected');
+  expect(html).toContain('Assumed portfolio stress IM');
+  expect(html).not.toContain('Maximum assumed notional leverage');
+  expect(html).toContain('NOT exchange IM/MM');
+ });
  it('is absent when both directions BUY',()=>{
   const html=renderToStaticMarkup(<RiskOptions value={defaultStrategy()} onChange={()=>{}}/>);
   expect(html).not.toContain('SELL collateral &amp; leverage');

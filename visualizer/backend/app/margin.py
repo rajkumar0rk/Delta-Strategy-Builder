@@ -19,6 +19,9 @@ def short_margin_details(config, spot: float, premium: float, quantity: float,
             'initial_margin_usd': None, 'maintenance_margin_usd': None,
             'cash_required_usd': entry_fee, 'effective_leverage': None,
         }
+    # PORTFOLIO_ESTIMATE is a standalone user-calibrated proxy, NOT Delta's
+    # 29-scenario portfolio risk calculation. It cannot model position offsets,
+    # current account positions, mark IV shocks, or dynamic requirements.
     # A cap on assumed notional leverage creates a HIGHER collateral floor.
     # This is NOT the exchange's (risk-dependent) permitted options leverage.
     initial_rate = max(
@@ -41,7 +44,13 @@ def short_margin_details(config, spot: float, premium: float, quantity: float,
         'cash_required_usd': required,
         'effective_leverage': notional / initial if initial > 0 else None,
         'max_notional_leverage_assumption': config.max_notional_leverage,
-        'assumption': 'USER_CALIBRATED_RESEARCH_SCENARIO_NOT_EXCHANGE_MARGIN',
+        'assumption': (
+            'PORTFOLIO_MANUAL_COLLATERAL_PROXY_NOT_DELTA_RISK_ENGINE'
+            if config.margin_mode == 'PORTFOLIO_ESTIMATE'
+            else 'USER_CALIBRATED_RESEARCH_SCENARIO_NOT_EXCHANGE_MARGIN'
+        ),
+        'portfolio_stress_scenarios_computed': False,
+        'other_account_positions_modeled': False,
     }
 
 
@@ -51,8 +60,10 @@ def short_margin_health(config, details: dict[str, Any], realized_balance: float
     """Collateral at risk using observed executable ask-to-close.
 
     ISOLATED: only locked collateral supports loss.
-    CROSS: assume whole closed-trade account equity supports loss.
-    Future mark/volatility changes and auto-topups are not known.
+    CROSS/PORTFOLIO_ESTIMATE: assume whole closed-trade account equity
+    supports loss, without Delta's portfolio risk, positions, UCF offsets
+    or dynamic stress tests. Future mark/volatility changes and auto-topups
+    are not known.
     """
     if not config.enabled or details.get('initial_margin_usd') is None:
         return {'breached': False, 'venue_verified': False}
@@ -69,5 +80,9 @@ def short_margin_health(config, details: dict[str, Any], realized_balance: float
         'estimated_maintenance_margin_usd': maintenance,
         'estimated_margin_buffer_usd': equity - maintenance,
         'venue_verified': False,
-        'assumption': 'HYPOTHETICAL_MAINTENANCE_THRESHOLD_NOT_DELTA_LIQUIDATION',
+        'assumption': (
+            'MANUAL_PORTFOLIO_PROXY_NOT_DELTA_LIQUIDATION'
+            if config.margin_mode == 'PORTFOLIO_ESTIMATE'
+            else 'HYPOTHETICAL_MAINTENANCE_THRESHOLD_NOT_DELTA_LIQUIDATION'
+        ),
     }

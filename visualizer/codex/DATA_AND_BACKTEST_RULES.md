@@ -105,3 +105,21 @@ Historical quote gaps may conceal threshold crossings; liquidation fills and
 fees are NOT recreated. Margin research does not convert options SELL into
 futures leverage or change option payout algebra. The original $50 trade
 budget is only a research limit, not an exchange margin quote.
+
+
+## Portfolio Margin research selector (V17.1 follow-up)
+For Delta India Portfolio Margin accounts, choose **Portfolio Margin — manual
+research proxy** in SELL collateral & leverage settings. This selector is
+distinct from Cross and Isolated; it treats the lab's one exclusive short
+position against the closed-trade account balance, with **explicitly user-entered**
+IM/MM notional percentages. To avoid accidental use of prior 5× assumptions,
+switching into portfolio mode clears the previous leverage and margin rates.
+
+This is NOT Delta's 29-price/IV-scenario risk margin, portfolio offsetting,
+account-wide orders/positions, dynamic short-option floor, UCF or exchange
+liquidation. It cannot validate whether Delta would accept an order.
+The live authenticated `portfolio_margins` channel exposes account-specific
+IM/MM, risk margin and margin floors, but it is not part of this offline lab.
+If rates are unavailable, leave margin research disabled: SELL fills remain
+margin-unverified. Do not assume 5×/10× option leverage in portfolio mode.
+Reference: https://guides.delta.exchange/delta-exchange-india-user-guide/trading-guide/margin-explainer/portfolio-margin
