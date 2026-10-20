@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 from .models import BacktestRequest, StrategyConfig
+from .margin import short_margin_details, short_margin_health
 from .data_store import DataStore, parse_time, iso
 from .indicators import compute_indicators
 from .warmup import required_warmup_candles, historical_bar_sources, warmup_diagnostics
@@ -55,6 +56,7 @@ class Position:
     entry_lifecycle_name: str = ''
     peak_return: float = 0.0
     worst_return: float = 0.0
+    margin: dict[str, Any] | None = None
 
 
 def _finite(v):
@@ -232,6 +234,12 @@ def _quantity(strategy, spec, entry_price, entry_spot, balance, action: str = 'B
 
     def budget_cost(qty: float) -> float:
         fee = _delta_fee(entry_spot, entry_price, qty, cv, strategy.execution)['total_fee_usd']
+        if action == 'SELL' and strategy.risk.sell_margin.enabled:
+            margin = short_margin_details(
+                strategy.risk.sell_margin, entry_spot, entry_price, qty, cv,
+                entry_fee=fee, estimated_exit_fee=fee,
+            )
+            return float(margin['cash_required_usd'])
         return entry_price * qty * cv + fee
 
     if strategy.risk.quantity_mode == 'FIXED':
@@ -243,7 +251,7 @@ def _quantity(strategy, spec, entry_price, entry_spot, balance, action: str = 'B
             return 0.0, configured_cost, 'FIXED_QUANTITY_EXCEEDS_BUDGET'
     else:
         one_fee = _delta_fee(entry_spot, entry_price, 1.0, cv, strategy.execution)['total_fee_usd']
-        one_total = entry_price * cv + one_fee
+        one_total = budget_cost(1.0)
         raw_units = math.floor(float(strategy.risk.budget_usd) / max(one_total, 1e-12) / increment)
         qty = raw_units * increment
         if qty + 1e-12 < valid_minimum:
@@ -259,9 +267,16 @@ def _quantity(strategy, spec, entry_price, entry_spot, balance, action: str = 'B
     entry_fee = _delta_fee(entry_spot, entry_price, qty, cv, strategy.execution)['total_fee_usd']
     # Long options require premium + fee cash. Short-option margin is venue/account
     # specific and is intentionally not invented here; SELL checks entry fees only.
-    cash_required = premium_cost + entry_fee if action == 'BUY' else entry_fee
-    if strategy.risk.enforce_cash and cash_required > balance + 1e-9:
-        return 0.0, cash_required, 'INSUFFICIENT_CASH'
+    margin_enabled = action == 'SELL' and strategy.risk.sell_margin.enabled
+    cash_required = budget_cost(qty) if margin_enabled else (
+        premium_cost + entry_fee if action == 'BUY' else entry_fee
+    )
+    # Enabled margin research always enforces collateral, regardless of the
+    # general premium-cash toggle used for long options.
+    if cash_required > balance + 1e-9 and (margin_enabled or strategy.risk.enforce_cash):
+        return 0.0, cash_required, (
+            'INSUFFICIENT_SELL_MARGIN_ESTIMATE' if margin_enabled else 'INSUFFICIENT_CASH'
+        )
     return qty, cash_required, None
 
 
@@ -281,7 +296,7 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
 
 def _backtest_cache_key(req: BacktestRequest, paths) -> str:
     payload = {
-        'engine_version': 162,  # V16.2: synthetic spread affects decisions, stops and net P&L
+        'engine_version': 170,  # optional short-margin/leverage scenario affects entries and exits
         'warmup_candles': req.warmup_candles,
         'warmup_policy': req.warmup_policy,
         'bar_gap_policy': req.bar_gap_policy,
@@ -973,6 +988,10 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
     pos_quotes = None
     q_cursor = 0
     quote_gap_count = 0
+    estimated_margin_rejections = 0
+    estimated_margin_breaches = 0
+    maximum_margin_utilization_percent = 0.0
+    estimated_margin_peak_usd = 0.0
     maximum_quote_gap_seconds = 0.0
     end_dt = parse_time(req.end)
     atr_keys = sorted(
@@ -1062,6 +1081,20 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         mtm_low = min(mtm_low, marked)
         mtm_samples += 1
 
+    def margin_status(q: dict[str, Any], stamp: str) -> dict[str, Any] | None:
+        if pos is None or pos.action != 'SELL' or not strategy.risk.sell_margin.enabled or pos.margin is None:
+            return None
+        if parse_time(stamp) >= parse_time(str(pos.spec['expiration'])):
+            return None
+        exit_px = _executable_exit_price(pos, q, strategy)
+        cv = float(pos.spec['contract_value'])
+        gross = (pos.entry_price - exit_px) * pos.quantity * cv
+        estimated_exit_fee = _delta_fee(spot_at(stamp), exit_px, pos.quantity, cv, strategy.execution)['total_fee_usd']
+        return short_margin_health(
+            strategy.risk.sell_margin, pos.margin, balance,
+            pos.entry_fee, gross, estimated_exit_fee,
+        )
+
     def record_mtm(q: dict[str, Any], stamp: str):
         if pos is not None and parse_time(stamp) < parse_time(str(pos.spec['expiration'])):
             record_mtm_value(_mark_to_market_value(pos, q, balance, strategy, spot_at(stamp)))
@@ -1135,6 +1168,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             'exit_reason': reason,
             'entry_lifecycle_id': pos.entry_lifecycle_id,
             'entry_lifecycle_name': pos.entry_lifecycle_name,
+            'margin_research': pos.margin,
         }
         trades.append(trade)
         ensure_daily_state(exit_time)
@@ -1167,6 +1201,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 mfe_percent=pos.peak_return,
                 mae_percent=pos.worst_return,
                 holding_minutes=holding_minutes,
+                margin_research=pos.margin,
                 exit_rule=exit_rule,
             ),
             net,
@@ -1208,10 +1243,17 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 q_cursor += 1
                 if parse_time(str(q['timestamp'])) >= parse_time(str(pos.spec['expiration'])):
                     continue
-                record_mtm(q, pd.Timestamp(q['timestamp']).isoformat())
+                stamp = pd.Timestamp(q['timestamp']).isoformat()
+                record_mtm(q, stamp)
+                health = margin_status(q, stamp)
+                if health is not None and strategy.risk.sell_margin.check_margin_on_quotes and health['breached']:
+                    estimated_margin_breaches += 1
+                    close_position(stamp, _executable_exit_price(pos, q, strategy), 'ESTIMATED_MARGIN_BREACH', health)
+                    closed_this_candle = True
+                    break
                 reason, _ = _stop_reason(pos, q, strategy)
                 if reason:
-                    close_position(pd.Timestamp(q['timestamp']).isoformat(), _executable_exit_price(pos, q, strategy), reason)
+                    close_position(stamp, _executable_exit_price(pos, q, strategy), reason)
                     closed_this_candle = True
                     break
 
@@ -1401,6 +1443,8 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                  else max(0.0, float(effective_entry_quote['bid']) - slip))
         qty, cost, quantity_reject = _quantity(strategy, spec, entry, float(row.close), balance, action)
         if qty <= 0:
+            if quantity_reject == 'INSUFFICIENT_SELL_MARGIN_ESTIMATE':
+                estimated_margin_rejections += 1
             why = quantity_reject or 'INSUFFICIENT_CASH'
             decision_tree = {'mode': 'EXECUTION', 'passed': False, 'passed_count': 0, 'total': 1, 'conditions': [], 'groups': []}
             decisions.append(_flatten_decision(next_event('decision'), direction, ts, 'EXECUTION', decision_tree, {'close': _finite(row.close), 'reason': why}))
@@ -1420,10 +1464,23 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         entry_fee_details = _delta_fee(float(row.close), entry, qty, float(spec['contract_value']), strategy.execution)
         fee = entry_fee_details['total_fee_usd']
         atr = _finite(row[atr_keys[0]]) if atr_keys else None
+        margin_details = short_margin_details(
+            strategy.risk.sell_margin, float(row.close), entry, qty,
+            float(spec['contract_value']), fee, fee,
+        ) if action == 'SELL' else None
+        if margin_details is not None and margin_details['initial_margin_usd'] is not None:
+            estimated_margin_peak_usd = max(
+                estimated_margin_peak_usd, float(margin_details['cash_required_usd'])
+            )
+            maximum_margin_utilization_percent = max(
+                maximum_margin_utilization_percent,
+                float(margin_details['cash_required_usd']) / max(balance, 1e-12) * 100,
+            )
         pos = Position(
             direction, action, str(spec['symbol']), spec, q['timestamp'], ts.isoformat(), float(row.close),
             entry, qty, fee, entry_fee_details, atr, chosen_tree,
             entry_lifecycle_id=chosen_behavior.id, entry_lifecycle_name=chosen_behavior.name,
+            margin=margin_details,
         )
         chosen_cycle.entries += 1
         chosen_cycle.last_entry_index = i
@@ -1494,6 +1551,11 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 continue
             stamp = pd.Timestamp(last_q['timestamp']).isoformat()
             record_mtm(last_q, stamp)
+            health = margin_status(last_q, stamp)
+            if health is not None and strategy.risk.sell_margin.check_margin_on_quotes and health['breached']:
+                estimated_margin_breaches += 1
+                close_position(stamp, _executable_exit_price(pos, last_q, strategy), 'ESTIMATED_MARGIN_BREACH', health)
+                break
             reason, _ = _stop_reason(pos, last_q, strategy)
             if reason:
                 close_position(stamp, _executable_exit_price(pos, last_q, strategy), reason)
@@ -1550,6 +1612,10 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         'mark_to_market_quote_samples': mtm_samples,
         'unresolved_position_count': int(unresolved_position is not None),
         'observed_quote_gap_count': quote_gap_count,
+        'estimated_sell_margin_rejections': estimated_margin_rejections,
+        'estimated_margin_breaches': estimated_margin_breaches,
+        'maximum_estimated_margin_utilization_percent': maximum_margin_utilization_percent,
+        'maximum_estimated_initial_collateral_usd': estimated_margin_peak_usd,
         'max_observed_quote_gap_seconds': maximum_quote_gap_seconds,
         'avg_mfe_percent': (sum(t['mfe_percent'] for t in trades) / len(trades) if trades else 0),
         'avg_mae_percent': (sum(t['mae_percent'] for t in trades) / len(trades) if trades else 0),
@@ -1584,12 +1650,19 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             'execution_model': 'TOP_OF_BOOK_NO_DEPTH_OR_PARTIAL_FILLS',
             'limitations': [
                 'Synthetic/unverified quotes cannot confirm real fills',
-                'SELL margin, liquidation and actual depth are not modeled',
+                'SELL portfolio margin, actual broker collateral and exchange liquidation are not verified',
+                'SELL margin/leverage can only use explicit scenario assumptions; quote-based breaches are hypothetical and not execution guarantees',
                 'MTM drawdown is sampled only at available historical quotes',
                 'Expired contracts without verified settlement remain unresolved and are not marked to stale quotes',
                 'Option quote gaps are reported but cannot be converted into known bid/ask or liquidity',
             ] + (['Warm-up incomplete'] if not warmup['contiguous'] else [])
               + (['Open position unresolved at end'] if unresolved_position else []),
+        },
+        'sell_margin_research': {
+            'enabled': strategy.risk.sell_margin.enabled,
+            'venue_verified': False,
+            'config': strategy.risk.sell_margin.model_dump(mode='json'),
+            'note': 'User-entered collateral and leverage assumptions only. No live Delta margin validation, maintenance recalculation, auto-top-up or liquidation fees.',
         },
         'execution_assumptions': {
             'extra_half_spread_percent': strategy.execution.extra_half_spread_percent,

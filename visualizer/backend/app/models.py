@@ -308,7 +308,38 @@ class BreakoutRetestConfig(BaseModel):
         return self
 
 
+class SellMarginConfig(BaseModel):
+    """Opt-in scenario assumptions, NOT Delta verified account requirements.
+
+    Notional leverage is an additional initial-collateral floor and does not
+    override the user-calibrated initial or maintenance margin percentages.
+    """
+    enabled: bool = False
+    margin_mode: Literal["ISOLATED_ESTIMATE", "CROSS_ESTIMATE"] = "ISOLATED_ESTIMATE"
+    initial_margin_percent: float | None = Field(default=None, gt=0, le=100)
+    maintenance_margin_percent: float | None = Field(default=None, gt=0, le=100)
+    max_notional_leverage: float | None = Field(default=None, ge=1, le=100)
+    collateral_buffer_percent: float = Field(default=0.0, ge=0, le=100)
+    reserve_exit_fee: bool = True
+    check_margin_on_quotes: bool = True
+
+    @model_validator(mode="after")
+    def validate_margin(self):
+        if self.enabled:
+            if self.initial_margin_percent is None or self.maintenance_margin_percent is None:
+                raise ValueError("Enabled SELL margin research requires explicit initial and maintenance rates")
+            if self.maintenance_margin_percent > self.initial_margin_percent:
+                raise ValueError("Maintenance margin cannot exceed initial margin")
+            if self.max_notional_leverage is not None:
+                # A leverage cap is an initial margin floor, not an exchange fact.
+                effective_initial = max(self.initial_margin_percent, 100 / self.max_notional_leverage)
+                if self.maintenance_margin_percent > effective_initial:
+                    raise ValueError("Maintenance margin exceeds effective leverage-adjusted initial margin")
+        return self
+
+
 class RiskConfig(BaseModel):
+    sell_margin: SellMarginConfig = Field(default_factory=SellMarginConfig)
     stop_loss: StopLoss = Field(default_factory=StopLoss)
     take_profit: TakeProfit = Field(default_factory=TakeProfit)
     profit_protection: ProfitProtection = Field(default_factory=ProfitProtection)
