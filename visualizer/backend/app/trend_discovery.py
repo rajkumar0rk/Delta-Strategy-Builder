@@ -10,6 +10,7 @@ import pandas as pd
 from .data_store import DataStore
 from .indicators import compute_indicators
 from .engine import _prepare_strategy_state
+from .warmup import required_warmup_candles, historical_bar_sources, load_daily_source
 
 
 def _finite(value: Any) -> float | None:
@@ -166,15 +167,30 @@ def run_trend_discovery(req, progress: Callable[..., None] | None = None) -> dic
     store = DataStore()
     parts = store.resolve_request(req, require_options=False)
     emit(f'Loading {req.strategy.timeframe} candles from {len(parts)} archive segment(s)…', 15, 'LOAD_BARS', 'Calculate indicators')
-    frame = store.load_bars_many(parts, req.start, req.end, req.strategy.timeframe)
+    # Day-level research uses the same historical context as chart/backtest.
+    has_day_levels = any(i.kind == 'DAY_LEVELS' for i in req.strategy.indicators)
+    warmup = required_warmup_candles(req.strategy.indicators, req.strategy.timeframe,
+                                   strategy=req.strategy) if has_day_levels else 0
+    bar_parts = historical_bar_sources(store, parts, req.start, req.strategy.timeframe, warmup,
+        archive_neighbors=getattr(req, 'dataset_mode', 'SINGLE') in {'ARCHIVE', 'AUTO'})
+    frame = store.load_bars_many(bar_parts, req.start, req.end, req.strategy.timeframe, warmup_candles=warmup)
     if len(frame) < req.lookahead_bars + req.prelude_bars + 2:
         raise ValueError(
             f'Trend discovery needs at least {req.lookahead_bars + req.prelude_bars + 2} completed {req.strategy.timeframe} candles; found {len(frame)}.'
         )
 
     emit(f'Calculating {len(req.strategy.indicators)} configured indicator(s)…', 30, 'INDICATORS', 'Build stateful Big Trend features')
-    frame, _ = compute_indicators(frame, req.strategy.indicators, req.strategy.timeframe)
+    daily_source = load_daily_source(store, bar_parts, req.start, req.end, req.strategy.timeframe,
+                                     warmup, req.strategy.indicators)
+    frame, _ = compute_indicators(frame, req.strategy.indicators, req.strategy.timeframe,
+        daily_source=daily_source, progress=lambda msg: emit(msg, 30, 'INDICATORS'))
     _prepare_strategy_state(frame, req.strategy)
+    if has_day_levels:
+        start = pd.Timestamp(req.start)
+        start = start.tz_localize('UTC') if start.tz is None else start.tz_convert('UTC')
+        frame = frame.loc[frame.index >= start].copy()
+        if len(frame) < req.lookahead_bars + req.prelude_bars + 2:
+            raise ValueError('Not enough in-range candles for trend discovery')
     emit('Labeling future big moves (research labels only)…', 48, 'LABEL_OUTCOMES', 'Sample big and fake trend events')
 
     future_high, future_low = _forward_extremes(frame, int(req.lookahead_bars))
@@ -294,3 +310,4 @@ def run_trend_discovery(req, progress: Callable[..., None] | None = None) -> dic
         'warnings': warnings,
         'research_note': 'BIG/FAKE labels use future candles only for historical outcome labeling. Strategy indicators/state snapshots use information available at the labeled candle or earlier.',
     }
+

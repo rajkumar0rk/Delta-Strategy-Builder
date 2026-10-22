@@ -1,0 +1,500 @@
+{
+  "schema_version": 15,
+  "app": "BTC Strategy Lab",
+  "strategy": {
+    "name": "Previous-day swings + older outside swings | Warnings and touches only",
+    "timeframe": "5m",
+    "direction_mode": "BOTH",
+    "call_action": "BUY",
+    "put_action": "BUY",
+    "call_signal_mode": "ALERT_ONLY",
+    "put_signal_mode": "ALERT_ONLY",
+    "call_exit_signal_mode": "ALERT_ONLY",
+    "put_exit_signal_mode": "ALERT_ONLY",
+    "call_exit_alert_message": "CALL exit conditions triggered",
+    "put_exit_alert_message": "PUT exit conditions triggered",
+    "call_alert_message": "CALL entry conditions triggered",
+    "put_alert_message": "PUT entry conditions triggered",
+    "alerts": [
+      {
+        "id": "previous_day_swing_high_near",
+        "name": "Warning: previous day swing high",
+        "message": "Warning: price approached previous day swing high. Completed-candle historical alert.",
+        "enabled": true,
+        "direction": "NEUTRAL",
+        "trigger_mode": "ON_ENTER",
+        "cooldown_bars": 0,
+        "source": "NO_TRADE",
+        "condition_id": "previous_day_swing_high_near",
+        "reset_operand": "daily.day_id",
+        "conditions": {
+          "mode": "ALL",
+          "min_pass": 1,
+          "conditions": [],
+          "groups": []
+        }
+      },
+      {
+        "id": "previous_day_swing_high_touch",
+        "name": "Touch confirmation: previous day swing high",
+        "message": "Touch confirmation: price touched previous day swing high. Completed-candle historical alert.",
+        "enabled": true,
+        "direction": "NEUTRAL",
+        "trigger_mode": "ON_ENTER",
+        "cooldown_bars": 0,
+        "source": "NO_TRADE",
+        "condition_id": "previous_day_swing_high_touch",
+        "reset_operand": "daily.day_id",
+        "conditions": {
+          "mode": "ALL",
+          "min_pass": 1,
+          "conditions": [],
+          "groups": []
+        }
+      },
+      {
+        "id": "previous_day_swing_low_near",
+        "name": "Warning: previous day swing low",
+        "message": "Warning: price approached previous day swing low. Completed-candle historical alert.",
+        "enabled": true,
+        "direction": "NEUTRAL",
+        "trigger_mode": "ON_ENTER",
+        "cooldown_bars": 0,
+        "source": "NO_TRADE",
+        "condition_id": "previous_day_swing_low_near",
+        "reset_operand": "daily.day_id",
+        "conditions": {
+          "mode": "ALL",
+          "min_pass": 1,
+          "conditions": [],
+          "groups": []
+        }
+      },
+      {
+        "id": "previous_day_swing_low_touch",
+        "name": "Touch confirmation: previous day swing low",
+        "message": "Touch confirmation: price touched previous day swing low. Completed-candle historical alert.",
+        "enabled": true,
+        "direction": "NEUTRAL",
+        "trigger_mode": "ON_ENTER",
+        "cooldown_bars": 0,
+        "source": "NO_TRADE",
+        "condition_id": "previous_day_swing_low_touch",
+        "reset_operand": "daily.day_id",
+        "conditions": {
+          "mode": "ALL",
+          "min_pass": 1,
+          "conditions": [],
+          "groups": []
+        }
+      },
+      {
+        "id": "older_swing_high_near",
+        "name": "Warning: older swing high",
+        "message": "Warning: price approached older swing high. Completed-candle historical alert.",
+        "enabled": true,
+        "direction": "NEUTRAL",
+        "trigger_mode": "ON_ENTER",
+        "cooldown_bars": 0,
+        "source": "NO_TRADE",
+        "condition_id": "older_swing_high_near",
+        "reset_operand": "daily.day_id",
+        "conditions": {
+          "mode": "ALL",
+          "min_pass": 1,
+          "conditions": [],
+          "groups": []
+        }
+      },
+      {
+        "id": "older_swing_high_touch",
+        "name": "Touch confirmation: older swing high",
+        "message": "Touch confirmation: price touched older swing high. Completed-candle historical alert.",
+        "enabled": true,
+        "direction": "NEUTRAL",
+        "trigger_mode": "ON_ENTER",
+        "cooldown_bars": 0,
+        "source": "NO_TRADE",
+        "condition_id": "older_swing_high_touch",
+        "reset_operand": "daily.day_id",
+        "conditions": {
+          "mode": "ALL",
+          "min_pass": 1,
+          "conditions": [],
+          "groups": []
+        }
+      },
+      {
+        "id": "older_swing_low_near",
+        "name": "Warning: older swing low",
+        "message": "Warning: price approached older swing low. Completed-candle historical alert.",
+        "enabled": true,
+        "direction": "NEUTRAL",
+        "trigger_mode": "ON_ENTER",
+        "cooldown_bars": 0,
+        "source": "NO_TRADE",
+        "condition_id": "older_swing_low_near",
+        "reset_operand": "daily.day_id",
+        "conditions": {
+          "mode": "ALL",
+          "min_pass": 1,
+          "conditions": [],
+          "groups": []
+        }
+      },
+      {
+        "id": "older_swing_low_touch",
+        "name": "Touch confirmation: older swing low",
+        "message": "Touch confirmation: price touched older swing low. Completed-candle historical alert.",
+        "enabled": true,
+        "direction": "NEUTRAL",
+        "trigger_mode": "ON_ENTER",
+        "cooldown_bars": 0,
+        "source": "NO_TRADE",
+        "condition_id": "older_swing_low_touch",
+        "reset_operand": "daily.day_id",
+        "conditions": {
+          "mode": "ALL",
+          "min_pass": 1,
+          "conditions": [],
+          "groups": []
+        }
+      }
+    ],
+    "indicators": [
+      {
+        "id": "daily",
+        "kind": "DAY_LEVELS",
+        "params": {
+          "timezone": "Asia/Kolkata",
+          "pivot_left": 3,
+          "pivot_right": 3,
+          "lookback_days": 30,
+          "warning_points": 100.0
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      }
+    ],
+    "call_entry": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [],
+      "groups": []
+    },
+    "put_entry": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [],
+      "groups": []
+    },
+    "call_entry_behavior": {
+      "id": "call-1",
+      "name": "CALL lifecycle 1",
+      "enabled": true,
+      "trigger_condition_id": null,
+      "delay_bars": 0,
+      "max_wait_bars": null,
+      "max_entries_per_activation": 1,
+      "cooldown_bars": 0
+    },
+    "put_entry_behavior": {
+      "id": "put-1",
+      "name": "PUT lifecycle 1",
+      "enabled": true,
+      "trigger_condition_id": null,
+      "delay_bars": 0,
+      "max_wait_bars": null,
+      "max_entries_per_activation": 1,
+      "cooldown_bars": 0
+    },
+    "call_entry_lifecycles": [
+      {
+        "id": "call-1",
+        "name": "CALL lifecycle 1",
+        "enabled": true,
+        "trigger_condition_id": null,
+        "delay_bars": 0,
+        "max_wait_bars": null,
+        "max_entries_per_activation": 1,
+        "cooldown_bars": 0
+      }
+    ],
+    "put_entry_lifecycles": [
+      {
+        "id": "put-1",
+        "name": "PUT lifecycle 1",
+        "enabled": true,
+        "trigger_condition_id": null,
+        "delay_bars": 0,
+        "max_wait_bars": null,
+        "max_entries_per_activation": 1,
+        "cooldown_bars": 0
+      }
+    ],
+    "call_exit": {
+      "mode": "ANY",
+      "min_pass": 1,
+      "conditions": [],
+      "groups": []
+    },
+    "put_exit": {
+      "mode": "ANY",
+      "min_pass": 1,
+      "conditions": [],
+      "groups": []
+    },
+    "no_trade": {
+      "mode": "ANY",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "previous_day_swing_high_near",
+          "left": "daily.previous_day_swing_high_near",
+          "operator": "EQ",
+          "right": null,
+          "value": 1.0,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "previous_day_swing_high_touch",
+          "left": "daily.previous_day_swing_high_touch",
+          "operator": "EQ",
+          "right": null,
+          "value": 1.0,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "previous_day_swing_low_near",
+          "left": "daily.previous_day_swing_low_near",
+          "operator": "EQ",
+          "right": null,
+          "value": 1.0,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "previous_day_swing_low_touch",
+          "left": "daily.previous_day_swing_low_touch",
+          "operator": "EQ",
+          "right": null,
+          "value": 1.0,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "older_swing_high_near",
+          "left": "daily.older_swing_high_near",
+          "operator": "EQ",
+          "right": null,
+          "value": 1.0,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "older_swing_high_touch",
+          "left": "daily.older_swing_high_touch",
+          "operator": "EQ",
+          "right": null,
+          "value": 1.0,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "older_swing_low_near",
+          "left": "daily.older_swing_low_near",
+          "operator": "EQ",
+          "right": null,
+          "value": 1.0,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "older_swing_low_touch",
+          "left": "daily.older_swing_low_touch",
+          "operator": "EQ",
+          "right": null,
+          "value": 1.0,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        }
+      ],
+      "groups": []
+    },
+    "call_no_trade": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [],
+      "groups": []
+    },
+    "put_no_trade": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [],
+      "groups": []
+    },
+    "call_big_trend_score": {
+      "enabled": false,
+      "threshold": 70.0,
+      "mode": "GATE",
+      "components": [],
+      "persistence_hits": 1,
+      "persistence_window": 1,
+      "require_current_threshold": true
+    },
+    "put_big_trend_score": {
+      "enabled": false,
+      "threshold": 70.0,
+      "mode": "GATE",
+      "components": [],
+      "persistence_hits": 1,
+      "persistence_window": 1,
+      "require_current_threshold": true
+    },
+    "call_trend_phase": {
+      "enabled": false,
+      "compression_max_score": 45.0,
+      "ignition_min_score": 55.0,
+      "confirmation_min_score": 70.0,
+      "big_trend_min_score": 80.0,
+      "exhaustion_below_score": 55.0
+    },
+    "put_trend_phase": {
+      "enabled": false,
+      "compression_max_score": 45.0,
+      "ignition_min_score": 55.0,
+      "confirmation_min_score": 70.0,
+      "big_trend_min_score": 80.0,
+      "exhaustion_below_score": 55.0
+    },
+    "call_breakout_retest": {
+      "enabled": false,
+      "breakout_condition_id": null,
+      "breakout_level_operand": null,
+      "tolerance_mode": "PERCENT",
+      "tolerance_value": 0.25,
+      "atr_operand": null,
+      "max_retest_wait_bars": 12,
+      "hold_bars": 1,
+      "require_retest_for_entry": false,
+      "false_breakout_window_bars": 3,
+      "false_breakout_buffer_points": 0.0,
+      "block_false_breakout_until_rearm": true,
+      "max_trend_age_bars": 30
+    },
+    "put_breakout_retest": {
+      "enabled": false,
+      "breakout_condition_id": null,
+      "breakout_level_operand": null,
+      "tolerance_mode": "PERCENT",
+      "tolerance_value": 0.25,
+      "atr_operand": null,
+      "max_retest_wait_bars": 12,
+      "hold_bars": 1,
+      "require_retest_for_entry": false,
+      "false_breakout_window_bars": 3,
+      "false_breakout_buffer_points": 0.0,
+      "block_false_breakout_until_rearm": true,
+      "max_trend_age_bars": 30
+    },
+    "option": {
+      "strike_mode": "ATM",
+      "strike_steps": 0,
+      "min_dte_days": 0.25,
+      "max_dte_days": 3.0,
+      "min_premium": null,
+      "max_premium": null,
+      "max_spread_percent": 5.0,
+      "min_volume": null,
+      "min_open_interest": null
+    },
+    "execution": {
+      "max_entry_quote_delay_seconds": 90,
+      "max_exit_quote_delay_seconds": 90,
+      "slippage_ticks": 0,
+      "extra_half_spread_percent": 0.0,
+      "fee_model": "DELTA_OPTIONS",
+      "option_notional_fee_rate_percent": 0.01,
+      "premium_fee_cap_percent": 3.5,
+      "gst_percent": 18.0,
+      "decision_log_mode": "FULL",
+      "end_of_data_quote_max_age_seconds": 300,
+      "fee_edge_filter": {
+        "enabled": false,
+        "expected_option_move_percent": 10.0,
+        "min_edge_multiple": 1.5,
+        "min_net_edge_usd": 0.0
+      }
+    },
+    "risk": {
+      "sell_margin": {
+        "enabled": false,
+        "margin_mode": "ISOLATED_ESTIMATE",
+        "initial_margin_percent": null,
+        "maintenance_margin_percent": null,
+        "max_notional_leverage": null,
+        "collateral_buffer_percent": 0.0,
+        "reserve_exit_fee": true,
+        "check_margin_on_quotes": true
+      },
+      "stop_loss": {
+        "mode": "NONE",
+        "value": 15.0
+      },
+      "take_profit": {
+        "mode": "NONE",
+        "value": 30.0
+      },
+      "profit_protection": {
+        "mode": "NONE",
+        "activation_percent": 20.0,
+        "retain_peak_percent": 50.0,
+        "trail_percent_points": 10.0
+      },
+      "max_hold_minutes": null,
+      "starting_balance_usd": 100.0,
+      "quantity_mode": "FIXED",
+      "quantity": 10.0,
+      "budget_usd": 50.0,
+      "enforce_trade_budget_strict": true,
+      "enforce_cash": true,
+      "max_daily_loss_percent": null,
+      "max_trades_per_day": null,
+      "max_consecutive_losses": null,
+      "stop_trading_after_daily_loss_limit": true
+    },
+    "session": {
+      "timezone": "Asia/Kolkata",
+      "start": "00:00",
+      "end": "23:59",
+      "windows": [
+        {
+          "start": "00:00",
+          "end": "23:59"
+        }
+      ],
+      "blocked_weekdays": []
+    },
+    "conflict_policy": "SKIP",
+    "position_policy": "EXCLUSIVE"
+  }
+}

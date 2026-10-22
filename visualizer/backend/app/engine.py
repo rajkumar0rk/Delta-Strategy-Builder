@@ -11,7 +11,7 @@ from .models import BacktestRequest, StrategyConfig
 from .margin import short_margin_details, short_margin_health
 from .data_store import DataStore, parse_time, iso
 from .indicators import compute_indicators
-from .warmup import required_warmup_candles, historical_bar_sources, warmup_diagnostics
+from .warmup import required_warmup_candles, historical_bar_sources, warmup_diagnostics, load_daily_source
 from .alerts import alert_markers
 from .rules import evaluate_group, evaluate_condition, find_condition
 from .config import result_root, cache_root
@@ -296,7 +296,7 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
 
 def _backtest_cache_key(req: BacktestRequest, paths) -> str:
     payload = {
-        'engine_version': 171,  # selectable portfolio proxy changes collateral/rejection semantics
+        'engine_version': 172,  # daily level snapshots and identity-aware historical alerts
         'warmup_candles': req.warmup_candles,
         'warmup_policy': req.warmup_policy,
         'bar_gap_policy': req.bar_gap_policy,
@@ -957,7 +957,10 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
     inst = store.load_instruments_many(parts) if needs_options else pd.DataFrame()
     report('Calculating selected indicators and V15.1 trend state…', 25, 'INDICATORS', 'Prepare option quote indexes')
     strategy = req.strategy
-    frame, series_meta = compute_indicators(bars, strategy.indicators, strategy.timeframe)
+    daily_source = load_daily_source(store, bar_parts, req.start, req.end, strategy.timeframe,
+                                     warmup_count, strategy.indicators)
+    frame, series_meta = compute_indicators(bars, strategy.indicators, strategy.timeframe,
+        daily_source=daily_source, progress=lambda msg: report(msg, 25, 'INDICATORS', 'Prepare option quote indexes'))
     _prepare_strategy_state(frame, strategy)
     report('Preparing reusable option quote indexes…', 32, 'QUOTE_INDEX', 'Evaluate strategy candles')
     if needs_options:
@@ -1761,7 +1764,8 @@ def chart_payload(req, run_result=None):
     )
     bars = store.load_bars_many(bar_parts, req.start, req.end, timeframe, warmup_candles=warmup_count)
     warmup = warmup_diagnostics(bars, req.start, timeframe, warmup_count)
-    frame, meta = compute_indicators(bars, instances, timeframe)
+    daily_source = load_daily_source(store, bar_parts, req.start, req.end, timeframe, warmup_count, instances)
+    frame, meta = compute_indicators(bars, instances, timeframe, daily_source=daily_source)
     if strategy is not None:
         _prepare_strategy_state(frame, strategy)
     cutoff = pd.Timestamp(parse_time(req.start))
@@ -1789,6 +1793,8 @@ def chart_payload(req, run_result=None):
             fv = _finite(v)
             if fv is not None:
                 vals.append({'time': int(ts.timestamp()), 'value': fv})
+            elif m['kind'] == 'DAY_LEVELS':
+                vals.append({'time': int(ts.timestamp())})
         series.append({**m, 'values': vals})
 
     study_markers: list[dict[str, Any]] = []
@@ -1925,3 +1931,4 @@ def chart_payload(req, run_result=None):
         'condition_states': condition_states,
         'warmup': warmup,
     }
+

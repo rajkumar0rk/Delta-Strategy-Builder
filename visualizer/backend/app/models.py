@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Any, Literal
 import re
 from pydantic import BaseModel, Field, model_validator
+from .day_levels import DayLevelParams
 
 Operator = Literal[
     "GT", "GTE", "LT", "LTE", "EQ", "BETWEEN",
@@ -27,6 +28,12 @@ class IndicatorInstance(BaseModel):
     # indicators are calculated only from fully completed aggregated candles and
     # forward-filled onto later lower-timeframe candles (no look-ahead).
     timeframe: Literal["strategy", "5m", "10m", "15m", "30m", "1h"] = "strategy"
+
+    @model_validator(mode="after")
+    def validate_day_levels(self):
+        if self.kind == "DAY_LEVELS":
+            self.params = DayLevelParams.model_validate(self.params).model_dump()
+        return self
 
 
 class Condition(BaseModel):
@@ -106,6 +113,9 @@ class AlertRule(BaseModel):
     # Optional reference to one EXISTING condition within the chosen rule tree.
     # Empty means the entire existing AND/OR tree. No second rule builder.
     condition_id: str | None = None
+    # Optional numeric identity (e.g. daily.day_id); change rearms transition
+    # and cooldown. Missing identities suppress alerts. Defaults preserve imports.
+    reset_operand: str | None = None
     # Only for backward-compatible V16.1 JSON saved before source selection.
     conditions: RuleGroup = Field(default_factory=RuleGroup)
 
@@ -562,6 +572,10 @@ class StrategyConfig(BaseModel):
             if alert.id in seen_alerts:
                 raise ValueError(f"Alert ids must be unique: {alert.id}")
             seen_alerts.add(alert.id)
+            if alert.reset_operand:
+                base = alert.reset_operand.split('.', 1)[0]
+                if base in blocked or base not in {i.id for i in self.indicators}:
+                    raise ValueError(f"Alert {alert.id} reset_operand must reference a non-chart-only indicator")
             if alert.source == "LEGACY_CUSTOM":
                 walk(alert.conditions)
                 if alert.condition_id:
@@ -784,3 +798,4 @@ class AblationRequest(BaseModel):
 
 
 RuleGroup.model_rebuild()
+

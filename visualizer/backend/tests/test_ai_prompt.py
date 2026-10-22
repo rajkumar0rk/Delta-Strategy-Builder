@@ -40,3 +40,12 @@ def test_ai_prompt_distinguishes_strategy_schema_and_backtest_controls():
     assert 'warmup_candles' not in StrategyConfig.model_fields
     assert 'warmup_policy' not in StrategyConfig.model_fields
     assert strategy.execution.end_of_data_quote_max_age_seconds == 300
+
+
+
+def test_prompt_documents_daily_levels_and_identity_rearming():
+    prompt = build_strategy_prompt(AiStrategyPromptRequest(strategy=StrategyConfig()))
+    for text in ('DAY_LEVELS', 'reset_operand', 'older_history_ready',
+                 'first backward chronological matches', 'intrabar event order'):
+        assert text in prompt
+    assert 'reset_operand' in StrategyConfig.model_json_schema()['$defs']['AlertRule']['properties']

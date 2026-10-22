@@ -20,3 +20,11 @@ may still be blocked by risk, position, session, or liquidity.
 Old V16.1 standalone alert conditions import as LEGACY_CUSTOM; new alerts
 only reference already configured strategy rules. Old call_action=ALERT
 migrates to BUY with ALERT_ONLY. Strategy schema_version stays 15.
+
+
+
+Optional `reset_operand` references a non-chart-only indicator output. Changes
+reset ON_ENTER state and cooldown; a missing/nonfinite identity suppresses the
+alert. The DAY_LEVELS preset uses `daily.day_id` for daily rearming. Chart and
+backtest share this behavior, including warm-up transition seeding. See
+DAY_LEVEL_ALERTS.md for the eight historical warning/touch alerts.

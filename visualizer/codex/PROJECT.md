@@ -32,6 +32,7 @@ Delta-Strategy-Builder/
 - EMA/SMA/VWAP/RSI/ATR/MACD/Stochastic/Stoch RSI/Bollinger/volume/Donchian.
 - ADX/+DI/-DI, derived formulas, candle strength, ATR expansion, overextension.
 - Confirmed pivots, market structure/BOS, regular + hidden divergence, support/resistance.
+- DAY_LEVELS: previous-day range/confirmed swing extremes, first older outside swings, frozen daily snapshots, near/touch flags and an alert-only preset. See DAY_LEVEL_ALERTS.md.
 - Count-based history rules, crosses-within-window, multi-bar slope.
 - CALL-only, PUT-only, or BOTH; BUY or SELL option positions.
 - Multiple independent entry lifecycles per direction.
@@ -56,3 +57,4 @@ The user commonly tests long BTC history ranges and many parameter combinations.
 ## V15.2 + V16 phase 1
 
 Backtest request warm-up and strict REQUIRE handling, mark-to-market risk sampling, stale-quote unresolved position metadata, ablation fixes, and analysis-only execution cost sensitivity. The strategy import schema remains version 15. No live broker routing or recorded order-book replay. See V15_2_ACCURACY_AND_TRUST.md and V16_EXECUTION_STRESS.md.
+

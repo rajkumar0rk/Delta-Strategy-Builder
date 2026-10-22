@@ -4,6 +4,7 @@ Alert evaluation is read-only: no option lookup, orders, capital or positions.
 """
 from __future__ import annotations
 
+import math
 import pandas as pd
 
 from .models import AlertRule, ALERT_SOURCE_FIELDS
@@ -46,6 +47,8 @@ def alert_markers(frame: pd.DataFrame, strategy, start: str, end: str) -> list[d
         if not group.configured():
             continue
         condition = find_condition(group, alert.condition_id) if alert.condition_id else None
+        if alert.reset_operand and alert.reset_operand not in frame.columns:
+            raise ValueError(f"Alert {alert.id} reset operand is unavailable: {alert.reset_operand}")
         entries.append((alert, group, condition))
 
     if not entries or frame.empty:
@@ -57,11 +60,23 @@ def alert_markers(frame: pd.DataFrame, strategy, start: str, end: str) -> list[d
     until = until.tz_localize("UTC") if until.tz is None else until.tz_convert("UTC")
     prev = {a.id: False for a, _, _ in entries}
     last_trigger: dict[str, int] = {}
+    identities: dict[str, float] = {}
     result: list[dict] = []
-    for i, (ts, _) in enumerate(frame.iterrows()):
+    for i, (ts, row) in enumerate(frame.iterrows()):
         if ts >= until:
             break
         for alert, group, condition in entries:
+            if alert.reset_operand:
+                identity = row[alert.reset_operand]
+                if pd.isna(identity) or not math.isfinite(float(identity)):
+                    prev[alert.id] = False
+                    last_trigger.pop(alert.id, None)
+                    identities.pop(alert.id, None)
+                    continue
+                if identities.get(alert.id) != float(identity):
+                    prev[alert.id] = False
+                    last_trigger.pop(alert.id, None)
+                    identities[alert.id] = float(identity)
             evaluated = (evaluate_condition(frame, i, condition) if condition is not None
                          else evaluate_group(frame, i, group))
             passed = bool(evaluated["passed"])
@@ -93,9 +108,12 @@ def alert_markers(frame: pd.DataFrame, strategy, start: str, end: str) -> list[d
                     "condition_id": alert.condition_id,
                     "trigger_mode": alert.trigger_mode,
                     "cooldown_bars": alert.cooldown_bars,
+                    "reset_operand": alert.reset_operand,
+                    "reset_value": identities.get(alert.id),
                 },
             })
             if len(result) > MAX_MARKERS:
                 raise ValueError("More than 100,000 alert events would be generated. "
                                  "Use ON_ENTER or increase cooldown to limit chart history.")
     return result
+

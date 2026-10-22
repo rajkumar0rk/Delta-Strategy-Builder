@@ -123,3 +123,17 @@ IM/MM, risk margin and margin floors, but it is not part of this offline lab.
 If rates are unavailable, leave margin research disabled: SELL fills remain
 margin-unverified. Do not assume 5×/10× option leverage in portfolio mode.
 Reference: https://guides.delta.exchange/delta-exchange-india-user-guide/trading-guide/margin-explainer/portfolio-margin
+
+
+
+## Daily level snapshots and alert identities
+
+DAY_LEVELS uses complete raw 5m candles for local calendar ranges, even for
+higher strategy/pivot timeframes. A snapshot includes only pivots confirmed by
+local midnight and is assigned to candles by OPEN date. Midnight-straddling
+candles retain the prior snapshot. Missing days/levels remain unavailable.
+Older outside swings are selected newest-first strictly before yesterday,
+independently for high and low. Near means the candle interval is within the
+configured positive distance; a touch suppresses its same-level near flag.
+Optional alert reset_operand rearms on identity changes; warm-up never emits
+alerts. See DAY_LEVEL_ALERTS.md for source coverage, outputs and limits.

@@ -62,3 +62,14 @@ Backtest cache keys include engine version, source-file fingerprints, selection/
 - `data_store.py`: target candles use fixed UTC close buckets; selection start time must not alter overlapping OHLC.
 - `indicators.py`: HTF aggregation uses datetime-aware Pandas resampling and is independent of ns/us internal units.
 - `engine.py`: contract quantity validity is mandatory; strict budget is configurable; run directories are exclusive/unique.
+
+
+
+### Daily historical levels (cache version 172)
+`backend/app/day_levels.py` owns calendar snapshots and day-level parameter
+validation. `indicators.py` exposes its outputs through the existing catalog;
+`warmup.py` loads sufficient historical context and raw 5m range sources when
+strategy bars are higher-timeframe. `alerts.py` can rearm by an optional numeric
+identity operand. The shared example JSON is also the frontend toolbar preset.
+Missing daily chart levels use whitespace points; saved result formats stay
+compatible. See DAY_LEVEL_ALERTS.md.

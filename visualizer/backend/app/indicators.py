@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 from zoneinfo import ZoneInfo
 from .models import IndicatorInstance
+from .day_levels import compute_day_levels, OUTPUTS as DAY_OUTPUTS, DISPLAY_OUTPUTS as DAY_DISPLAY
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -39,6 +40,16 @@ CATALOG: dict[str, IndicatorDefinition] = {
     "VOLUME_SMA": IndicatorDefinition("VOLUME_SMA", "Volume SMA", "Volume", "pane", ("value",), {"period":{"type":"int","default":20,"min":1,"max":500}}, "Rolling mean of volume."),
     "VOLUME_RATIO": IndicatorDefinition("VOLUME_RATIO", "Volume Ratio", "Volume", "pane", ("value",), {"period":{"type":"int","default":20,"min":1,"max":500}}, "Current volume divided by prior rolling mean volume."),
     "DONCHIAN": IndicatorDefinition("DONCHIAN", "Donchian Channel", "Breakout", "overlay", ("upper","lower","middle"), {"period":{"type":"int","default":20,"min":2,"max":500}}, "Prior N-bar highest high / lowest low channel."),
+    "DAY_LEVELS": IndicatorDefinition(
+        "DAY_LEVELS", "Previous-day levels & older swings", "Market structure", "overlay", DAY_OUTPUTS,
+        {"timezone":{"type":"text","default":"Asia/Kolkata"},
+         "pivot_left":{"type":"int","default":3,"min":1,"max":50},
+         "pivot_right":{"type":"int","default":3,"min":1,"max":50},
+         "lookback_days":{"type":"int","default":30,"min":1,"max":60},
+         "warning_points":{"type":"float","default":100.0,"min":0.0}},
+        "Frozen daily levels: yesterday's full-day range and confirmed swing extremes, plus the first older confirmed swings outside yesterday's range found searching backward. Calendar ranges use complete 5m history. Near/touch flags use the completed strategy candle; unavailable levels stay missing.",
+        DAY_DISPLAY,
+    ),
     "PIVOTS": IndicatorDefinition(
         "PIVOTS", "Swing High / Swing Low (confirmed pivots)", "Market structure", "overlay",
         ("last_swing_high","last_swing_low","swing_high_confirmed","swing_low_confirmed","confirmed_high_price","confirmed_low_price"),
@@ -452,6 +463,7 @@ def _instance_label(inst: IndicatorInstance, params: dict[str, Any]) -> str:
     if inst.kind == "STOCH_RSI": return f"Stoch RSI {params.get('rsi_period')}/{params.get('stoch_period')}/{params.get('k')}/{params.get('d')}"
     if inst.kind == "BOLLINGER": return f"Bollinger {params.get('period')} × {params.get('stddev')}"
     if inst.kind == "VWAP": return "Session VWAP"
+    if inst.kind == "DAY_LEVELS": return f"Daily levels · {params.get('timezone')} · {params.get('lookback_days')}d"
     if inst.kind == "PIVOTS": return f"Pivots L{params.get('left')} R{params.get('right')}"
     if inst.kind == "DIVERGENCE": return f"Divergence · {params.get('oscillator')}"
     if inst.kind == "MARKET_STRUCTURE": return f"Market structure L{params.get('pivot_left')} R{params.get('pivot_right')}"
@@ -463,7 +475,7 @@ def _instance_label(inst: IndicatorInstance, params: dict[str, Any]) -> str:
     if inst.kind == "FORMULA": return f"Formula · {params.get('expression')}"
     return inst.kind.replace('_', ' ')
 
-def compute_indicators(frame: pd.DataFrame, instances: list[IndicatorInstance], strategy_timeframe: str = '5m') -> tuple[pd.DataFrame,list[dict[str,Any]]]:
+def compute_indicators(frame: pd.DataFrame, instances: list[IndicatorInstance], strategy_timeframe: str = '5m', *, daily_source: pd.DataFrame | None = None, progress=None) -> tuple[pd.DataFrame,list[dict[str,Any]]]:
     if strategy_timeframe not in _TF_MINUTES:
         raise ValueError(f'Unsupported strategy timeframe: {strategy_timeframe}')
     result=frame.copy()
@@ -475,6 +487,7 @@ def compute_indicators(frame: pd.DataFrame, instances: list[IndicatorInstance], 
     frames: dict[str,pd.DataFrame] = {strategy_timeframe: result}
     series_meta=[]
     for inst in instances:
+        if progress: progress(f"Calculating {inst.id}…")
         if inst.kind not in CATALOG: raise ValueError(f"Unknown indicator kind: {inst.kind}")
         d=CATALOG[inst.kind]; p={k:v["default"] for k,v in d.params.items()}; p.update(inst.params)
         tf = strategy_timeframe if getattr(inst,'timeframe','strategy') == 'strategy' else str(inst.timeframe)
@@ -490,7 +503,14 @@ def compute_indicators(frame: pd.DataFrame, instances: list[IndicatorInstance], 
             frames[tf]['candle_range']=(frames[tf].high-frames[tf].low).abs()
         calc=frames[tf]
         outputs: dict[str,pd.Series]={}
-        if inst.kind=="EMA": outputs["value"]=_ema(calc[str(p['source'])],int(p['period']))
+        if inst.kind=="DAY_LEVELS":
+            if daily_source is None and strategy_timeframe != '5m':
+                raise ValueError('DAY_LEVELS requires underlying 5m daily_source for higher strategy timeframes')
+            source = result if daily_source is None else daily_source
+            confirmations = _pivot_confirmations(calc, int(p['pivot_left']), int(p['pivot_right']))
+            outputs = compute_day_levels(result, calc, source, p, _TF_MINUTES[strategy_timeframe],
+                                         _TF_MINUTES[tf], confirmations, progress)
+        elif inst.kind=="EMA": outputs["value"]=_ema(calc[str(p['source'])],int(p['period']))
         elif inst.kind=="SMA": outputs["value"]=calc[str(p['source'])].rolling(int(p['period']),min_periods=int(p['period'])).mean()
         elif inst.kind=="VWAP":
             local_dates=pd.Series(calc.index.tz_convert(IST).date,index=calc.index); typical=(calc.high+calc.low+calc.close)/3.0; cv=(typical*calc.volume).groupby(local_dates).cumsum(); vv=calc.volume.groupby(local_dates).cumsum().replace(0,np.nan); outputs["value"]=cv/vv
@@ -525,12 +545,19 @@ def compute_indicators(frame: pd.DataFrame, instances: list[IndicatorInstance], 
             key=inst.id if len(d.outputs)==1 else f"{inst.id}.{output}"
             # Keep the operand in its native timeframe frame so later derived
             # indicators on the same timeframe can reference it.
-            calc[key]=values
-            aligned = values if tf == strategy_timeframe else values.reindex(result.index, method='ffill')
+            if inst.kind == 'DAY_LEVELS':
+                # Snapshot/near/touch outputs already use strategy bars. Never
+                # forward-fill yesterday's snapshot across a local day boundary.
+                aligned = values
+                calc[key] = values.reindex(calc.index)
+            else:
+                calc[key]=values
+                aligned = values if tf == strategy_timeframe else values.reindex(result.index, method='ffill')
             result[key]=aligned
             if output not in display: continue
             base_label = _instance_label(inst, p)
             if tf != strategy_timeframe: base_label += f" · {tf}"
             series_meta.append({"key":key,"instance_id":inst.id,"kind":inst.kind,"indicator_label":base_label,"label":base_label if len(display)==1 else f"{base_label} · {output}","placement":d.placement,"output":output,"visible":inst.visible,"params":p,"timeframe":tf})
     return result, series_meta
+
 

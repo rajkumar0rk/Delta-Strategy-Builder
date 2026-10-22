@@ -11,7 +11,7 @@ export function BigTrendDetector({payload,strategy}:{payload:ChartPayload|null;s
  const rows=useMemo<Row[]>(()=>{
   if(!payload?.condition_states?.length)return[];
   const over=payload.series.find(s=>s.kind==='OVEREXTENSION'&&s.output==='abs_distance_atr');
-  const overMap=new Map<number,number>((over?.values||[]).map(v=>[v.time,v.value]));
+  const overMap=new Map<number,number>((over?.values||[]).flatMap(v=>v.value==null?[]:[[v.time,v.value] as [number,number]]));
   const classify=(s:ConditionState):Row=>{
    const callEnabled=strategy.direction_mode!=='PUT';const putEnabled=strategy.direction_mode!=='CALL';
    const callScore=callEnabled?Number(s.call_big_trend_score??s.call_score??0):-1;
@@ -42,3 +42,4 @@ export function BigTrendDetector({payload,strategy}:{payload:ChartPayload|null;s
   {!!transitions.length&&<div className="detector-transitions"><h3>Recent regime changes</h3>{transitions.map((r,i)=><div key={`${r.time}-${i}`}><time>{new Date(r.time*1000).toLocaleString()}</time><span>{r.direction}</span><b className={`state-${r.state.toLowerCase().replace(' ','-')}`}>{r.state}</b><strong>{fmt(r.score)}</strong></div>)}</div>}
  </section>
 }
+

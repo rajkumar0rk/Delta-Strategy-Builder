@@ -279,6 +279,17 @@ def run_ablation(req: AblationRequest, progress: Callable[[str], None] | None = 
         removed_ids: set[str] = set()
         for scope in ('call_entry','put_entry','call_exit','put_exit','no_trade','call_no_trade','put_no_trade'):
             _remove_indicator_conditions(payload[scope], indicator.id, removed_ids)
+        # Removing an indicator must not leave dangling alert identities or
+        # condition references; legacy custom conditions are pruned as well.
+        kept_alerts = []
+        for alert in payload.get('alerts', []):
+            if (alert.get('condition_id') in removed_ids or
+                    str(alert.get('reset_operand') or '').split('.', 1)[0] == indicator.id):
+                continue
+            if alert.get('source') == 'LEGACY_CUSTOM':
+                _remove_indicator_conditions(alert.get('conditions', {}), indicator.id, set())
+            kept_alerts.append(alert)
+        payload['alerts'] = kept_alerts
         for side in ('call','put'):
             for lifecycle in payload.get(f'{side}_entry_lifecycles', []):
                 if lifecycle.get('trigger_condition_id') in removed_ids:
@@ -504,3 +515,4 @@ def run_holdout(req: HoldoutResearchRequest, progress: Callable[..., None] | Non
                'No model selection happens here; warm-up may use earlier bars, and '
                'capital is reset between windows. No guarantee of future profit.',
     }
+

@@ -56,3 +56,14 @@ V15 storage profiles:
 ### Cache identity
 
 Backtest cache keys include engine version, source-file fingerprints, selection/range, strategy config and V15 storage mode. Increment the engine cache version when a behavior change can alter backtest results.
+
+
+## Daily historical levels in the current visualizer app
+
+`visualizer/backend/app/day_levels.py` implements DAY_LEVELS calendar snapshots
+and backward confirmed-pivot searches. Daily ranges always use underlying 5m
+history; native pivot timeframes and strategy candle-open dates control causal
+availability. `warmup.py` supplies the calendar search context and `alerts.py`
+can rearm on `reset_operand=daily.day_id`. The shared example JSON also supplies
+the frontend toolbar preset. See `visualizer/codex/DAY_LEVEL_ALERTS.md` for exact
+semantics, gaps, warm-up, chart whitespace and cache version 172.

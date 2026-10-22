@@ -9,6 +9,7 @@ import pandas as pd
 
 from .data_store import DataStore
 from .indicators import CATALOG
+from .day_levels import DayLevelParams
 
 TF_MINUTES = {"5m": 5, "10m": 10, "15m": 15, "30m": 30, "1h": 60}
 HISTORY_LIMIT = 20000
@@ -37,6 +38,14 @@ def required_warmup_candles(instances, timeframe: str, *, minimum: int = 500, st
             raise ValueError(f"Indicator {inst.id} timeframe must be a multiple of {timeframe}")
         params = {key: val["default"] for key, val in definition.params.items()}
         params.update(inst.params)
+        if inst.kind == 'DAY_LEVELS':
+            day = DayLevelParams.model_validate(params)
+            # Full older search window + yesterday + partial current day,
+            # DST allowance and enough native bars for pivot confirmation.
+            minutes = (day.lookback_days + 2) * 1440 + 120
+            required = max(required, (minutes + base - 1) // base +
+                           (day.pivot_left + day.pivot_right + 2) * ratio)
+            continue
         periods = []
         for key, value in params.items():
             if not any(term in key.lower() for term in
@@ -124,3 +133,13 @@ def warmup_diagnostics(bars: pd.DataFrame, start: str, timeframe: str,
         "first_available": prior[0].isoformat() if len(prior) else None,
         "last_available": prior[-1].isoformat() if len(prior) else None,
     }
+
+
+
+def load_daily_source(store, parts, start, end, timeframe, warmup_count, instances):
+    """Calendar ranges need raw 5m bars even when strategy candles straddle midnight."""
+    if timeframe == '5m' or not any(i.kind == 'DAY_LEVELS' for i in instances):
+        return None
+    ratio = TF_MINUTES[timeframe] // 5
+    return store.load_bars_many(parts, start, end, '5m',
+                               warmup_candles=warmup_count * ratio + ratio)
