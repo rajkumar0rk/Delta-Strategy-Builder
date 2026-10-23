@@ -294,3 +294,72 @@ def test_preset_validation_and_catalog_are_available_through_api():
         assert response.json()['strategy']['alerts'][0]['reset_operand']=='daily.day_id'
         catalog=client.get('/api/indicators').json()
         assert any(row['kind']=='DAY_LEVELS' for row in catalog)
+
+
+def test_symbol_session_utc_rollover_is_different_from_ist_calendar_day():
+    f=history('UTC')
+    by_symbol=indicator('Asia/Kolkata',day_boundary_mode='SYMBOL_SESSION',symbol='BTCUSD')
+    utc,_=compute_indicators(f,[by_symbol])
+    legacy,_=compute_indicators(f,[indicator('Asia/Kolkata')])
+    late=pd.Timestamp('2026-01-05T19:00:00Z')
+    tomorrow=pd.Timestamp('2026-01-06T00:05:00Z')
+    assert utc.loc[late,'daily.day_id']==utc.loc[late-pd.Timedelta(hours=1),'daily.day_id']
+    assert utc.loc[tomorrow,'daily.day_id']!=utc.loc[late,'daily.day_id']
+    assert legacy.loc[late,'daily.day_id']!=utc.loc[late,'daily.day_id']
+    assert utc.loc[tomorrow,'daily.previous_day_high']==140
+
+
+def test_custom_weekday_session_skips_weekend_and_excludes_closed_candles():
+    f=history('UTC',start='2026-01-01',end='2026-01-13')
+    f.loc[pd.Timestamp('2026-01-09T09:30Z'),['high','low']]=[190.,40.]
+    p=indicator('UTC',day_boundary_mode='CUSTOM_SESSION',
+        session_timezone='UTC',session_open='09:00',session_close='10:00',
+        session_weekdays='0,1,2,3,4',lookback_days=3)
+    out,_=compute_indicators(f,[p])
+    monday=pd.Timestamp('2026-01-12T09:05:00Z')
+    assert out.loc[monday,'daily.previous_day_high']==190
+    assert out.loc[monday,'daily.previous_day_low']==40
+    assert out.loc[monday,'daily.previous_day_ready']==1
+    assert pd.isna(out.loc[pd.Timestamp('2026-01-12T10:05Z'),'daily.day_id'])
+    assert pd.isna(out.loc[pd.Timestamp('2026-01-10T09:05Z'),'daily.day_id'])
+
+
+def test_custom_overnight_session_uses_open_day_label_and_ignores_downtime():
+    f=history('UTC')
+    p=indicator('UTC',day_boundary_mode='CUSTOM_SESSION',
+        session_timezone='UTC',session_open='20:00',session_close='02:00',
+        session_weekdays='0,1,2,3,4,5,6',lookback_days=2)
+    out,_=compute_indicators(f,[p])
+    first=pd.Timestamp('2026-01-05T23:55Z')
+    second=pd.Timestamp('2026-01-06T01:55Z')
+    assert out.loc[first,'daily.day_id']==out.loc[second,'daily.day_id']
+    assert pd.isna(out.loc[pd.Timestamp('2026-01-06T12:00Z'),'daily.day_id'])
+    assert out.loc[pd.Timestamp('2026-01-06T20:05Z'),'daily.day_id']!=out.loc[first,'daily.day_id']
+
+
+def test_session_modes_fail_closed_on_unregistered_symbol_and_invalid_session():
+    invalid=({'day_boundary_mode':'SYMBOL_SESSION','symbol':'UNKNOWN'},
+             {'day_boundary_mode':'CUSTOM_SESSION','session_open':'09:17'},
+             {'day_boundary_mode':'CUSTOM_SESSION','session_open':'25:00'},
+             {'day_boundary_mode':'CUSTOM_SESSION','session_weekdays':'0,0'},
+             {'day_boundary_mode':'CUSTOM_SESSION','session_weekdays':'7'},
+             {'day_boundary_mode':'WRONG'})
+    for bad in invalid:
+        with pytest.raises(ValueError):
+            indicator(**bad)
+
+
+def test_custom_session_must_have_all_five_minute_bars_and_no_future_repainting():
+    f=history('UTC',start='2026-01-01',end='2026-01-10')
+    p=indicator('UTC',day_boundary_mode='CUSTOM_SESSION',
+        session_timezone='UTC',session_open='09:00',session_close='10:00',
+        lookback_days=2)
+    full,_=compute_indicators(f,[p])
+    cut=pd.Timestamp('2026-01-07T09:05Z')
+    prefix,_=compute_indicators(f.loc[:cut],[p])
+    cols=[c for c in full if c.startswith('daily.')]
+    pd.testing.assert_frame_equal(full.loc[:cut,cols],prefix[cols])
+    missing=f.drop(pd.Timestamp('2026-01-06T09:30Z'))
+    changed,_=compute_indicators(missing,[p])
+    assert changed.loc[cut,'daily.previous_day_ready']==0
+    assert np.isnan(changed.loc[cut,'daily.previous_day_high'])

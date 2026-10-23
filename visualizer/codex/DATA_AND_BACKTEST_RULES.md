@@ -137,3 +137,15 @@ independently for high and low. Near means the candle interval is within the
 configured positive distance; a touch suppresses its same-level near flag.
 Optional alert reset_operand rearms on identity changes; warm-up never emits
 alerts. See DAY_LEVEL_ALERTS.md for source coverage, outputs and limits.
+
+## DAY_LEVELS calendar vs symbol/session boundaries
+`day_boundary_mode=CALENDAR` (default) preserves existing timezone-based
+midnight definitions. `SYMBOL_SESSION` currently supports BTCUSD, 24/7,
+00:00 UTC research chart convention (not Delta market open or close).
+`CUSTOM_SESSION` selects IANA timezone, HH:MM open/close and 0..6 weekdays,
+and excludes off-session candles. There is no live symbol trading-hours
+discovery API in the lab. Unknown symbols fail closed. Each required
+5m close in the previous scheduled session must be present. Shorter custom
+sessions and weekend exclusions are supported, but exchange holidays and
+early closes are not automatically known. Research consumers must use
+the indicator's session labels, not `strategy.session.windows`.

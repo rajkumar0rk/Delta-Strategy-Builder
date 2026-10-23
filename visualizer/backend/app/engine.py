@@ -296,7 +296,7 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
 
 def _backtest_cache_key(req: BacktestRequest, paths) -> str:
     payload = {
-        'engine_version': 172,  # daily level snapshots and identity-aware historical alerts
+        'engine_version': 173,  # selectable calendar/symbol/custom-session day snapshots
         'warmup_candles': req.warmup_candles,
         'warmup_policy': req.warmup_policy,
         'bar_gap_policy': req.bar_gap_policy,

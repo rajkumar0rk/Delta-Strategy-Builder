@@ -38,7 +38,32 @@ describe('historical daily level alert preset',()=>{
     timezone:{type:'text',default:'Asia/Kolkata'},pivot_right:{type:'int',default:3,min:1,max:50},
     lookback_days:{type:'int',default:30,min:1,max:60},warning_points:{type:'float',default:100,min:0}}};
   const markup=renderToStaticMarkup(<IndicatorManager catalog={[d]} value={strategy().indicators} onChange={()=>{}}/>);
-  for(const text of ['timezone','pivot_right','lookback_days','warning_points','confirmed by day start'])expect(markup).toContain(text);
+  for(const text of ['day_boundary_mode','timezone','pivot_right','lookback_days','warning_points','confirmed by the next session start'])expect(markup).toContain(text);
   expect(markup).toContain('max="60"');
+  expect(markup).toContain('CALENDAR');
+  expect(markup).toContain('SYMBOL_SESSION');
+  expect(markup).toContain('CUSTOM_SESSION');
+ }); 
+ it('shows symbol session fields without unrelated custom settings',()=>{
+  const s=strategy();
+  s.indicators[0].params.day_boundary_mode='SYMBOL_SESSION';
+  const d:IndicatorDefinition={kind:'DAY_LEVELS',label:'Daily levels',category:'Market structure',
+   placement:'overlay',outputs:['day_id'],description:'Daily levels',params:{
+    day_boundary_mode:{type:'select',default:'CALENDAR',options:['CALENDAR','SYMBOL_SESSION','CUSTOM_SESSION']},
+    timezone:{type:'text',default:'Asia/Kolkata'},
+    symbol:{type:'select',default:'BTCUSD',options:['BTCUSD']},
+    session_timezone:{type:'text',default:'UTC'},
+    session_open:{type:'text',default:'00:00'},session_close:{type:'text',default:'00:00'},
+    session_weekdays:{type:'text',default:'0,1,2,3,4,5,6'},
+  }};
+  let html=renderToStaticMarkup(<IndicatorManager catalog={[d]} value={s.indicators} onChange={()=>{}}/>);
+  expect(html).toContain('BTCUSD trades 24/7');
+  expect(html).toContain('>symbol</span>');
+  expect(html).not.toContain('>session_weekdays</span>');
+  s.indicators[0].params.day_boundary_mode='CUSTOM_SESSION';
+  html=renderToStaticMarkup(<IndicatorManager catalog={[d]} value={s.indicators} onChange={()=>{}}/>);
+  expect(html).toContain('>session_open</span>');
+  expect(html).toContain('>session_weekdays</span>');
+  expect(html).not.toContain('>symbol</span>');
  });
 });

@@ -13,8 +13,20 @@ export function IndicatorManager({catalog,value,onChange}:{catalog:IndicatorDefi
   <label className="switch strategy-switch"><input type="checkbox" checked={x.chart_only} onChange={e=>onChange(value.map((v,i)=>i===idx?{...v,chart_only:e.target.checked}:v))}/><span>chart only</span></label>
   <input className="id-input" value={x.id} onChange={e=>onChange(value.map((v,i)=>i===idx?{...v,id:e.target.value}:v))}/><strong>{d?.label||x.kind}</strong>
   <label className="param"><span>timeframe</span><select value={x.timeframe||'strategy'} onChange={e=>onChange(value.map((v,i)=>i===idx?{...v,timeframe:e.target.value as IndicatorInstance['timeframe']}:v))}>{timeframes.map(tf=><option key={tf} value={tf}>{tf==='strategy'?'strategy TF':tf}</option>)}</select></label>
-  {d&&Object.entries(d.params).map(([k,p])=><label key={k} className={`param ${p.type==='text'?'param-wide':''}`}><span>{k}</span>{p.type==='select'?<select value={String(x.params[k]??p.default)} onChange={e=>onChange(value.map((v,i)=>i===idx?{...v,params:{...v.params,[k]:e.target.value}}:v))}>{p.options?.map(o=><option key={o}>{o}</option>)}</select>:p.type==='text'?<input type="text" value={String(x.params[k]??p.default)} onChange={e=>onChange(value.map((v,i)=>i===idx?{...v,params:{...v.params,[k]:e.target.value}}:v))}/>:<input type="number" min={p.min} max={p.max} step={p.type==='float'?'0.1':'1'} value={Number(x.params[k]??p.default)} onChange={e=>onChange(value.map((v,i)=>i===idx?{...v,params:{...v.params,[k]:Number(e.target.value)}}:v))}/>}</label>)}
-  {x.kind==='DAY_LEVELS'&&<p>Daily ranges use 5m history. Swings use the selected timeframe and must be confirmed by day start. Older levels search before yesterday; missing history leaves gaps. Warning distance is in BTC price points. Disable chart only to use alert rules.</p>}
+  {d&&Object.entries(d.params).filter(([k])=>{
+   if(x.kind!=='DAY_LEVELS')return true;
+   const mode=x.params.day_boundary_mode||'CALENDAR';
+   if(k==='timezone')return mode==='CALENDAR';
+   if(k==='symbol')return mode==='SYMBOL_SESSION';
+   if(['session_timezone','session_open','session_close','session_weekdays'].includes(k))return mode==='CUSTOM_SESSION';
+   return true;
+  }).map(([k,p])=><label key={k} className={`param ${p.type==='text'?'param-wide':''}`}><span>{k}</span>{p.type==='select'?<select value={String(x.params[k]??p.default)} onChange={e=>onChange(value.map((v,i)=>i===idx?{...v,params:{...v.params,[k]:e.target.value}}:v))}>{p.options?.map(o=><option key={o}>{o}</option>)}</select>:p.type==='text'?<input type="text" value={String(x.params[k]??p.default)} onChange={e=>onChange(value.map((v,i)=>i===idx?{...v,params:{...v.params,[k]:e.target.value}}:v))}/>:<input type="number" min={p.min} max={p.max} step={p.type==='float'?'0.1':'1'} value={Number(x.params[k]??p.default)} onChange={e=>onChange(value.map((v,i)=>i===idx?{...v,params:{...v.params,[k]:Number(e.target.value)}}:v))}/>}</label>)}
+  {x.kind==='DAY_LEVELS'&&<p>{(x.params.day_boundary_mode||'CALENDAR')==='SYMBOL_SESSION'
+    ?'BTCUSD trades 24/7; its configured 00:00 UTC rollover is a chart convention, not a Delta exchange open/close or option expiry.'
+    :(x.params.day_boundary_mode||'CALENDAR')==='CUSTOM_SESSION'
+      ?'Custom sessions use open/close HH:MM in the selected timezone (equal times = 24 hours); weekdays: Monday=0 through Sunday=6. Closed hours are excluded, and previous session skips configured closed weekdays.'
+      :'Calendar day uses midnight in the chosen timezone (legacy IST behavior).'}
+    {' '}Daily ranges use complete 5m history; swings must be confirmed by the next session start. Older swings search earlier completed sessions; missing history leaves gaps. Warning distance is in BTC points. Disable chart only for alert rules.</p>}
   <button className="danger ghost" onClick={()=>onChange(value.filter((_,i)=>i!==idx))}>Remove</button>
  </div>})}</div></section>
 }

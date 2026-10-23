@@ -42,7 +42,13 @@ CATALOG: dict[str, IndicatorDefinition] = {
     "DONCHIAN": IndicatorDefinition("DONCHIAN", "Donchian Channel", "Breakout", "overlay", ("upper","lower","middle"), {"period":{"type":"int","default":20,"min":2,"max":500}}, "Prior N-bar highest high / lowest low channel."),
     "DAY_LEVELS": IndicatorDefinition(
         "DAY_LEVELS", "Previous-day levels & older swings", "Market structure", "overlay", DAY_OUTPUTS,
-        {"timezone":{"type":"text","default":"Asia/Kolkata"},
+        {"day_boundary_mode":{"type":"select","default":"CALENDAR","options":["CALENDAR","SYMBOL_SESSION","CUSTOM_SESSION"]},
+         "timezone":{"type":"text","default":"Asia/Kolkata"},
+         "symbol":{"type":"select","default":"BTCUSD","options":["BTCUSD"]},
+         "session_timezone":{"type":"text","default":"UTC"},
+         "session_open":{"type":"text","default":"00:00"},
+         "session_close":{"type":"text","default":"00:00"},
+         "session_weekdays":{"type":"text","default":"0,1,2,3,4,5,6"},
          "pivot_left":{"type":"int","default":3,"min":1,"max":50},
          "pivot_right":{"type":"int","default":3,"min":1,"max":50},
          "lookback_days":{"type":"int","default":30,"min":1,"max":60},
@@ -463,7 +469,12 @@ def _instance_label(inst: IndicatorInstance, params: dict[str, Any]) -> str:
     if inst.kind == "STOCH_RSI": return f"Stoch RSI {params.get('rsi_period')}/{params.get('stoch_period')}/{params.get('k')}/{params.get('d')}"
     if inst.kind == "BOLLINGER": return f"Bollinger {params.get('period')} × {params.get('stddev')}"
     if inst.kind == "VWAP": return "Session VWAP"
-    if inst.kind == "DAY_LEVELS": return f"Daily levels · {params.get('timezone')} · {params.get('lookback_days')}d"
+    if inst.kind == "DAY_LEVELS":
+        boundary = params.get('day_boundary_mode', 'CALENDAR')
+        day_label = (params.get('timezone') if boundary == 'CALENDAR'
+                     else f"{params.get('symbol', 'BTCUSD')} symbol session" if boundary == 'SYMBOL_SESSION'
+                     else f"{params.get('session_timezone')} {params.get('session_open')}-{params.get('session_close')}")
+        return f"Daily levels · {day_label} · {params.get('lookback_days')}d"
     if inst.kind == "PIVOTS": return f"Pivots L{params.get('left')} R{params.get('right')}"
     if inst.kind == "DIVERGENCE": return f"Divergence · {params.get('oscillator')}"
     if inst.kind == "MARKET_STRUCTURE": return f"Market structure L{params.get('pivot_left')} R{params.get('pivot_right')}"

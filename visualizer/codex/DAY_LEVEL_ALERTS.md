@@ -86,3 +86,38 @@ coverage is in `backend/tests/test_day_levels.py` and
 These are completed-candle historical observations. A touch confirms reaching a
 level, not a reversal or trade. OHLC does not prove an exact fill at the level,
 intrabar ordering, or that a warning occurred on an earlier candle.
+
+## Day boundary selection (engine cache version 173)
+
+The `DAY_LEVELS` indicator has `day_boundary_mode`:
+
+- `CALENDAR` (default for existing strategies): use `timezone` and
+  midnight local calendar dates. The shipped preset remains Asia/Kolkata.
+- `SYMBOL_SESSION`: use the registered `symbol` calendar.
+  Current BTC-only Strategy Lab registration: `BTCUSD`, 24/7 with an
+  **00:00 UTC chart-day rollover**. Delta India has **no daily BTC trading
+  close**; this is a documented chart convention, **not** an exchange
+  opening/closing bell, option expiry time, or automatic broker session feed.
+  Unsupported symbols fail validation instead of silently using BTC rules.
+- `CUSTOM_SESSION`: set `session_timezone` (IANA), `session_open`,
+  `session_close` (HH:MM on 5-minute boundaries) and `session_weekdays`
+  (comma-separated 0=Monday..6=Sunday). Equal open/close is 24 hours,
+  close earlier than open is overnight. Closed hours are excluded and
+  previous-session selection skips excluded weekdays. Holidays cannot be
+  inferred; exclude/extend them with explicit historical calendar support
+  before relying on this mode for holiday-closed markets.
+
+Raw 5m OHLC must cover every 5-minute close in a prior session for its
+range/swing snapshot to be marked ready. Pivot confirmation must be known
+by the new session open; finite custom sessions require fully contained
+native-timeframe candles. Older levels use earlier completed scheduled
+sessions within `lookback_days` calendar days before the previous session.
+Missing sessions remain unavailable; no OHLC values are synthesized.
+The `day_id` rearm value now represents a trading-session start date,
+and is unavailable outside the configured active session.
+
+Strategy `session.windows` still controls entry eligibility separately;
+it does not rewrite the day-level calendar. The current BTC history
+archive is not a multi-symbol feed. Historical chart, backtest, and trend
+research use the same `DAY_LEVELS` parameters. Upgrading existing saved
+JSON retains `CALENDAR` semantics.

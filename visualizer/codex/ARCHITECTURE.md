@@ -73,3 +73,10 @@ strategy bars are higher-timeframe. `alerts.py` can rearm by an optional numeric
 identity operand. The shared example JSON is also the frontend toolbar preset.
 Missing daily chart levels use whitespace points; saved result formats stay
 compatible. See DAY_LEVEL_ALERTS.md.
+
+### Calendar and configurable session day boundaries (cache 173)
+`backend/app/day_levels.py` validates `day_boundary_mode` and computes
+day/session identities for 5m range sources, pivot confirmations and
+strategy-candle alerts. Symbol mode currently registers BTCUSD with
+a 24/7 UTC chart-day convention; custom sessions are explicit configuration,
+not scraped exchange schedules. Legacy JSON defaults to IST calendar days.
