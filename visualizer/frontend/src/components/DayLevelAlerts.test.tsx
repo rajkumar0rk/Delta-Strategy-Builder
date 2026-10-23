@@ -35,6 +35,7 @@ describe('historical daily level alert preset',()=>{
  it('exposes calendar, swing and warning controls from the indicator catalog',()=>{
   const d:IndicatorDefinition={kind:'DAY_LEVELS',label:'Daily levels',category:'Market structure',
    placement:'overlay',outputs:['day_id'],description:'Daily levels',params:{
+    day_boundary_mode:{type:'select',default:'CALENDAR',options:['CALENDAR','SYMBOL_SESSION','CUSTOM_SESSION']},
     timezone:{type:'text',default:'Asia/Kolkata'},pivot_right:{type:'int',default:3,min:1,max:50},
     lookback_days:{type:'int',default:30,min:1,max:60},warning_points:{type:'float',default:100,min:0}}};
   const markup=renderToStaticMarkup(<IndicatorManager catalog={[d]} value={strategy().indicators} onChange={()=>{}}/>);
