@@ -8,7 +8,7 @@ import pytest
 
 from app.data_store import DataStore
 from app.engine import _select_option, chart_payload, run_backtest
-from app.models import BacktestRequest, Condition, EntryBehavior, PreviewRequest, RuleGroup, StrategyConfig
+from app.models import BacktestRequest, Condition, EntryBehavior, PreviewRequest, RuleGroup, SessionConfig, SessionWindow, StrategyConfig
 
 
 def _csv(path: Path, rows: list[dict]):
@@ -199,11 +199,14 @@ def test_session_end_exit_is_opt_in_and_not_a_fabricated_quote(tmp_path, monkeyp
     _seed(tmp_path,monkeypatch,expiration='2026-01-02T00:00:00Z')
     st=_strategy()
     st.risk.close_at_session_end=True
-    st.session.windows=[{'start':'00:00','end':'00:15'}]
+    st.session = SessionConfig(timezone='UTC', windows=[SessionWindow(start='00:00', end='00:15')])
     result=run_backtest(BacktestRequest(dataset_id='sample',start='2026-01-01T00:00:00Z',
                                         end='2026-01-01T00:35:00Z',strategy=st))
     assert result['metrics']['session_end_exits']==1
     assert result['trades'][0]['exit_reason']=='SESSION_END_EXIT'
+    # The opt-in session boundary must use a real pre-expiry quote.
+    assert result['trades'][0]['exit_time']=='2026-01-01T00:15:00+00:00'
+    assert result['metrics']['session_end_unfilled_attempts']==0
 
 
 def test_margin_account_audit_is_read_only(tmp_path,monkeypatch):
@@ -224,3 +227,31 @@ def test_margin_account_audit_is_read_only(tmp_path,monkeypatch):
     assert audit is not None and not audit['comparable']
     assert audit['assumed_trade_initial_usd']==pytest.approx(20)
     assert audit['observed_account_initial_usd']==75
+
+
+
+def test_session_end_does_not_open_on_final_eligible_candle(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch, expiration='2026-01-02T00:00:00Z')
+    st = _strategy()
+    st.risk.close_at_session_end = True
+    st.session = SessionConfig(timezone='UTC', windows=[SessionWindow(start='00:00', end='00:10')])
+    result = run_backtest(BacktestRequest(
+        dataset_id='sample', start='2026-01-01T00:00:00Z',
+        end='2026-01-01T00:35:00Z', strategy=st,
+    ))
+    # Entry lifecycle is ready at 00:10, the last eligible candle.
+    # No new trade may be opened when forced session close would be immediate.
+    assert result['metrics']['trades'] == 0
+    assert result['unresolved_position'] is None
+
+
+def test_session_boundary_detection_handles_overlapping_and_overnight_windows():
+    from app.engine import _session_end_due, _session_allowed
+    c = SessionConfig(timezone='UTC', windows=[
+        SessionWindow(start='23:30', end='00:15'),
+        SessionWindow(start='00:10', end='00:30'),
+    ])
+    ts = pd.Timestamp('2026-01-02T00:15:00Z')
+    assert _session_allowed(ts, c)
+    assert not _session_end_due(ts, c, 5)
+    assert _session_end_due(pd.Timestamp('2026-01-02T00:30:00Z'), c, 5)

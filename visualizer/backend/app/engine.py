@@ -1264,7 +1264,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         if pos is not None and ts >= pd.Timestamp(pos.spec['expiration']):
             verified = settlement_for(settlements, pos.spec)
             if verified is not None:
-                close_position(str(pos.spec['expiration']), verified['price'], 'EXPIRY_SETTLEMENT',
+                close_position(pd.Timestamp(pos.spec['expiration']).isoformat(), verified['price'], 'EXPIRY_SETTLEMENT',
                     settlement=True, index_twap=verified.get('index_twap'))
                 settlement_count += 1
                 settlement_fee_usd += trades[-1]['exit_fee_usd']
@@ -1393,6 +1393,11 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 }))
 
         if not _session_allowed(ts, strategy.session):
+            continue
+        # Opt-in forced end exit: never enter on the very last in-session
+        # completed candle; an entry here could not be closed at this boundary.
+        if strategy.risk.close_at_session_end and _session_end_due(
+                ts, strategy.session, {'5m':5,'10m':10,'15m':15,'30m':30,'1h':60}[strategy.timeframe]):
             continue
 
         # V12: shared NO-TRADE applies to both directions; directional NO-TRADE
@@ -1628,7 +1633,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
     if pos is not None and pd.Timestamp(pos.spec['expiration']) <= pd.Timestamp(end_dt):
         verified = settlement_for(settlements, pos.spec)
         if verified is not None:
-            close_position(str(pos.spec['expiration']), verified['price'], 'EXPIRY_SETTLEMENT',
+            close_position(pd.Timestamp(pos.spec['expiration']).isoformat(), verified['price'], 'EXPIRY_SETTLEMENT',
                 settlement=True, index_twap=verified.get('index_twap'))
             settlement_count += 1
             settlement_fee_usd += trades[-1]['exit_fee_usd']
