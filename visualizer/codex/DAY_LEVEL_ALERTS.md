@@ -121,3 +121,7 @@ it does not rewrite the day-level calendar. The current BTC history
 archive is not a multi-symbol feed. Historical chart, backtest, and trend
 research use the same `DAY_LEVELS` parameters. Upgrading existing saved
 JSON retains `CALENDAR` semantics.
+
+## Optional chart-only alert spacing
+
+In the chart toolbar, **Alert spacing (candles)** controls the minimum distance between *displayed* alert markers across all alert rules. Set `0` (default) to show every alert; set `12` to show roughly one per hour on a continuous 5m chart. Same-candle alerts are reduced to one marker (touch confirmation preferred). The filter operates on the loaded chart bar indices, not elapsed minutes; missing chart candles can change wall-clock spacing. It never removes historical alert events, changes backtest alert counts or alters saved strategy JSON; non-alert entry/exit/study/reject markers are untouched. Per-alert `cooldown_bars` remains separate and changes actual generated alert events.
