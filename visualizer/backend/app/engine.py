@@ -10,6 +10,7 @@ import pandas as pd
 from .models import BacktestRequest, StrategyConfig
 from .margin import short_margin_details, short_margin_health
 from .settlement import load_option_settlements, settlement_for, load_margin_audit, audit_margin_observation
+from .broker_history import replay_broker_account
 from .data_store import DataStore, parse_time, iso
 from .indicators import compute_indicators
 from .warmup import required_warmup_candles, historical_bar_sources, warmup_diagnostics, load_daily_source
@@ -297,7 +298,7 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
             if path and path.exists():
                 stat = path.stat()
                 entry[name] = {'path': str(path.resolve()), 'size': stat.st_size, 'mtime_ns': stat.st_mtime_ns}
-        for name in ('option_settlements.csv', 'account_margin_snapshots.csv'):
+        for name in ('option_settlements.csv', 'account_margin_snapshots.csv', 'portfolio_margin_history.csv', 'account_fills_history.csv'):
             paths = [item.root / name]
             if item.root.parent.name == 'segments':
                 paths.append(item.root.parent.parent / name)
@@ -311,7 +312,7 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
 
 def _backtest_cache_key(req: BacktestRequest, paths) -> str:
     payload = {
-        'engine_version': 174,  # verified expiry settlement, session close, optional account margin audit
+        'engine_version': 175,  # observed account risk replay alongside hypothetical strategy backtests
         'warmup_candles': req.warmup_candles,
         'warmup_policy': req.warmup_policy,
         'bar_gap_policy': req.bar_gap_policy,
@@ -1706,6 +1707,8 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         'daily_risk_blocks': int(daily_state['blocked_count']),
     }
 
+    broker_history_replay = replay_broker_account(parts, req.start, req.end, trades)
+    metrics['observed_broker_liquidation_fills'] = broker_history_replay['liquidation_fills']
     run_id, out = _new_result_dir(strategy.name)
     result = {
         'run_id': run_id,
@@ -1736,6 +1739,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 'Synthetic/unverified quotes cannot confirm real fills',
                 'SELL portfolio margin, actual broker collateral and exchange liquidation are not verified',
                 'SELL margin/leverage can only use explicit scenario assumptions; quote-based breaches are hypothetical and not execution guarantees',
+                'Recorded Delta account liquidations cannot be used to liquidate hypothetical positions in the strategy backtest',
                 'MTM drawdown is sampled only at available historical quotes',
                 'Expired contracts without imported Delta settlement prices remain unresolved, never settled with futures candles',
                 'Settlement notional fees use the futures close as a proxy unless index TWAP is supplied',
@@ -1753,6 +1757,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             'execution_impact': 'NONE',
             'limitations': 'Observed account margin is not the hypothetical margin for backtested trades, especially with other open positions.',
         },
+        'broker_history_replay': broker_history_replay,
         'settlement_research': {
             'imported_contract_count': len(settlements),
             'settled_position_count': settlement_count,

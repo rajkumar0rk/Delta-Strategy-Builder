@@ -301,3 +301,5 @@ Before producing the JSON, internally check:
 Now build the strategy requested by the user and return only the importable JSON object.
 """
 
+
+# Observed historical broker account risk replay reads portfolio_margin_history.csv and account_fills_history.csv (if supplied). Recorded liquidation/settlement fills are NOT hypothetical liquidation simulation; they do NOT change strategy fills, prices, capital or P&L.

@@ -81,3 +81,5 @@ strategy-candle alerts. Symbol mode currently registers BTCUSD with
 a 24/7 UTC chart-day convention; custom sessions are explicit configuration,
 not scraped exchange schedules. Legacy JSON defaults to IST calendar days.
 \n### Contract expiry and session controls (cache 174)\nVerified Delta expired-product option settlement payoffs and optional account-margin audit CSV are loaded from selected datasets by `settlement.py`; their file fingerprints invalidate backtest cache. `engine.py` closes at expiry only with matching settlement data. `risk.close_at_session_end` is opt-in, closes with a valid pre-expiry option quote at last eligible strategy candle. Audit snapshots are read-only comparisons and cannot replicate Delta's portfolio risk engine.\n
+### V175 broker observed risk history
+backend/app/broker_history.py replays validated historical portfolio-margin captures and actual forced fills for diagnostics only. Missing periods remain unknown. These records are never used to liquidate hypothetical options or rewrite backtest P&L. Broker CSVs enter cache fingerprints.
