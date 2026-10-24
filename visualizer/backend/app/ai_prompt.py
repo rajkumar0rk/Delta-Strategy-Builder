@@ -245,6 +245,9 @@ V15.2 ACCURACY & TRUST (BACKTEST SETTINGS ARE NOT STRATEGY FIELDS)
 - Indicator warm-up is loaded before the requested range; chart and backtest share completed-candle alignment. Warm-up data never permits entries.
 - warmup_candles (default 500) and warmup_policy (WARN or REQUIRE) are BacktestRequest fields only; keep schema_version=15 and do not insert them in StrategyConfig.
 - Closed-trade and sampled liquidation-value mark-to-market drawdown are separate metrics; the displayed equity curve is closed-trade equity.
+- Expiry: when an option_settlements.csv record from Delta expired products matches symbol/expiration, settle at the recorded option payoff; missing records remain unresolved. Settlement fees use the documented Delta cap/GST; if index_twap is absent, notional fee uses a labeled futures-close proxy.
+- Session-end: risk.close_at_session_end=false by default. When enabled, close on the last eligible completed strategy candle if a valid pre-expiry exit quote exists; otherwise log the failure and keep exposure.
+- Margin: optional risk.sell_margin.audit_against_account_snapshots reconciles estimates against user-imported account_margin_snapshots.csv observations, strictly read-only. These snapshots are NOT a counterfactual what-if broker margin engine.
 - Open trades without fresh end-of-data quotes remain unresolved. Realized P&L does not include their future outcome.
 - Research-only quality metadata flags synthetic quotes, unavailable depth/partial fills, margin and liquidation limitations.
 - V16 execution-cost sensitivity is analysis-only; do not invent a strategy.execution_stress property.

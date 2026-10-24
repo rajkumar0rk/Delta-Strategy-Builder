@@ -161,3 +161,66 @@ def test_time_stop_does_not_attempt_post_expiry_quote(tmp_path, monkeypatch):
     ))
     assert result['unresolved_position']['reason'] == 'EXPIRY_SETTLEMENT_UNAVAILABLE'
     assert result['metrics']['trades'] == 0
+
+def test_imported_settlement_closes_with_observed_payoff_and_fee(tmp_path, monkeypatch):
+    root=_seed(tmp_path,monkeypatch,expiration='2026-01-01T00:18:00Z')
+    _csv(root/'sample'/'option_settlements.csv',[dict(
+        symbol='BTC100CE',expiration='2026-01-01T00:18:00Z',
+        settlement_price=7.5,index_twap=107.0,source='DELTA_EXPIRED_PRODUCTS')])
+    st=_strategy()
+    result=run_backtest(BacktestRequest(dataset_id='sample',start='2026-01-01T00:00:00Z',
+                                        end='2026-01-01T00:40:00Z',strategy=st))
+    assert result['metrics']['verified_expiry_settlements']==1
+    assert result['metrics']['trades']==1
+    trade=result['trades'][0]
+    assert trade['exit_reason']=='EXPIRY_SETTLEMENT'
+    assert trade['exit_price']==pytest.approx(7.5)
+    assert trade['settlement_fee_notional_source']=='INDEX_TWAP'
+    assert trade['exit_time']=='2026-01-01T00:18:00+00:00'
+    assert result['unresolved_position'] is None
+
+
+def test_missing_or_conflicting_settlements_never_fabricate_price(tmp_path, monkeypatch):
+    from app.settlement import load_option_settlements
+    root=_seed(tmp_path,monkeypatch,expiration='2026-01-01T00:18:00Z')
+    store=DataStore()
+    assert load_option_settlements([store.resolve('sample')]) == {}
+    _csv(root/'sample'/'option_settlements.csv',[
+        dict(symbol='BTC100CE',expiration='2026-01-01T00:18:00Z',
+             settlement_price=2,source='DELTA_EXPIRED_PRODUCTS'),
+        dict(symbol='BTC100CE',expiration='2026-01-01T00:18:00Z',
+             settlement_price=3,source='DELTA_EXPIRED_PRODUCTS'),
+    ])
+    with pytest.raises(ValueError,match='Conflicting'):
+        load_option_settlements([store.resolve('sample')])
+
+
+def test_session_end_exit_is_opt_in_and_not_a_fabricated_quote(tmp_path, monkeypatch):
+    _seed(tmp_path,monkeypatch,expiration='2026-01-02T00:00:00Z')
+    st=_strategy()
+    st.risk.close_at_session_end=True
+    st.session.windows=[{'start':'00:00','end':'00:15'}]
+    result=run_backtest(BacktestRequest(dataset_id='sample',start='2026-01-01T00:00:00Z',
+                                        end='2026-01-01T00:35:00Z',strategy=st))
+    assert result['metrics']['session_end_exits']==1
+    assert result['trades'][0]['exit_reason']=='SESSION_END_EXIT'
+
+
+def test_margin_account_audit_is_read_only(tmp_path,monkeypatch):
+    from app.settlement import load_margin_audit, audit_margin_observation
+    root=_seed(tmp_path,monkeypatch,expiration='2026-01-02T00:00:00Z')
+    _csv(root/'sample'/'account_margin_snapshots.csv',[dict(
+        timestamp='2026-01-01T00:05:00Z',symbol='BTC100CE',
+        initial_margin_usd=75,maintenance_margin_usd=60,
+        account_equity_usd=150,source='DELTA_ACCOUNT_EXPORT')])
+    from app.margin import short_margin_details
+    from app.models import SellMarginConfig
+    store=DataStore()
+    observed=load_margin_audit([store.resolve('sample')])
+    config=SellMarginConfig(enabled=True,margin_mode='PORTFOLIO_ESTIMATE',
+                            initial_margin_percent=20,maintenance_margin_percent=10)
+    estimate=short_margin_details(config,100000,1000,1,.001)
+    audit=audit_margin_observation(observed,'BTC100CE','2026-01-01T00:06:00Z',estimate)
+    assert audit is not None and not audit['comparable']
+    assert audit['assumed_trade_initial_usd']==pytest.approx(20)
+    assert audit['observed_account_initial_usd']==75

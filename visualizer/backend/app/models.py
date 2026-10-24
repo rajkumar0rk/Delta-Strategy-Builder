@@ -331,6 +331,7 @@ class SellMarginConfig(BaseModel):
     max_notional_leverage: float | None = Field(default=None, ge=1, le=100)
     collateral_buffer_percent: float = Field(default=0.0, ge=0, le=100)
     reserve_exit_fee: bool = True
+    audit_against_account_snapshots: bool = False  # data-backed reconciliation only; never an execution oracle
     check_margin_on_quotes: bool = True
 
     @model_validator(mode="after")
@@ -359,6 +360,7 @@ class RiskConfig(BaseModel):
     take_profit: TakeProfit = Field(default_factory=TakeProfit)
     profit_protection: ProfitProtection = Field(default_factory=ProfitProtection)
     max_hold_minutes: int | None = Field(default=240, ge=1)
+    close_at_session_end: bool = False  # opt-in, last eligible completed strategy candle
     starting_balance_usd: float = Field(default=100.0, gt=0)
     quantity_mode: Literal["FIXED", "BUDGET"] = "FIXED"
     quantity: float = Field(default=10.0, gt=0)

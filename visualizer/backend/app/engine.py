@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from .models import BacktestRequest, StrategyConfig
 from .margin import short_margin_details, short_margin_health
+from .settlement import load_option_settlements, settlement_for, load_margin_audit, audit_margin_observation
 from .data_store import DataStore, parse_time, iso
 from .indicators import compute_indicators
 from .warmup import required_warmup_candles, historical_bar_sources, warmup_diagnostics, load_daily_source
@@ -84,6 +85,12 @@ def _session_allowed(ts: pd.Timestamp, cfg) -> bool:
         if allowed:
             return True
     return False
+
+
+def _session_end_due(ts: pd.Timestamp, cfg, timeframe_minutes: int) -> bool:
+    """Scheduled last eligible completed strategy candle, no price lookahead."""
+    return (_session_allowed(ts, cfg) and
+            not _session_allowed(ts + pd.Timedelta(minutes=timeframe_minutes), cfg))
 
 
 def _direction_type(direction: str) -> str:
@@ -290,13 +297,21 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
             if path and path.exists():
                 stat = path.stat()
                 entry[name] = {'path': str(path.resolve()), 'size': stat.st_size, 'mtime_ns': stat.st_mtime_ns}
+        for name in ('option_settlements.csv', 'account_margin_snapshots.csv'):
+            paths = [item.root / name]
+            if item.root.parent.name == 'segments':
+                paths.append(item.root.parent.parent / name)
+            for candidate in paths:
+                if candidate.is_file():
+                    stat = candidate.stat()
+                    entry[str(candidate.resolve())] = {'size': stat.st_size, 'mtime_ns': stat.st_mtime_ns}
         out[str(getattr(item, 'id', len(out)))] = entry
     return out
 
 
 def _backtest_cache_key(req: BacktestRequest, paths) -> str:
     payload = {
-        'engine_version': 173,  # selectable calendar/symbol/custom-session day snapshots
+        'engine_version': 174,  # verified expiry settlement, session close, optional account margin audit
         'warmup_candles': req.warmup_candles,
         'warmup_policy': req.warmup_policy,
         'bar_gap_policy': req.bar_gap_policy,
@@ -955,6 +970,9 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         )
     report('Loading and de-duplicating option instruments…', 18, 'LOAD_INSTRUMENTS', 'Calculate indicators')
     inst = store.load_instruments_many(parts) if needs_options else pd.DataFrame()
+    settlements = load_option_settlements(parts) if needs_options else {}
+    margin_audit = (load_margin_audit(parts)
+        if needs_options and req.strategy.risk.sell_margin.audit_against_account_snapshots else {})
     report('Calculating selected indicators and V15.1 trend state…', 25, 'INDICATORS', 'Prepare option quote indexes')
     strategy = req.strategy
     daily_source = load_daily_source(store, bar_parts, req.start, req.end, strategy.timeframe,
@@ -995,6 +1013,12 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
     estimated_margin_breaches = 0
     maximum_margin_utilization_percent = 0.0
     estimated_margin_peak_usd = 0.0
+    settlement_count = 0
+    settlement_fee_usd = 0.0
+    settlement_fee_proxy_count = 0
+    session_end_exit_count = 0
+    session_end_unfilled_attempts = 0
+    margin_audit_checks: list[dict[str, Any]] = []
     maximum_quote_gap_seconds = 0.0
     end_dt = parse_time(req.end)
     atr_keys = sorted(
@@ -1102,13 +1126,18 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         if pos is not None and parse_time(stamp) < parse_time(str(pos.spec['expiration'])):
             record_mtm_value(_mark_to_market_value(pos, q, balance, strategy, spot_at(stamp)))
 
-    def close_position(exit_time: str, exit_price: float, reason: str, exit_rule: dict[str, Any] | None = None):
+    def close_position(exit_time: str, exit_price: float, reason: str, exit_rule: dict[str, Any] | None = None,
+                       *, settlement: bool = False, index_twap: float | None = None):
         nonlocal pos, balance, equity, peak_equity, max_dd, max_dd_percent, pos_quotes, q_cursor
         assert pos
-        if parse_time(exit_time) >= parse_time(str(pos.spec['expiration'])):
+        if parse_time(exit_time) >= parse_time(str(pos.spec['expiration'])) and not settlement:
             raise ValueError('Cannot execute a quote-based option exit at or after contract expiry')
+        if settlement and parse_time(exit_time) != parse_time(str(pos.spec['expiration'])):
+            raise ValueError('Settlement timestamp must match expiration')
         cv = float(pos.spec['contract_value'])
-        exit_spot = spot_at(exit_time)
+        # Verified option settlement payoffs are distinct from futures candle closes.
+        # If index TWAP is absent, the notional fee input is only a proxy.
+        exit_spot = index_twap if settlement and index_twap is not None else spot_at(exit_time)
         exit_fee_details = _delta_fee(exit_spot, exit_price, pos.quantity, cv, strategy.execution)
         exit_fee = exit_fee_details['total_fee_usd']
         gross = ((exit_price - pos.entry_price) if pos.action == 'BUY' else (pos.entry_price - exit_price)) * pos.quantity * cv
@@ -1169,6 +1198,8 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             'mae_percent': pos.worst_return,
             'holding_minutes': holding_minutes,
             'exit_reason': reason,
+            'settlement_source': 'USER_IMPORTED_DELTA_EXPIRED_PRODUCTS' if settlement else None,
+            'settlement_fee_notional_source': ('INDEX_TWAP' if index_twap is not None else 'FUTURES_CLOSE_PROXY') if settlement else None,
             'entry_lifecycle_id': pos.entry_lifecycle_id,
             'entry_lifecycle_name': pos.entry_lifecycle_name,
             'margin_research': pos.margin,
@@ -1230,6 +1261,19 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
 
         closed_this_candle = False
 
+        if pos is not None and ts >= pd.Timestamp(pos.spec['expiration']):
+            verified = settlement_for(settlements, pos.spec)
+            if verified is not None:
+                close_position(str(pos.spec['expiration']), verified['price'], 'EXPIRY_SETTLEMENT',
+                    settlement=True, index_twap=verified.get('index_twap'))
+                settlement_count += 1
+                settlement_fee_usd += trades[-1]['exit_fee_usd']
+                settlement_fee_proxy_count += int(verified.get('index_twap') is None)
+                closed_this_candle = True
+            # Never use post-expiry quotes or generate new orders while unresolved.
+            if pos is not None or closed_this_candle:
+                continue
+
         # V8 explicit exclusivity: while a position is open, the opposite entry
         # side is not evaluated. All lifecycles belonging to the active side are
         # still updated so each trigger can independently reset/rearm.
@@ -1259,6 +1303,16 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                     close_position(stamp, _executable_exit_price(pos, q, strategy), reason)
                     closed_this_candle = True
                     break
+
+        if pos is not None and strategy.risk.close_at_session_end and _session_end_due(
+                ts, strategy.session, {'5m':5,'10m':10,'15m':15,'30m':30,'1h':60}[strategy.timeframe]):
+            q = first_valid_exit_quote(pos, ts.isoformat())
+            if q is not None:
+                close_position(q['timestamp'], _executable_exit_price(pos, q, strategy), 'SESSION_END_EXIT')
+                session_end_exit_count += 1
+                closed_this_candle = True
+            else:
+                session_end_unfilled_attempts += 1
 
         if pos is not None:
             sl = strategy.risk.stop_loss
@@ -1471,6 +1525,11 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             strategy.risk.sell_margin, float(row.close), entry, qty,
             float(spec['contract_value']), fee, fee,
         ) if action == 'SELL' else None
+        if strategy.risk.sell_margin.audit_against_account_snapshots:
+            observation = audit_margin_observation(margin_audit, str(spec['symbol']), str(q['timestamp']),
+                                                  margin_details)
+            if observation is not None:
+                margin_audit_checks.append(observation)
         if margin_details is not None and margin_details['initial_margin_usd'] is not None:
             estimated_margin_peak_usd = max(
                 estimated_margin_peak_usd, float(margin_details['cash_required_usd'])
@@ -1564,6 +1623,17 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 close_position(stamp, _executable_exit_price(pos, last_q, strategy), reason)
                 break
 
+    # A contract may expire after the last strategy candle but before the
+    # requested end; use the timestamped exchange settlement only in that case.
+    if pos is not None and pd.Timestamp(pos.spec['expiration']) <= pd.Timestamp(end_dt):
+        verified = settlement_for(settlements, pos.spec)
+        if verified is not None:
+            close_position(str(pos.spec['expiration']), verified['price'], 'EXPIRY_SETTLEMENT',
+                settlement=True, index_twap=verified.get('index_twap'))
+            settlement_count += 1
+            settlement_fee_usd += trades[-1]['exit_fee_usd']
+            settlement_fee_proxy_count += int(verified.get('index_twap') is None)
+
     unresolved_position = None
     if pos is not None:
         valid_quotes = (pos_quotes.loc[pos_quotes.timestamp < pd.Timestamp(pos.spec['expiration'])]
@@ -1617,6 +1687,12 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         'observed_quote_gap_count': quote_gap_count,
         'estimated_sell_margin_rejections': estimated_margin_rejections,
         'estimated_margin_breaches': estimated_margin_breaches,
+        'verified_expiry_settlements': settlement_count,
+        'settlement_fees_usd': settlement_fee_usd,
+        'settlements_with_fee_spot_proxy': settlement_fee_proxy_count,
+        'session_end_exits': session_end_exit_count,
+        'session_end_unfilled_attempts': session_end_unfilled_attempts,
+        'broker_margin_audit_observations': len(margin_audit_checks),
         'maximum_estimated_margin_utilization_percent': maximum_margin_utilization_percent,
         'maximum_estimated_initial_collateral_usd': estimated_margin_peak_usd,
         'max_observed_quote_gap_seconds': maximum_quote_gap_seconds,
@@ -1656,10 +1732,27 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 'SELL portfolio margin, actual broker collateral and exchange liquidation are not verified',
                 'SELL margin/leverage can only use explicit scenario assumptions; quote-based breaches are hypothetical and not execution guarantees',
                 'MTM drawdown is sampled only at available historical quotes',
-                'Expired contracts without verified settlement remain unresolved and are not marked to stale quotes',
+                'Expired contracts without imported Delta settlement prices remain unresolved, never settled with futures candles',
+                'Settlement notional fees use the futures close as a proxy unless index TWAP is supplied',
+                'Session-end exit uses the last eligible completed strategy candle and requires a valid pre-expiry quote',
+                'Historical account snapshots are audit observations, not counterfactual margin and cannot validate hypothetical Delta orders',
                 'Option quote gaps are reported but cannot be converted into known bid/ask or liquidity',
             ] + (['Warm-up incomplete'] if not warmup['contiguous'] else [])
               + (['Open position unresolved at end'] if unresolved_position else []),
+        },
+        'margin_account_audit': {
+            'enabled': strategy.risk.sell_margin.audit_against_account_snapshots,
+            'observation_count': len(margin_audit_checks),
+            'observations': margin_audit_checks[:500],
+            'source': 'USER_SUPPLIED_BROKER_SNAPSHOT_CSV',
+            'execution_impact': 'NONE',
+            'limitations': 'Observed account margin is not the hypothetical margin for backtested trades, especially with other open positions.',
+        },
+        'settlement_research': {
+            'imported_contract_count': len(settlements),
+            'settled_position_count': settlement_count,
+            'settlement_fee_spot_proxy_count': settlement_fee_proxy_count,
+            'source': 'OPTION_SETTLEMENTS_CSV_DELTA_EXPIRED_PRODUCTS',
         },
         'sell_margin_research': {
             'enabled': strategy.risk.sell_margin.enabled,
