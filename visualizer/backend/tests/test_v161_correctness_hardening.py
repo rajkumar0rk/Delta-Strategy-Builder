@@ -176,7 +176,7 @@ def test_imported_settlement_closes_with_observed_payoff_and_fee(tmp_path, monke
     assert trade['exit_reason']=='EXPIRY_SETTLEMENT'
     assert trade['exit_price']==pytest.approx(7.5)
     assert trade['settlement_fee_notional_source']=='INDEX_TWAP'
-    assert trade['exit_time']=='2026-01-01T00:18:00+00:00'
+    assert pd.Timestamp(trade['exit_time']) == pd.Timestamp('2026-01-01T00:18:00Z')
     assert result['unresolved_position'] is None
 
 
@@ -205,7 +205,7 @@ def test_session_end_exit_is_opt_in_and_not_a_fabricated_quote(tmp_path, monkeyp
     assert result['metrics']['session_end_exits']==1
     assert result['trades'][0]['exit_reason']=='SESSION_END_EXIT'
     # The opt-in session boundary must use a real pre-expiry quote.
-    assert result['trades'][0]['exit_time']=='2026-01-01T00:15:00+00:00'
+    assert pd.Timestamp(result['trades'][0]['exit_time']) == pd.Timestamp('2026-01-01T00:15:00Z')
     assert result['metrics']['session_end_unfilled_attempts']==0
 
 
