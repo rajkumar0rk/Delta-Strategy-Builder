@@ -1,5 +1,5 @@
 /** Show at most one alert marker per N completed chart candles, without changing events. */
-export function spaceAlertMarkers<T extends {kind:string;time:number;text?:string;details?:{alert_name?:string}}>(
+export function spaceAlertMarkers<T extends {kind:string;time:number;text?:string;details?:unknown}>(
  markers:readonly T[],barTimes:readonly number[],minimumCandles:number,
 ):T[]{
  if(!Number.isFinite(minimumCandles)||minimumCandles<=0||barTimes.length===0)return [...markers];
@@ -10,7 +10,12 @@ export function spaceAlertMarkers<T extends {kind:string;time:number;text?:strin
   return Math.max(0,hi);
  };
  const rows=markers.map((m,i)=>({m,i,bar:index(m.time)})).filter(x=>x.m.kind==='alert');
- const priority=(m:T)=>/touch confirmation/i.test(String(m.details?.alert_name||m.text||''))?0:1;
+ const priority=(m:T)=>{
+  const details=m.details;
+  const name=details && typeof details==='object' && 'alert_name' in details
+   ? String(details.alert_name ?? m.text ?? '') : String(m.text ?? '');
+  return /touch confirmation/i.test(name)?0:1;
+ };
  rows.sort((a,b)=>a.bar-b.bar||priority(a.m)-priority(b.m)||a.i-b.i);
  const chosen=new Set<number>();let last=-Infinity;
  for(const r of rows)if(r.bar-last>=spacing){chosen.add(r.i);last=r.bar}
