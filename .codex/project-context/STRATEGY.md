@@ -1,6 +1,6 @@
-# Current Strategy Model
+# Legacy manual options strategy matrix (not the whole Strategy Lab)
 
-The maintained matrix uses completed BTC 5-minute candles and buys a selected
+The separate legacy manual-options matrix uses completed BTC 5-minute candles and buys a selected
 ATM CALL or PUT option after a valid entry signal.
 
 Baseline directional entry conditions are:
@@ -23,3 +23,6 @@ entry filters, public history, and September 2026 dates.
 Saved Strategy Lab JSON files are research inputs. Do not assume their rule
 schema has exact parity with the Python runner; add an importer and parity tests
 before claiming an exact backtest.
+
+## Distinguish Strategy Lab futures
+This file describes the standalone `backtest/` options matrix, **not** the maintained `visualizer/` default strategy or BTCUSD futures engine. For an importable Strategy Lab JSON see `visualizer/examples/btcusd-futures-research.template.json`; for generation instructions see `visualizer/codex/FUTURES_STRATEGY_JSON_PROMPT.md`. Futures research P&L is not proven executable or profitable.
