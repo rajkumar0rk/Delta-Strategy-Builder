@@ -58,3 +58,6 @@ The user commonly tests long BTC history ranges and many parameter combinations.
 
 Backtest request warm-up and strict REQUIRE handling, mark-to-market risk sampling, stale-quote unresolved position metadata, ablation fixes, and analysis-only execution cost sensitivity. The strategy import schema remains version 15. No live broker routing or recorded order-book replay. See V15_2_ACCURACY_AND_TRUST.md and V16_EXECUTION_STRESS.md.
 
+
+## Separate BTCUSD perpetual futures research (v1)
+The opt-in `market_type=FUTURES` routes the same indicator, completed-5m data, signal trees and alerts into `backend/app/futures_engine.py`. LONG uses CALL signal rules, SHORT uses PUT rules, with exclusive positions, estimated OHLC/open execution and dedicated futures contracts/fees, leverage, price-based stops, funding CSV, session and daily risk. It is research only, not historical exchange-accurate margin/liquidation or an actual bid/ask replay. `market_type=OPTIONS` preserves the original options engine. See `FUTURES_BACKTEST.md`.
