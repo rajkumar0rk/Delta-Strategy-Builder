@@ -44,3 +44,14 @@ def test_audit_rejects_options():
     except ValueError:
         return
     assert False, 'Must reject option runs'
+
+
+def test_audit_fails_closed_for_missing_signal_or_execution_bar():
+    result,chart=sample()
+    chart['condition_states']=[]
+    chart['bars']=[]
+    report=audit_futures_parity(result,chart,timeframe_minutes=5)
+    assert report['status']=='FAILED'
+    assert report['checked_preview_signals']==0
+    assert report['checked_ohlc_entry_fills']==0
+    assert any('Missing' in x for x in report['failures'])
