@@ -60,3 +60,8 @@ Known limitations:
 ```
 
 Do **not** claim "all related files updated" without inspecting the consumers and tests. If a necessary companion change is intentionally deferred, identify it explicitly as incomplete.
+
+## Futures milestone companion map
+| Futures contract, funding or margin assumptions — `backend/app/futures_contract.py`, `futures_engine.py` | `backend/app/models.py`, `frontend/src/types.ts`, `FuturesSettings.tsx`, `backend/app/ai_prompt.py`, `codex/FUTURES_BACKTEST.md`, example JSON, tests, cache identity | Confirm historical regime and research-only caveats |
+| Futures validation/parity — `backend/app/futures_validation.py`, `futures_audit.py` | `backend/app/main.py`, `frontend/src/api.ts`, `ReplayResearchPanel.tsx`, `backend/tests/test_futures_validation.py`, `test_futures_audit.py`, docs | Check no holdout leakage; markers are overlays, lifecycle parity is limited |
+| Futures prompt JSON — `backend/app/ai_prompt.py` | `models.py`, `examples/btcusd-futures-research.template.json`, `backend/tests/test_ai_prompt.py`, `codex/FUTURES_STRATEGY_JSON_PROMPT.md` | Keep schema_version 15; do not insert backtest request fields into StrategyConfig |
