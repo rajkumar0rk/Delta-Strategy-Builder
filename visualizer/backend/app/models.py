@@ -850,6 +850,28 @@ class HoldoutResearchRequest(DatasetSelection):
     bar_gap_policy: Literal["WARN", "REQUIRE"] = "REQUIRE"
 
 
+class FuturesValidationRequest(DatasetSelection):
+    """Milestone 5: frozen BTCUSD futures strategy historical validation only."""
+    start: str
+    end: str
+    strategy: StrategyConfig
+    train_fraction: float = Field(default=0.70, ge=0.50, le=0.90)
+    embargo_bars: int = Field(default=12, ge=0, le=288)
+    stress_extra_slippage_bps: float = Field(default=5.0, ge=0, le=100)
+    stress_fee_multiplier: float = Field(default=1.5, ge=1, le=3)
+    bar_gap_policy: Literal["REQUIRE"] = "REQUIRE"
+
+    @model_validator(mode="after")
+    def validate_futures_research(self):
+        if self.strategy.market_type != "FUTURES":
+            raise ValueError("Futures historical validation requires market_type=FUTURES")
+        if self.strategy.futures.slippage_bps + self.stress_extra_slippage_bps > 1000:
+            raise ValueError("Stress slippage exceeds futures execution limit")
+        if self.strategy.futures.taker_fee_percent * self.stress_fee_multiplier > 5:
+            raise ValueError("Stress fee exceeds futures model limit")
+        return self
+
+
 class AblationRequest(BaseModel):
     dataset_id: str
     start: str
