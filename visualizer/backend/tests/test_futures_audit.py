@@ -79,3 +79,43 @@ def test_audit_rejects_ineligible_entry_provenance():
     report=audit_futures_parity(result,chart,timeframe_minutes=5)
     assert report['status']=='FAILED'
     assert any('lifecycle' in item.lower() for item in report['failures'])
+
+
+def test_independent_lifecycle_replay_accepts_completed_candle_next_open():
+    from app.futures_lifecycle_replay import independently_replay_lifecycles
+    from app.models import StrategyConfig, EntryBehavior
+    st=StrategyConfig(market_type="FUTURES",direction_mode="CALL")
+    st.call_entry_lifecycles=[EntryBehavior(id="life",delay_bars=1)]
+    entry="2026-01-01T00:10:00Z"
+    result={"strategy":st.model_dump(),"trades":[{
+        "direction":"LONG","entry_time":entry,"exit_time":"2026-01-01T00:20:00Z",
+        "entry_lifecycle_id":"life","entry_lifecycle_signal_time":entry,
+        "entry_lifecycle_age_bars":1,"entry_lifecycle_delay_bars":1,
+        "entry_lifecycle_entries_before":0,"entry_lifecycle_max_entries":1,
+        "entry_lifecycle_expired":False,"entry_lifecycle_eligible":True,
+    }]}
+    source=[{"time":1767225900,"call":{"life":True},"put":{}},
+            {"time":1767226200,"call":{"life":True},"put":{}},
+            {"time":1767226500,"call":{"life":True},"put":{}}]
+    out=independently_replay_lifecycles(result,source,5)
+    assert out["failures"]==[],out
+    assert out["checked"]==1
+
+
+def test_independent_lifecycle_replay_catches_falsified_age():
+    from app.futures_lifecycle_replay import independently_replay_lifecycles
+    from app.models import StrategyConfig, EntryBehavior
+    st=StrategyConfig(market_type="FUTURES",direction_mode="CALL")
+    st.call_entry_lifecycles=[EntryBehavior(id="life",delay_bars=1)]
+    result={"strategy":st.model_dump(),"trades":[{
+        "direction":"LONG","entry_time":"2026-01-01T00:10:00Z","exit_time":"2026-01-01T00:20:00Z",
+        "entry_lifecycle_id":"life","entry_lifecycle_age_bars":4,
+        "entry_lifecycle_delay_bars":1,"entry_lifecycle_entries_before":0,
+        "entry_lifecycle_max_entries":1,"entry_lifecycle_expired":False,
+        "entry_lifecycle_eligible":True,
+    }]}
+    source=[{"time":1767225900,"call":{"life":True},"put":{}},
+            {"time":1767226200,"call":{"life":True},"put":{}},
+            {"time":1767226500,"call":{"life":True},"put":{}}]
+    out=independently_replay_lifecycles(result,source,5)
+    assert any("entry_lifecycle_age_bars" in x for x in out["failures"])
