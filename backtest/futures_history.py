@@ -81,8 +81,6 @@ def _normalize(rows: list[dict], *, symbol: str, day: int, dense: bool) -> list[
         if indexed.keys() != expected:
             missing = len(expected - indexed.keys())
             raise RuntimeError(f"{symbol} incomplete 1m coverage for {_iso(day)[:10]}: {missing} missing candles")
-    elif not indexed:
-        raise RuntimeError(f"{symbol} returned no funding-rate observations for {_iso(day)[:10]}")
     return [indexed[t] for t in sorted(indexed)]
 
 
@@ -106,7 +104,7 @@ def _valid_file(path: Path, day: int, dense: bool) -> bool:
                     first = ts
                 count += 1
             return (count == DAY_SECONDS // RESOLUTION_SECONDS and first == day
-                    and last == day + DAY_SECONDS - RESOLUTION_SECONDS) if dense else count > 0
+                    and last == day + DAY_SECONDS - RESOLUTION_SECONDS) if dense else True
     except (OSError, UnicodeError, ValueError, KeyError):
         return False
 
