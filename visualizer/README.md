@@ -1,4 +1,4 @@
-# BTC Strategy Lab — V15.2 Accuracy & V16 Execution-Stress Research
+# BTC Strategy Lab — Options + BTCUSD Futures Research
 
 V15.1 adds a **correctness hardening pass** on top of V15 storage/performance hygiene and Codex project context. New runs no longer duplicate large arrays inside `summary.json`; normal ANALYSIS runs compress diagnostic artifacts, optimizer/ablation inner runs use COMPACT persistence, and a Storage Manager can compact legacy result folders, pin important runs, and apply explicit retention cleanup.
 
@@ -244,7 +244,13 @@ npm run build
 
 V15.2: conservative prehistory warm-up for chart/backtest indicators, distinct quote-observed mark-to-market drawdown, stale final quote unresolved exposure, gzip analysis compatibility, de-duplicated rejection diagnostics, ablation dependency cleanup, and RESEARCH_ONLY metadata. BacktestRequest warmup_candles (default 500) and warmup_policy (WARN|REQUIRE) are not strategy fields. ExecutionConfig.end_of_data_quote_max_age_seconds defaults to 300.
 
-V16 phase 1: research-only adverse premium execution-cost sensitivity (0/0.5/1/2/5% per side) over saved trades in Analysis, recalculating fee/GST differences. No recorded historical BBO depth, partial fills, live orders, SELL margin or execution replay. **Strategy JSON schema_version stays 15.** See codex/V15_2_ACCURACY_AND_TRUST.md and codex/V16_EXECUTION_STRESS.md.
+V16 phase 1: research-only adverse premium execution-cost sensitivity (0/0.5/1/2/5% per side) over saved trades in Analysis, recalculating fee/GST differences. At that phase there was no recorded historical BBO depth, partial fill replay or live routing. Later milestones added separate futures execution replay and optional **research-only** options SELL margin assumptions. **Strategy JSON schema_version stays 15.** See codex/CHANGE_CHECKLIST.md and codex/V16_EXECUTION_STRESS.md.
 
-## Futures research correctness hardening (review branch)
-The futures path now consumes entry lifecycles, warms pre-range lifecycle state and avoids applying candle-close funding to positions exiting earlier inside the candle. Assumed tick rounding can be configured in the Futures editor. Historical Delta order-book fills, actual liquidation timing, margin tiers and real mark-price equity are still unavailable. The existing option-specific execution sensitivity/replay panels are not valid futures execution models; futures-specific replay and complete decision logs remain pending. The new GitHub Actions workflow runs backend tests and frontend tests/build on relevant changes. No exchange-accurate backtest is claimed.
+## BTCUSD perpetual futures (six merged implementation milestones)
+The FUTURES path consumes entry lifecycles, warms earlier state, and applies funding only to positions that survive a settlement candle. Futures execution uses configurable tick/bps adverse slippage, fee/GST and **supplied** funding. It also provides futures-only execution stress/replay, estimated candle-close open-position equity and drawdown, and entry-rejection diagnostics.
+
+The present public contract snapshot and optional size-tier margin *assumptions* live in `backend/app/futures_contract.py`; pre-8 September 2025 historical minute funding cannot be silently interpreted as an eight-hour record. Frozen-strategy historical train/holdout/stress and internal chart/fill parity audits are accessible through the **Execution replay & robustness** panel. These are implemented tools: **the full local historical archive has not been proven tested** and their presence is not a profitability or exchange-execution certification.
+
+The futures engine remains `RESEARCH_ONLY`. It lacks historical exchange bid/ask fills, actual historical margin tiers and INR collateral conversion, true mark-price liquidation, and complete position-aware chart lifecycle parity.
+
+See `codex/FUTURES_BACKTEST.md`, `codex/FUTURES_STRATEGY_JSON_PROMPT.md`, and `examples/btcusd-futures-research.template.json`. Run backend `pytest` and frontend `npm run test -- --run` / `npm run build` after any behavior or schema change.

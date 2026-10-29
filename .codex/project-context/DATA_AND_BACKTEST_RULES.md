@@ -53,5 +53,8 @@ Trend discovery can inspect future candles only to label whether a historical se
 ## Quantity and result persistence correctness
 
 - FIXED quantity must satisfy the selected contract's `min_quantity` and `size_increment`; otherwise reject the entry rather than simulate an impossible order.
-- BUDGET mode may exceed the configured budget only when `allow_minimum_quantity_over_budget=true`; this is an explicit user choice for exchange minimum quantities.
+- The current Strategy Lab field is `risk.enforce_trade_budget_strict` (default true). When true, reject over-budget valid quantities; when false, BUDGET mode may step up to the contract's valid minimum above budget. **Exchange min_quantity and size_increment are still mandatory.** `allow_minimum_quantity_over_budget` is **not** a StrategyConfig field.
 - Result directories must be uniquely allocated with `exist_ok=False`; concurrent/same-second runs must never share or overwrite artifacts.
+
+## Current Strategy Lab source of truth
+For live schema fields and futures details read `visualizer/codex/DATA_AND_BACKTEST_RULES.md`, `visualizer/codex/FUTURES_BACKTEST.md` and `visualizer/backend/app/models.py`. The current FUTURES backtester is `RESEARCH_ONLY` with user-controlled assumptions, not verified historical exchange fills or margins. Do not treat this root-level handoff document as a current API schema.

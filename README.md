@@ -1,7 +1,7 @@
 # Delta Strategy Backtest
 
-Research and backtesting workspace for BTC options strategies using Delta
-Exchange India historical data.
+Research and backtesting workspace for BTC options and BTCUSD perpetual futures
+research using Delta Exchange India historical data.
 
 This repository contains the Python calculation engine, historical-data
 archive, experiment configurations, reports, tests, visualizer, and Strategy
@@ -26,8 +26,8 @@ overwritten.
 - `backtest/`: current research engine, data tools, configurations, and reports.
 - `backtest/data/delta-history/`: unified sharded public-history archive.
 - `tests/`: regression tests for the current engine.
-- `visualizer/`: preserved strategy visualizer application.
-- `strategy-lab/`: preserved Strategy Lab assets and saved strategies.
+- `visualizer/`: **maintained BTC Strategy Lab source** (React + Python backend), Codex docs, examples, futures research and parity/holdout APIs.
+- `strategy-lab/`: legacy/runtime Strategy Lab results, cache and saved-strategy storage in some installations; **not the source directory**.
 - `strategy-lab-user-data/`: local Strategy Lab user workspace.
 - `.codex/project-context/`: concise handoff material for future Codex chats.
 
@@ -48,6 +48,13 @@ fees, profit factor, maximum drawdown, average win and loss, largest win, P&L
 per trade, profitable months, CALL/PUT split, trade count, and outlier-free
 results. Change one variable at a time and retain the exact configuration with
 the output.
+
+The six BTCUSD futures *implementation* milestones are merged, but the futures engine
+uses **research-only OHLC execution estimates**, not verified exchange bid/ask,
+INR wallet liquidation or demonstrated historical profitability. See
+[visualizer/codex/FUTURES_BACKTEST.md](visualizer/codex/FUTURES_BACKTEST.md),
+[visualizer/examples](visualizer/examples), and
+[visualizer/codex/FUTURES_STRATEGY_JSON_PROMPT.md](visualizer/codex/FUTURES_STRATEGY_JSON_PROMPT.md).
 
 See [backtest/README.md](backtest/README.md) and
 [.codex/project-context/README.md](.codex/project-context/README.md).

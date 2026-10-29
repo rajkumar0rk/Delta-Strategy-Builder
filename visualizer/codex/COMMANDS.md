@@ -62,3 +62,6 @@ Specific inclusive UTC date range:
 ## V15.1 storage
 
 Use the Storage Manager in the UI to compact legacy result folders before deleting runs. Pin important runs before applying retention cleanup.
+
+## Futures research verification
+Run the local Strategy Lab, select BTCUSD Futures and the canonical archive, then use **Execution replay & robustness → Run futures validation**, followed by **Audit futures chart parity**. These jobs use actual selected data; neither CI nor the existence of the JSON example establishes strategy profitability. Import `visualizer/examples/btcusd-futures-research.template.json` as a research seed (funding excluded explicitly), or use `codex/FUTURES_STRATEGY_JSON_PROMPT.md` for generation instructions. Do not add research-job request fields to strategy JSON.
