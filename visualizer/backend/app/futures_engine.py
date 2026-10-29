@@ -190,6 +190,8 @@ def run_futures_backtest(req, progress=None):
             'peak_equity_usd':peak,'drawdown_usd':peak-balance,'drawdown_percent':(peak-balance)/max(peak,1e-12)*100})
     for i,(ts,row) in enumerate(frame.iterrows()):
         if ts<pd.Timestamp(req.start) or ts>=pd.Timestamp(req.end):continue
+        if progress and i%500==0:
+            progress(f'Backtesting futures candle {i+1}/{len(frame)}',min(95,45+50*i/max(len(frame),1)),'BACKTEST','Evaluate signals')
         at_open=ts-pd.Timedelta(minutes=tf)
         day=at_open.tz_convert(ZoneInfo(strategy.session.timezone)).date()
         if daily['day']!=day:
@@ -307,7 +309,7 @@ def run_futures_backtest(req, progress=None):
       'funding_usd':fund_total,'profit_factor':gp/gl if gl else None,
       'return_percent':(balance/initial-1)*100,'ending_balance_usd':balance,
       'max_closed_trade_drawdown_usd':max_dd,'max_closed_trade_drawdown_percent':max_dd_pct,
-      'max_mark_to_market_drawdown_usd':max_dd,'max_mark_to_market_drawdown_percent':max_dd_pct,
+      'max_mark_to_market_drawdown_usd':None,'max_mark_to_market_drawdown_percent':None,
       'avg_mfe_percent':sum(t['mfe_percent'] for t in trades)/len(trades) if trades else 0,
       'avg_mae_percent':sum(t['mae_percent'] for t in trades)/len(trades) if trades else 0,
       'estimated_margin_breaches':sum(t['exit_reason']=='ESTIMATED_MARGIN_BREACH' for t in trades),
@@ -325,7 +327,8 @@ def run_futures_backtest(req, progress=None):
       'unresolved_position':unresolved,
       'reliability':{'grade':'RESEARCH_ONLY','execution_model':'UNDERLYING_OHLC_PROXY',
         'limitations':['No historical futures orderbook/spread or fills',
-           'Intrabar stops/targets, slippage, margin breaches are estimates',
+           'Intrabar stops/targets, slippage and margin breaches are estimates',
+           'True mark-to-market drawdown not computed without historical futures mark/executable quotes',
            'Funding excluded' if cfg.funding_mode=='EXCLUDE_WITH_WARNING' else 'Funding rates supplied externally and settlement notional approximated']},
       'fee_model':{'name':'DELTA_FUTURES_ASSUMED_TAKER','taker_fee_percent':cfg.taker_fee_percent,'gst_percent':cfg.gst_percent},
       'futures_research':{'symbol':cfg.symbol,'leverage':cfg.leverage,'margin_mode':cfg.margin_mode,
