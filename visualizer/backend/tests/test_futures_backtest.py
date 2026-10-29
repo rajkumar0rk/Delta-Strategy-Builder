@@ -284,7 +284,8 @@ def test_futures_flat_blocked_candles_advance_lifecycle(tmp_path,monkeypatch):
     s.futures.stop_loss_percent=None
     s.futures.take_profit_percent=None
     # Temporarily block all early entry OPENs, but allow the trigger to age.
-    s.session.windows=[{'start':'00:20','end':'23:59'}]
+    from app.models import SessionWindow
+    s.session.windows=[SessionWindow(start='00:20',end='23:59')]
     result=run_backtest(BacktestRequest(dataset_id='sample',
         start='2026-01-01T00:00:00Z',end='2026-01-01T01:00:00Z',strategy=s))
     for t in result['trades']:
