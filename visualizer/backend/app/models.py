@@ -460,6 +460,7 @@ class FuturesConfig(BaseModel):
     slippage_bps: float = Field(default=2, ge=0, le=1000)
     tick_size: float = Field(default=0.5, gt=0)
     slippage_ticks: int = Field(default=0, ge=0, le=1000)
+    funding_rate_multiplier: float = Field(default=1.0, ge=0, le=5)
     stop_loss_percent: float | None = Field(default=1, gt=0, le=100)
     take_profit_percent: float | None = Field(default=2, gt=0, le=1000)
     funding_mode: Literal["REQUIRE_CSV", "EXCLUDE_WITH_WARNING"] = "REQUIRE_CSV"
@@ -795,17 +796,45 @@ class ExecutionReplayRequest(DatasetSelection):
     extra_slippage_ticks: list[int] = Field(
         default_factory=lambda: [0], min_length=1, max_length=4,
     )
+    # Futures use adverse price movement in basis points, NOT option BBO spread.
+    extra_futures_slippage_bps: list[float] = Field(
+        default_factory=lambda: [0.0, 5.0, 10.0, 20.0], min_length=1, max_length=8,
+    )
+    futures_fee_multipliers: list[float] = Field(
+        default_factory=lambda: [1.0], min_length=1, max_length=8,
+    )
+    futures_funding_multipliers: list[float] = Field(
+        default_factory=lambda: [1.0], min_length=1, max_length=8,
+    )
     bar_gap_policy: Literal["WARN", "REQUIRE"] = "REQUIRE"
 
     @model_validator(mode="after")
     def validate_scenarios(self):
-        if len(self.extra_half_spread_percent) * len(self.extra_slippage_ticks) > 12:
+        if self.strategy.market_type == "FUTURES":
+            scenario_count = (len(self.extra_futures_slippage_bps) * len(self.extra_slippage_ticks)
+                              * len(self.futures_fee_multipliers) * len(self.futures_funding_multipliers))
+        else:
+            scenario_count = len(self.extra_half_spread_percent) * len(self.extra_slippage_ticks)
+        if scenario_count > 12:
             raise ValueError("Execution replay supports up to 12 scenarios")
+        if any(not (0 <= x <= 1000) for x in self.extra_futures_slippage_bps):
+            raise ValueError("Extra futures adverse slippage must be 0..1000 bps")
+        if any(not (1 <= x <= 10) for x in self.futures_fee_multipliers):
+            raise ValueError("Futures fee multiplier must be between 1 and 10")
+        if any(not (0 <= x <= 5) for x in self.futures_funding_multipliers):
+            raise ValueError("Futures funding multiplier must be between 0 and 5")
         if any(not (0 <= x <= 25) for x in self.extra_half_spread_percent):
             raise ValueError("Extra half-spread must be between 0 and 25 percent")
         if any(not (0 <= x <= 100) for x in self.extra_slippage_ticks):
             raise ValueError("Extra slippage ticks must be between 0 and 100")
-        if self.strategy.execution.slippage_ticks + max(self.extra_slippage_ticks) > 100:
+        if self.strategy.market_type == "FUTURES":
+            if self.strategy.futures.slippage_bps + max(self.extra_futures_slippage_bps) > 1000:
+                raise ValueError("Combined futures slippage cannot exceed 1000 bps")
+            if self.strategy.futures.slippage_ticks + max(self.extra_slippage_ticks) > 1000:
+                raise ValueError("Combined futures execution slippage cannot exceed 1000 ticks")
+            if self.strategy.futures.funding_rate_multiplier * max(self.futures_funding_multipliers) > 5:
+                raise ValueError("Combined futures funding multiplier cannot exceed 5")
+        elif self.strategy.execution.slippage_ticks + max(self.extra_slippage_ticks) > 100:
             raise ValueError("Combined slippage must not exceed 100 ticks")
         return self
 
