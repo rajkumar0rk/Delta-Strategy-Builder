@@ -147,7 +147,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':8,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':9,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
@@ -173,7 +173,7 @@ def run_futures_backtest(req, progress=None):
     qty=cfg.quantity_lots*cfg.contract_btc
     markers=list(alert_markers(frame,strategy,req.start,req.end))
     trades=[];equity_curve=[]  # Marked candle-close equity is appended exactly once per active bar.
-    position=None;pending=None;pending_lifecycle_id=None;fee_total=0.0;fund_total=0.0
+    position=None;pending=None;pending_lifecycle_id=None;pending_lifecycle_snapshot=None;fee_total=0.0;fund_total=0.0
     margin_rejects=0;ambiguous=0;margin_stop_ambiguous=0;unresolved=None
     rejection_reasons={};decisions=[]
     mark_peak=initial;mark_max_dd=0.0;mark_max_dd_pct=0.0;last_close=None;last_equity=initial
@@ -208,7 +208,8 @@ def run_futures_backtest(req, progress=None):
           'holding_minutes':(pd.Timestamp(exit_time)-pd.Timestamp(pos['entry_time'])).total_seconds()/60,
           'mfe_percent':pos['mfe']*100,'mae_percent':pos['mae']*100,
           'exit_reason':reason,'entry_execution_side':'ASK_PROXY' if sign==1 else 'BID_PROXY',
-          'exit_execution_side':'BID_PROXY' if sign==1 else 'ASK_PROXY'}
+          'exit_execution_side':'BID_PROXY' if sign==1 else 'ASK_PROXY',
+          **pos['lifecycle_provenance']}
         trades.append(trade)
         daily['realized']+=net
         daily['consecutive_losses']=daily['consecutive_losses']+1 if net<0 else 0
@@ -245,6 +246,7 @@ def run_futures_backtest(req, progress=None):
         if pending is not None and position is None:
             direction=pending;pending=None
             lifecycle_id=pending_lifecycle_id;pending_lifecycle_id=None
+            lifecycle_snapshot=pending_lifecycle_snapshot;pending_lifecycle_snapshot=None
             px=_slipped(float(row.open),direction,True,cfg.slippage_bps,cfg.tick_size,cfg.slippage_ticks)
             margin=assumed_initial_margin_usd(px,qty,cfg)
             start_fee=fee(px)
@@ -275,7 +277,8 @@ def run_futures_backtest(req, progress=None):
                     accepted_cycle.last_entry_index=i
                 position={'direction':direction,'entry_time':at_open.isoformat(),'entry_price':px,
                     'entry_fee':start_fee,'margin':margin,'funding_usd':0.0,
-                    'mfe':0.0,'mae':0.0}
+                    'mfe':0.0,'mae':0.0,
+                    'lifecycle_provenance':dict(lifecycle_snapshot or {})}
                 markers.append({'id':f"future-entry-{len(trades)+1}",'time':int(at_open.timestamp()),
                     'kind':'entry','direction':'CALL' if direction=='LONG' else 'PUT',
                     'text':direction,'details':{'title':direction+' future','entry_ask':px,'symbol':cfg.symbol}})
@@ -334,6 +337,19 @@ def run_futures_backtest(req, progress=None):
             _update_lifecycles(frame,i,
                 strategy.call_entry if side=='CALL' else strategy.put_entry,
                 _entry_behaviors(strategy,side),cycles[position['direction']])
+        # Advance *both* flat-side lifecycles on every completed candle, even
+        # when a session, NO TRADE or daily risk gate blocks new orders, or
+        # when a position was closed during this candle. An entry may be
+        # blocked, but a historical trigger/cooldown must not freeze in time.
+        # During exposure the opposite direction stays paused (EXCLUSIVE).
+        flat_lifecycles={}
+        if position is None:
+            for direction,enabled,group,side in (
+                ('LONG',call_enabled,strategy.call_entry,'CALL'),
+                ('SHORT',put_enabled,strategy.put_entry,'PUT')):
+                if enabled:
+                    flat_lifecycles[direction]=_update_lifecycles(
+                        frame,i,group,_entry_behaviors(strategy,side),cycles[direction])
         # Marked equity is a candle-close proxy, not the exchange mark.
         # Reserve hypothetical exit taker fee on open exposures.
         last_close=float(row.close)
@@ -363,7 +379,7 @@ def run_futures_backtest(req, progress=None):
             ('SHORT',put_enabled,strategy.put_entry,strategy.put_no_trade,'PUT')):
             if not enabled or not group.configured():continue
             if nt.configured() and evaluate_group(frame,i,nt)['passed']:continue
-            state=_update_lifecycles(frame,i,group,_entry_behaviors(strategy,side),cycles[direction])
+            state=flat_lifecycles.get(direction,[])
             if not any(x['eligible'] for x in state):continue
             tree=evaluate_group(frame,i,group,_entry_ignore_ids(strategy,side))
             score=_big_trend_score(frame,i,group,
@@ -379,13 +395,26 @@ def run_futures_backtest(req, progress=None):
                 selected=eligible[0]
             if selected is not None:
                 pending,pending_lifecycle_id=selected
+                selected_rows=flat_lifecycles[selected[0]]
+                selected_row=next(x for x in selected_rows if x['behavior'].id==selected[1])
+                behavior=selected_row['behavior'];cycle=selected_row['state']
+                pending_lifecycle_snapshot={
+                    'entry_lifecycle_id':behavior.id,
+                    'entry_lifecycle_signal_time':ts.isoformat(),
+                    'entry_lifecycle_age_bars':int(selected_row['age']),
+                    'entry_lifecycle_delay_bars':int(behavior.delay_bars),
+                    'entry_lifecycle_entries_before':int(cycle.entries),
+                    'entry_lifecycle_max_entries':int(behavior.max_entries_per_activation),
+                    'entry_lifecycle_expired':bool(cycle.expired),
+                    'entry_lifecycle_eligible':bool(selected_row['eligible']),
+                }
     if not equity_curve:
         equity_curve.append({'timestamp':req.start,'equity_usd':initial,'peak_equity_usd':initial,'drawdown_usd':0.0,'drawdown_percent':0.0,'equity_source':'NO_TRADING_BARS'})
     if position:
         unresolved={'reason':'END_OF_RANGE_FUTURES_EXPOSURE','entry_time':position['entry_time'],
             'entry_price':position['entry_price'],'direction':position['direction'],
             'entry_fee_usd':position['entry_fee'],'funding_usd':position['funding_usd'],
-            'quantity':qty,'marked_not_realized':True,'last_candle_close':last_close,
+            'quantity':qty,**position['lifecycle_provenance'],'marked_not_realized':True,'last_candle_close':last_close,
             'estimated_unrealized_pnl_usd':(last_close-position['entry_price'])*qty*
                 (1 if position['direction']=='LONG' else -1),
             'estimated_exit_fee_usd':fee(last_close)}
