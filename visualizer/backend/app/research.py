@@ -386,18 +386,25 @@ def _research_subrun_progress(
 def run_execution_replay(req: ExecutionReplayRequest, progress: Callable[..., None] | None = None) -> dict[str, Any]:
     """Full decision/position replays; never mutate the input strategy or L1 archive."""
     rows = []
-    combos = list(itertools.product(req.extra_half_spread_percent, req.extra_slippage_ticks))
-    if (0.0, 0) not in combos:
-        combos = [(0.0, 0), *combos]
+    futures = req.strategy.market_type == 'FUTURES'
+    combos = (list(itertools.product(req.extra_futures_slippage_bps, req.extra_slippage_ticks,
+                                    req.futures_fee_multipliers, req.futures_funding_multipliers))
+              if futures else list(itertools.product(req.extra_half_spread_percent, req.extra_slippage_ticks)))
+    baseline = (0.0, 0, 1.0, 1.0) if futures else (0.0, 0)
+    if baseline in combos:
+        combos.remove(baseline)
+    combos.insert(0, baseline)
     if len(combos) > 12:
         raise ValueError('Baseline plus scenarios must not exceed 12 runs')
-    if req.strategy.execution.extra_half_spread_percent + max(v for v, _ in combos) > 25:
+    if not futures and req.strategy.execution.extra_half_spread_percent + max(v for v, _ in combos) > 25:
         raise ValueError('Total assumed half-spread cannot exceed 25 percent')
-    for index, (half_spread, extra_ticks) in enumerate(combos, start=1):
-        label = (
-            f'Execution scenario +{half_spread:g}% half-spread '
-            f'/ +{extra_ticks} ticks'
-        )
+    for index, scenario in enumerate(combos, start=1):
+        half_spread, extra_ticks = scenario[:2]
+        fee_multiplier, funding_multiplier = scenario[2:] if futures else (1.0, 1.0)
+        label = (f'Futures +{half_spread:g} bps / +{extra_ticks} ticks / '
+                 f'fees x{fee_multiplier:g} / funding x{funding_multiplier:g}'
+                 if futures else
+                 f'Execution scenario +{half_spread:g}% half-spread / +{extra_ticks} ticks')
         if progress:
             progress(
                 f'{label} ({index}/{len(combos)}): starting',
@@ -406,8 +413,14 @@ def run_execution_replay(req: ExecutionReplayRequest, progress: Callable[..., No
                 'Run entry, exit and risk evaluation',
             )
         config = req.strategy.model_copy(deep=True)
-        config.execution.extra_half_spread_percent += half_spread
-        config.execution.slippage_ticks += extra_ticks
+        if futures:
+            config.futures.slippage_bps += half_spread
+            config.futures.slippage_ticks += extra_ticks
+            config.futures.taker_fee_percent *= fee_multiplier
+            config.futures.funding_rate_multiplier *= funding_multiplier
+        else:
+            config.execution.extra_half_spread_percent += half_spread
+            config.execution.slippage_ticks += extra_ticks
         case = BacktestRequest(
             **req.model_dump(include={'dataset_mode','dataset_id','dataset_ids','auto_download_missing_data'}),
             start=req.start, end=req.end, strategy=config,
@@ -427,8 +440,11 @@ def run_execution_replay(req: ExecutionReplayRequest, progress: Callable[..., No
                 'Next scenario' if index < len(combos) else 'Finalize replay results',
             )
         rows.append({
-            'extra_half_spread_percent': half_spread,
+            'extra_half_spread_percent': None if futures else half_spread,
+            'extra_futures_slippage_bps': half_spread if futures else None,
             'extra_slippage_ticks': extra_ticks,
+            'futures_fee_multiplier': fee_multiplier if futures else None,
+            'futures_funding_multiplier': funding_multiplier if futures else None,
             'run_id': result['run_id'], 'cache_hit': bool(result.get('cache_hit')),
             'metrics': result['metrics'],
             'unresolved_position': result.get('unresolved_position'),
@@ -441,6 +457,20 @@ def run_execution_replay(req: ExecutionReplayRequest, progress: Callable[..., No
             float(baseline.get('net_pnl_usd') or 0.0)
         )
         row['delta_trades'] = int(row['trades']) - int(rows[0]['trades'])
+    if futures:
+        return {
+            'kind': 'FUTURES_EXECUTION_REPLAY', 'mode': 'FUTURES_OHLC_RESEARCH_ONLY',
+            'scenario_count': len(rows), 'scenarios': rows,
+            'base_slippage_bps': req.strategy.futures.slippage_bps,
+            'base_slippage_ticks': req.strategy.futures.slippage_ticks,
+            'base_taker_fee_percent': req.strategy.futures.taker_fee_percent,
+            'base_funding_multiplier': req.strategy.futures.funding_rate_multiplier,
+            'note': ('Each scenario reruns futures entries, exits, collateral, fees and funding '
+                     'under adverse OHLC-derived execution assumptions. Historical spreads, '
+                     'mark prices, order book and liquidation timings are NOT observed. '
+                     'Funding multipliers apply only to supplied rates; excluded funding '
+                     'cannot be reconstructed by stress testing.')
+        }
     return {
         'kind': 'FULL_EXECUTION_REPLAY', 'mode': 'LOW_FIDELITY_RESEARCH_ONLY',
         'scenario_count': len(rows), 'scenarios': rows,
