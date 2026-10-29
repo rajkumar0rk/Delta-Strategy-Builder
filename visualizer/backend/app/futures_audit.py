@@ -71,7 +71,7 @@ def audit_futures_parity(result:dict, chart:dict, *, timeframe_minutes:int) -> d
             failures.append(f"Nonfinite futures execution: trade {t.get('id')}")
         bar=bars.get(entry+timeframe_minutes*60)
         if bar is None:
-            warnings.append(f"No corresponding OHLC bar at entry {t['entry_time']} (chart cropped or data missing)")
+            failures.append(f"Missing OHLC entry bar at {t['entry_time']}; cannot certify parity")
         else:
             opened=float(bar["open"]);fill=float(t["entry_price"])
             if sign==1 and fill<opened-1e-8 or sign==-1 and fill>opened+1e-8:
@@ -79,7 +79,7 @@ def audit_futures_parity(result:dict, chart:dict, *, timeframe_minutes:int) -> d
             checked_fills+=1
         signal=states.get(entry)
         if signal is None:
-            warnings.append(f"No completed-candle preview signal at entry {t['entry_time']}")
+            failures.append(f"Missing completed-candle preview signal at {t['entry_time']}; cannot certify parity")
         else:
             prefix="call" if sign==1 else "put"
             if not signal.get(prefix+"_passed"):
@@ -98,6 +98,8 @@ def audit_futures_parity(result:dict, chart:dict, *, timeframe_minutes:int) -> d
         if used_entries[key]>entries[key]:
             failures.append("Missing chart marker for unresolved futures entry")
         warnings.append("Unresolved open exposure is excluded from closed-trade net P&L")
+    if not chart.get("condition_states") or not chart.get("bars"):
+        failures.append("Chart preview contains no rule states or OHLC bars")
     if sum(entries.values())!=len(trades)+int(bool(unresolved)):
         failures.append("Futures entry marker count does not equal opened positions")
     if sum(exits.values())!=len(trades):
@@ -109,6 +111,8 @@ def audit_futures_parity(result:dict, chart:dict, *, timeframe_minutes:int) -> d
     closed_net=sum(float(t["net_pnl_usd"]) for t in trades)
     if not _same(closed_net,(result.get("metrics") or {}).get("net_pnl_usd",0)):
         failures.append("Aggregate closed-trade net P&L does not reconcile")
+    if checked_signals < len(trades) or checked_fills < len(trades):
+        failures.append("Not all closed-trade signals and execution bars were independently checked")
     warnings.append("Chart lifecycle readiness is a diagnostic, not a position-aware replay")
     warnings.append("Chart markers are backtest overlays; source OHLC and rule states are independent")
     warnings.append("Actual Delta orderbook fills, historical mark prices, FX collateral and liquidations are not verified")
