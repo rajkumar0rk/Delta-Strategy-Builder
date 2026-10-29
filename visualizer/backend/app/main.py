@@ -179,7 +179,7 @@ def list_strategies():
 
 @app.get('/api/strategies/{strategy_id}')
 def load_strategy(strategy_id: str):
-    root = project_root() / 'strategy-lab' / 'strategies'.resolve()
+    root = (project_root() / 'strategy-lab' / 'strategies').resolve()
     safe = re.sub(r'[^a-zA-Z0-9_-]+', '', strategy_id)
     candidates = [root / f'{safe}.strategy.json', root / f'{safe}.json']
     path = next((p for p in candidates if p.exists()), None)
