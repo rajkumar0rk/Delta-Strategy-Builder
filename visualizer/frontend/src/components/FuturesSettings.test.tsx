@@ -14,7 +14,7 @@ describe('BTCUSD perpetual futures market editor',()=>{
   const html=renderToStaticMarkup(<FuturesSettings value={s} onChange={()=>{}}/>);
   for(const field of ['LONG + SHORT','Quantity (lots of 0.001 BTC)',
      'Assumed leverage','Isolated','Cross','Taker fee','GST','Adverse slippage',
-     'Funding history','Require historical funding CSV','Starting balance',
+     'Funding history','Require historical funding CSV','automatically downloaded once','not verified funding settlements','Starting balance',
      'Daily max loss','Maximum hold','session boundary','Add session window']){
     expect(html).toContain(field);
   }
