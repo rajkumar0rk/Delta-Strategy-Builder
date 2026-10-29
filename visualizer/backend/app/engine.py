@@ -1956,6 +1956,27 @@ def chart_payload(req, run_result=None):
                     prev_phase=phase
                 prev_active=active; prev_retest=retest
 
+    # Raw lifecycle triggers are evaluated independently of _update_cycle,
+    # including warm-up candles and each configured trigger_condition_id.
+    lifecycle_triggers = None
+    if strategy is not None and strategy.market_type == 'FUTURES':
+        from .rules import find_condition, evaluate_condition
+        lifecycle_triggers = []
+        for idx, (stamp, _) in enumerate(full_signal_frame.iterrows()):
+            record = {'time': int(stamp.timestamp())}
+            for side, group in (('call', strategy.call_entry), ('put', strategy.put_entry)):
+                behaviors = _entry_behaviors(strategy, side.upper())
+                triggers = {}
+                for behavior in behaviors:
+                    if behavior.trigger_condition_id:
+                        condition = find_condition(group, behavior.trigger_condition_id)
+                        trigger = bool(evaluate_condition(full_signal_frame, idx, condition)['passed']) if condition else False
+                    else:
+                        trigger = bool(evaluate_group(full_signal_frame, idx, group)['passed'])
+                    triggers[behavior.id] = trigger
+                record[side] = triggers
+            lifecycle_triggers.append(record)
+
     condition_states: list[dict[str, Any]] = []
     if strategy is not None:
         call_enabled = strategy.direction_mode in {'CALL', 'BOTH'}
@@ -2035,6 +2056,7 @@ def chart_payload(req, run_result=None):
         ],
         'study_markers': study_markers,
         'condition_states': condition_states,
+        'lifecycle_triggers': lifecycle_triggers,
         'warmup': warmup,
     }
 
