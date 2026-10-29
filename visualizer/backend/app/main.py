@@ -13,6 +13,7 @@ from .config import project_root, result_root
 from .analysis import build_analysis, build_analysis_package
 from .ai_prompt import build_strategy_prompt
 from .futures_validation import run_futures_validation
+from .futures_audit import audit_futures_parity
 from .research import run_sweep, run_ablation, list_results, run_execution_replay, run_holdout
 from .trend_discovery import run_trend_discovery
 from .archive_sync import plan_archive_sync, ensure_archive_data
@@ -228,6 +229,19 @@ def execution_replay(req: ExecutionReplayRequest):
 def research_holdout(req: HoldoutResearchRequest):
     jid = jobs.create(lambda progress: run_holdout(req, progress))
     return {'job_id': jid}
+
+
+@app.post('/api/research/futures-parity-audit')
+def futures_parity_audit(req: BacktestRequest):
+    if req.strategy.market_type != 'FUTURES':
+        raise HTTPException(400, 'Futures parity audit requires market_type=FUTURES')
+    def work(progress):
+        result = run_backtest(req, progress)
+        progress('Recomputing independent chart signals',96,'PARITY_AUDIT','Compare executed trades')
+        chart = chart_payload(req)
+        timeframe={'5m':5,'10m':10,'15m':15,'30m':30,'1h':60}[req.strategy.timeframe]
+        return audit_futures_parity(result,chart,timeframe_minutes=timeframe)
+    return {'job_id': jobs.create(work)}
 
 
 @app.post('/api/research/futures-validation')
