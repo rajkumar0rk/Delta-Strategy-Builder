@@ -86,3 +86,14 @@ backend/app/broker_history.py replays validated historical portfolio-margin capt
 
 ### BTCUSD perpetual futures backtests
 `StrategyConfig.market_type` defaults to OPTIONS. FUTURES dispatches from `engine.run_backtest` to `futures_engine.run_futures_backtest`; `data_store.preflight` requires only underlying OHLCV, not option instruments or quotes. The futures engine uses completed indicator/rule signals, dedicated risk/fees/funding configuration and research-only fills, and persists standard storage artifacts. Frontend selects the market using `FuturesSettings.tsx`; `Results.tsx` labels futures-specific limitations. Futures results have a separate cache key incorporating futures funding CSV fingerprints. Full specs: `FUTURES_BACKTEST.md`.
+
+### Current futures research modules (milestones 1–6)
+- `futures_contract.py`: current published BTCUSD contract snapshot, optional margin-tier research math.
+- `futures_engine.py`: OHLC-proxy positions/fees/funding and estimated candle-close equity.
+- `futures_validation.py`: frozen train/holdout with stressed holdout, `/api/research/futures-validation`.
+- `futures_audit.py`: internal chart/entry/marker/fee parity audit, `/api/research/futures-parity-audit`.
+- `research.py`: futures-specific execution replay, `/api/research/execution-replay`.
+- `frontend/src/components/ReplayResearchPanel.tsx`: UI for those three jobs.
+- `ai_prompt.py`: dynamically emits schema-15 importable JSON instructions. `examples/btcusd-futures-research.template.json` provides a static importable sample.
+
+None of these confirms historical executable order-book quotes, portfolio risk, INR collateral conversions or guaranteed returns.
