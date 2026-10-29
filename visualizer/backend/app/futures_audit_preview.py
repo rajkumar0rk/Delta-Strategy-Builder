@@ -106,3 +106,32 @@ def build_futures_audit_preview(frame, strategy, req, result):
         "source_entry_candles": len(condition_states),
         "chart_render_limit_bypassed": True,
     }
+
+
+def futures_audit_payload(req, result):
+    """Reload source candles exactly as the backtest/preview do, without UI chart arrays."""
+    from .data_store import DataStore
+    from .warmup import required_warmup_candles, historical_bar_sources, load_daily_source
+    from .indicators import compute_indicators
+    from .engine import _prepare_strategy_state
+    store = DataStore()
+    try:
+        parts = store.resolve_request(req, require_options=False)
+        strategy = req.strategy
+        count = required_warmup_candles(
+            strategy.indicators, strategy.timeframe,
+            minimum=getattr(req,"warmup_candles",500), strategy=strategy)
+        sources = historical_bar_sources(
+            store, parts, req.start, strategy.timeframe, count,
+            archive_neighbors=getattr(req,"dataset_mode","SINGLE") in ("ARCHIVE","AUTO"))
+        store._bar_gap_policy = req.bar_gap_policy
+        bars = store.load_bars_many(
+            sources,req.start,req.end,strategy.timeframe,warmup_candles=count)
+        daily = load_daily_source(
+            store,sources,req.start,req.end,strategy.timeframe,count,strategy.indicators)
+        frame,_ = compute_indicators(
+            bars,strategy.indicators,strategy.timeframe,daily_source=daily)
+        _prepare_strategy_state(frame,strategy)
+        return build_futures_audit_preview(frame,strategy,req,result)
+    finally:
+        store.close()
