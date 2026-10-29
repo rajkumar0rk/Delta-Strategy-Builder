@@ -163,7 +163,7 @@ def build_analysis(run_id: str) -> dict[str, Any]:
         'weekday_ist': rows_for({day: by_weekday[day] for day in weekday_order if day in by_weekday}),
         'equity_curve': summary.get('equity_curve') or _read_csv(path / 'equity_curve.csv') or _read_csv(path / 'equity_curve.csv.gz'),
         'fee_model': summary.get('fee_model', {}),
-        'execution_stress': build_execution_stress(trades, summary.get('fee_model') or {}, summary.get('reliability') or {}),
+        'execution_stress': (None if (summary.get('strategy') or {}).get('market_type')=='FUTURES' else build_execution_stress(trades, summary.get('fee_model') or {}, summary.get('reliability') or {})),
         'robustness_v163': analyze_trade_robustness(trades),
     }
     analysis['observations'] = _observations(analysis)
