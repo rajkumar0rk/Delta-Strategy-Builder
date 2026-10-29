@@ -1,51 +1,13 @@
-# Project context
+# Project orientation
 
-## Product
+This repository contains a shared `backtest/` research/archive package and the maintained **`visualizer/` BTC Strategy Lab** app. See [the canonical Strategy Lab project contract](../../visualizer/codex/PROJECT.md) and [futures guide](../../visualizer/codex/FUTURES_BACKTEST.md).
 
-**BTC Strategy Lab V15** is a local-first visual strategy research and options backtesting application. It is not a live broker/order-routing system.
+The app supports `OPTIONS` (original) and `FUTURES` (`BTCUSD` perpetual) strategy modes; JSON import schema stays **15**. Futures uses completed OHLC candles as research execution proxies, independent LONG/SHORT rules, simulated fees/GST/funding assumptions, and separately labeled estimated margin and drawdown.
 
-Repository layout (relevant subset):
+Merged development work: futures engine, lifecycle/funding fixes, replay, Delta contract *snapshot*, frozen historical holdout workflow, and internal chart/backtest parity audit. **All remain research-only**; passing CI has not validated profitability against the user's complete local archive.
 
-```text
-Delta-Strategy-Builder/
-├── .venv/
-├── backtest/
-│   ├── history_archive.py
-│   ├── providers/delta_india.py
-│   └── data/delta-history/
-│       ├── catalog.json
-│       └── segments/...
-└── strategy-lab/
-    ├── backend/
-    ├── frontend/
-    ├── examples/
-    ├── strategies/       # user-created; may not exist in source package
-    ├── results/          # generated; may be very large in legacy installs
-    ├── .cache/           # quote indexes + backtest cache
-    ├── codex/
-    └── AGENTS.md
-```
+Source-of-truth code: `visualizer/backend/app/models.py`, `futures_engine.py`, `futures_contract.py`, `futures_validation.py`, `futures_audit.py`, `main.py`, and `visualizer/frontend/src/components/FuturesSettings.tsx`.
 
-## Current engine capabilities
+Historical data belongs in `backtest/data/delta-history` with `catalog.json`; never duplicate, move or alter the archive for a documentation task.
 
-- 5m/10m/15m/30m/1h strategy candles built from downloaded 5m underlying history.
-- EMA/SMA/VWAP/RSI/ATR/MACD/Stochastic/Stoch RSI/Bollinger/volume/Donchian.
-- ADX/+DI/-DI, derived formulas, candle strength, ATR expansion, overextension.
-- Confirmed pivots, market structure/BOS, regular + hidden divergence, support/resistance.
-- Count-based history rules, crosses-within-window, multi-bar slope.
-- CALL-only, PUT-only, or BOTH; BUY or SELL option positions.
-- Multiple independent entry lifecycles per direction.
-- Multiple entry-session windows per local day.
-- Continuous/persistent Big Trend Score and directional trend phase state machine.
-- Remembered breakout, retest, false-breakout block/rearm, trend age.
-- Shared and directional NO-TRADE rules.
-- Daily risk controls and fee-aware minimum-edge filter.
-- Delta options fee cap + GST model.
-- Unified history archive with catalog-based segment selection and opt-in missing-day download.
-- Parameter sweep, ablation, walk-forward/robustness research, historical Big-vs-fake trend discovery.
-- Cooperative progress/cancellation.
-- V15 compact result storage and retention controls.
-
-## User workflow assumptions
-
-The user commonly tests long BTC history ranges and many parameter combinations. Performance, deterministic behavior, and avoiding unnecessary reprocessing are important. The user wants visual configurability rather than features that exist only in code.
+The older standalone research workflow under `backtest/` is separate and retains its own `AGENTS.md` rules. Read [root AGENTS.md](../../AGENTS.md) and [visualizer/AGENTS.md](../../visualizer/AGENTS.md).

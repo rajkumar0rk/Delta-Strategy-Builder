@@ -2,7 +2,7 @@
 
 ## Product
 
-**BTC Strategy Lab V15.2 / V16 phase 1** is a local-first visual strategy research and options backtesting application. It is not a live broker/order-routing system.
+**BTC Strategy Lab** is a local-first visual strategy research and options/BTCUSD perpetual futures backtesting application. It is not a live broker/order-routing system.
 
 Repository layout (relevant subset):
 
@@ -62,5 +62,15 @@ Backtest request warm-up and strict REQUIRE handling, mark-to-market risk sampli
 ## Separate BTCUSD perpetual futures research (v1)
 The opt-in `market_type=FUTURES` routes the same indicator, completed-5m data, signal trees and alerts into `backend/app/futures_engine.py`. LONG uses CALL signal rules, SHORT uses PUT rules, with exclusive positions, estimated OHLC/open execution and dedicated futures contracts/fees, leverage, price-based stops, funding CSV, session and daily risk. It is research only, not historical exchange-accurate margin/liquidation or an actual bid/ask replay. `market_type=OPTIONS` preserves the original options engine. See `FUTURES_BACKTEST.md`.
 
-### Futures correctness hardening (review branch)
-Accepted futures orders consume independent lifecycle limits; pre-range candles warm lifecycle state without trades. Funding settlement occurs only for positions remaining open at candle close. Estimated intrabar stop-versus-margin ordering is conservative but not a proven exchange execution path. Futures fills support configurable tick rounding and additional adverse tick slippage; no historical futures BBO is available. The simulator remains RESEARCH_ONLY. Futures execution-replay scenarios based on option premium/tick controls, futures-specific stress and complete decision traces are NOT yet implemented; do not interpret the option-specific analysis as futures validation.
+### Futures correctness hardening (merged)
+Accepted futures orders consume independent lifecycle limits; pre-range candles warm lifecycle state without trades. Funding settlement occurs only for positions remaining open at candle close. Estimated intrabar stop-versus-margin ordering is conservative but not a proven exchange execution path. Futures fills support configurable tick rounding and additional adverse tick slippage; no historical futures BBO is available. The simulator remains RESEARCH_ONLY. Futures execution replay uses dedicated futures slippage/fee/funding assumptions; historical holdout and internal chart parity jobs are implemented. Complete position-aware chart lifecycle parity, true broker fills, mark prices and liquidation remain unverified.
+
+## Six completed futures implementation milestones
+1. Separate BTCUSD futures LONG/SHORT backtester.
+2. Lifecycle, funding and conservative fills.
+3. Futures replay, equity proxy and rejection diagnostics.
+4. Dated Delta contract snapshot, historical funding guard and optional current-published margin tiers.
+5. Frozen-strategy train/holdout/stress validation (`futures_validation.py`).
+6. Internal rule/fill/fee/chart-marker parity audit (`futures_audit.py`).
+
+Merged code is still **RESEARCH_ONLY**. Real historical P&L requires running on an accessible archive. Importable strategies retain schema_version **15**, while backtest request settings are separate. See `FUTURES_BACKTEST.md` and `FUTURES_STRATEGY_JSON_PROMPT.md`.

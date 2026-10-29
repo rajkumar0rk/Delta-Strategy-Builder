@@ -4,7 +4,7 @@ Read `codex/PROJECT.md`, `codex/ARCHITECTURE.md`, `codex/DATA_AND_BACKTEST_RULES
 
 ## Scope
 
-This folder is the visual BTC options research/backtesting application inside the larger `Delta-Strategy-Builder` repository. The repository root is the parent of the current source app folder. In the user's current layout the source app folder is named `visualizer/`.
+This folder is the visual BTC options and BTCUSD perpetual futures research/backtesting application inside the larger `Delta-Strategy-Builder` repository. The repository root is the parent of the current source app folder. In the user's current layout the source app folder is named `visualizer/`.
 
 ## Non-negotiable rules
 
@@ -62,3 +62,6 @@ Use codex/CHANGE_IMPACT_MATRIX.md for all edits. Keep request-level warm-up sepa
 ## V16 phase 1 companion change rules
 
 Execution stress is analysis only. If changed, synchronize execution_stress.py, analysis.py, AnalysisPanel.tsx, ExecutionStressPanel.tsx, frontend types, AI strategy prompt, tests and codex/V16_EXECUTION_STRESS.md.
+
+## Futures research context
+Read `codex/FUTURES_BACKTEST.md` for the merged six-milestone futures implementation, and `codex/FUTURES_STRATEGY_JSON_PROMPT.md` for schema-safe futures strategy generation. `market_type=FUTURES` remains OHLC-proxy `RESEARCH_ONLY`; do not infer historical exchange margin or actual fills. Futures strategy JSON uses schema_version 15. Prefer the canonical `visualizer/codex` context over stale root-level copies.
