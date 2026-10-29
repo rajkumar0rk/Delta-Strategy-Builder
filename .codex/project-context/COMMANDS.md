@@ -17,14 +17,14 @@ API docs: `http://127.0.0.1:8010/docs`
 ## Backend tests
 
 ```powershell
-Set-Location C:\projects\workspace\Delta-Strategy-Builder\strategy-lab\backend
+Set-Location C:\projects\workspace\Delta-Strategy-Builder\visualizer\backend
 & "..\..\.venv\Scripts\python.exe" -m pytest -q
 ```
 
 ## Frontend build
 
 ```powershell
-Set-Location C:\projects\workspace\Delta-Strategy-Builder\strategy-lab\frontend
+Set-Location C:\projects\workspace\Delta-Strategy-Builder\visualizer\frontend
 npm run build
 ```
 
