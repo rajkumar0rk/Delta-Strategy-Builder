@@ -10,10 +10,10 @@ def sample():
            'gross_pnl_usd':0.009,'net_pnl_usd':0.007}
     return ({'strategy':{'market_type':'FUTURES'},'trades':[trade],
              'metrics':{'net_pnl_usd':0.007},'markers':[
-                 {'time':1735689900,'kind':'entry','direction':'CALL'},
-                 {'time':1735690500,'kind':'exit','direction':'CALL'}]},
-            {'bars':[{'time':1735690200,'open':100}],
-             'condition_states':[{'time':1735689900,'call_passed':True,
+                 {'time':1767225900,'kind':'entry','direction':'CALL'},
+                 {'time':1767226500,'kind':'exit','direction':'CALL'}]},
+            {'bars':[{'time':1767226200,'open':100}],
+             'condition_states':[{'time':1767225900,'call_passed':True,
                 'no_trade_active':False,'call_no_trade_active':False,'call_delay_ready':True}]})
 
 
