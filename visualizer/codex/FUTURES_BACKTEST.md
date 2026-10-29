@@ -1,4 +1,4 @@
-# BTCUSD perpetual futures research — first implementation
+# BTCUSD perpetual futures research — six merged implementation milestones
 
 Futures is an opt-in market within the existing Strategy Lab UI; OPTIONS remains the default and all existing strategy JSON stays valid. Select **Strategy market → BTCUSD perpetual futures**. Existing bullish CALL conditions act as LONG signals; existing bearish PUT conditions act as SHORT signals. Rule trees, indicators, MTF data, historical warnings, directional no-trade gates, entry lifecycles and score gates are reused. A dedicated `futures` config controls size/fees/funding/price stops, not the option premium controls.
 
@@ -33,7 +33,7 @@ npm run test
 npm run build
 ```
 
-## Correctness hardening (review branch, October 2026)
+## Correctness hardening (merged, October 2026)
 - Futures lifecycle states are warmed over pre-range history, and accepted entries consume their selected lifecycle's entry limit/cooldown.
 - Funding is applied only after a position survives the corresponding candle; OHLC cannot prove intrabar funding eligibility.
 - Stops take priority over estimated intrabar margin breaches unless a breach already exists at candle OPEN. The ambiguous case is counted; this is NOT a Delta liquidation replay.
