@@ -156,7 +156,7 @@ def run_futures_backtest(req, progress=None):
     initial=balance;peak=balance;max_dd=0.0;max_dd_pct=0.0
     qty=cfg.quantity_lots*cfg.contract_btc
     markers=list(alert_markers(frame,strategy,req.start,req.end))
-    trades=[];equity_curve=[{'timestamp':req.start,'equity_usd':balance,'peak_equity_usd':balance,'drawdown_usd':0.0,'drawdown_percent':0.0}]
+    trades=[];equity_curve=[]  # Marked candle-close equity is appended exactly once per active bar.
     position=None;pending=None;pending_lifecycle_id=None;fee_total=0.0;fund_total=0.0
     margin_rejects=0;ambiguous=0;margin_stop_ambiguous=0;unresolved=None
     rejection_reasons={};decisions=[]
@@ -357,6 +357,8 @@ def run_futures_backtest(req, progress=None):
                 selected=eligible[0]
             if selected is not None:
                 pending,pending_lifecycle_id=selected
+    if not equity_curve:
+        equity_curve.append({'timestamp':req.start,'equity_usd':initial,'peak_equity_usd':initial,'drawdown_usd':0.0,'drawdown_percent':0.0,'equity_source':'NO_TRADING_BARS'})
     if position:
         unresolved={'reason':'END_OF_RANGE_FUTURES_EXPOSURE','entry_time':position['entry_time'],
             'entry_price':position['entry_price'],'direction':position['direction'],
