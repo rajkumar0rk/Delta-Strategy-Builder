@@ -41,6 +41,12 @@ def _funding_files(parts):
 
 def funding_events(parts, start, end, *, required):
     """Import settlement-time BTCUSD funding rates. Never infer missing rates."""
+    first=pd.Timestamp(start)
+    first=first.tz_localize('UTC') if first.tzinfo is None else first.tz_convert('UTC')
+    if first < pd.Timestamp(EIGHT_HOUR_FUNDING_FROM_UTC):
+        if required:
+            raise ValueError('FUTURES_HISTORICAL_FUNDING_REGIME_UNSUPPORTED: pre-2025-09-08 minute-by-minute funding needs a separate model')
+        return {}, []
     events={}
     files=list(_funding_files(parts))
     if required and not files:
