@@ -6,6 +6,9 @@ const defaults:FuturesConfig={symbol:'BTCUSD',contract_btc:0.001,quantity_lots:1
  funding_mode:'REQUIRE_CSV'};
 export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Strategy)=>void}){
  const f=value.futures||defaults;
+ const risk=(patch:Record<string,any>)=>onChange({...value,risk:{...value.risk,...patch}});
+ const session=(patch:Partial<Strategy['session']>)=>onChange({...value,session:{...value.session,...patch}});
+ const windows=value.session.windows?.length?value.session.windows:[{start:'00:00',end:'23:59'}];
  const set=(patch:Partial<FuturesConfig>)=>onChange({...value,futures:{...f,...patch}});
  const number=(name:keyof FuturesConfig,label:string,step:string,min:number)=>(
   <label key={name}>{label}<input type="number" min={min} step={step} value={f[name] as number??''}
@@ -31,5 +34,24 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   <label>Funding history<select value={f.funding_mode} onChange={e=>set({funding_mode:e.target.value as FuturesConfig['funding_mode']})}><option value="REQUIRE_CSV">Require historical funding CSV</option><option value="EXCLUDE_WITH_WARNING">Exclude funding (research only)</option></select></label>
  </div>
  <div className="warning-box"><b>Accuracy limitations:</b> Futures fills use historical 5m-derived OHLC and assumed slippage, not recorded futures order-book quotes. Funding requires <code>futures_funding.csv</code> with timestamp, symbol and decimal funding_rate. Collateral and liquidation are approximations; no Delta exchange liquidation precision is claimed. Backtests never place orders.</div>
+ </section>
+ <section className="card"><h2>Futures risk and entry sessions</h2>
+ <div className="form-grid">
+  <label>Starting balance (USD)<input type="number" min="1" step="10" value={value.risk.starting_balance_usd} onChange={e=>risk({starting_balance_usd:Number(e.target.value)})}/></label>
+  <label>Maximum hold (minutes)<input type="number" min="1" placeholder="No limit" value={value.risk.max_hold_minutes??''} onChange={e=>risk({max_hold_minutes:e.target.value===''?null:Number(e.target.value)})}/></label>
+  <label className="switch"><input type="checkbox" checked={!!value.risk.close_at_session_end} onChange={e=>risk({close_at_session_end:e.target.checked})}/><span>Close at session boundary (next candle open)</span></label>
+  <label>Daily max trades<input type="number" min="1" value={value.risk.max_trades_per_day??''} placeholder="No limit" onChange={e=>risk({max_trades_per_day:e.target.value===''?null:Number(e.target.value)})}/></label>
+  <label>Daily max loss %<input type="number" min="0.01" max="100" step="0.1" value={value.risk.max_daily_loss_percent??''} placeholder="No limit" onChange={e=>risk({max_daily_loss_percent:e.target.value===''?null:Number(e.target.value)})}/></label>
+  <label>Daily max consecutive losses<input type="number" min="1" value={value.risk.max_consecutive_losses??''} placeholder="No limit" onChange={e=>risk({max_consecutive_losses:e.target.value===''?null:Number(e.target.value)})}/></label>
+  <label>Entry session timezone<input value={value.session.timezone} onChange={e=>session({timezone:e.target.value})}/></label>
+ </div>
+ <div className="session-window-list">{windows.map((w,i)=><div className="session-window" key={i}>
+  <b>Window {i+1}</b>
+  <label>Start<input type="time" value={w.start} onChange={e=>{const next=windows.map((x,j)=>j===i?{...x,start:e.target.value}:x);session({windows:next,start:next[0].start,end:next[0].end})}}/></label>
+  <label>End<input type="time" value={w.end} onChange={e=>{const next=windows.map((x,j)=>j===i?{...x,end:e.target.value}:x);session({windows:next,start:next[0].start,end:next[0].end})}}/></label>
+  <button className="mini danger" disabled={windows.length===1} onClick={()=>{const next=windows.filter((_,j)=>i!==j);session({windows:next,start:next[0].start,end:next[0].end})}}>Remove</button>
+ </div>)}</div>
+ <button className="mini ghost" onClick={()=>session({windows:[...windows,{start:'00:00',end:'23:59'}]})}>+ Add session window</button>
+ <p>Entry windows limit new positions. Existing positions remain protected by their price stop and take profit. Session-end exits and time exits are executed at the following candle open.</p>
  </section>
 }
