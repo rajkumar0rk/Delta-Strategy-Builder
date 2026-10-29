@@ -56,7 +56,7 @@ The user commonly tests long BTC history ranges and many parameter combinations.
 
 ## V15.2 + V16 phase 1
 
-Backtest request warm-up and strict REQUIRE handling, mark-to-market risk sampling, stale-quote unresolved position metadata, ablation fixes, and analysis-only execution cost sensitivity. The strategy import schema remains version 15. No live broker routing or recorded order-book replay. See V15_2_ACCURACY_AND_TRUST.md and V16_EXECUTION_STRESS.md.
+Backtest request warm-up and strict REQUIRE handling, mark-to-market risk sampling, stale-quote unresolved position metadata, ablation fixes, and analysis-only execution cost sensitivity. The strategy import schema remains version 15. No live broker routing or recorded order-book replay. See V16_EXECUTION_STRESS.md and FUTURES_BACKTEST.md.
 
 
 ## Separate BTCUSD perpetual futures research (v1)
