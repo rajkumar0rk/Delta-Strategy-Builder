@@ -62,3 +62,20 @@ def test_audit_flags_exact_fill_mismatch():
     result['trades'][0]['entry_price']=101
     assert any('configured adverse slippage' in x for x in
         audit_futures_parity(result,chart,timeframe_minutes=5)['failures'])
+
+
+def test_audit_rejects_ineligible_entry_provenance():
+    result,chart=sample()
+    result['trades'][0].update(
+        entry_lifecycle_id='life-1',
+        entry_lifecycle_signal_time='2026-01-01T00:05:00Z',
+        entry_lifecycle_age_bars=1,
+        entry_lifecycle_delay_bars=2,
+        entry_lifecycle_entries_before=1,
+        entry_lifecycle_max_entries=1,
+        entry_lifecycle_expired=True,
+        entry_lifecycle_eligible=False,
+    )
+    report=audit_futures_parity(result,chart,timeframe_minutes=5)
+    assert report['status']=='FAILED'
+    assert any('lifecycle' in item.lower() for item in report['failures'])
