@@ -2,7 +2,7 @@ import {useEffect,useRef,useState} from 'react';
 import {api} from '../api';
 import type {JobState,Strategy} from '../types';
 
-type Kind='replay'|'holdout'|'futures-validation';
+type Kind='replay'|'holdout'|'futures-validation'|'futures-parity';
 type ResearchProgress={kind:Kind;jobId:string;job:JobState};
 const done=['COMPLETE','FAILED','CANCELLED'];
 export function ResearchJobProgress({job,onStop}:{job:JobState;onStop:()=>void}){
@@ -28,6 +28,7 @@ export function ReplayResearchPanel({strategy,selection,start,end,onStatus}:{str
  const [replay,setReplay]=useState<any>(null);
  const [holdout,setHoldout]=useState<any>(null);
  const [validation,setValidation]=useState<any>(null);
+ const [parity,setParity]=useState<any>(null);
  const [feedback,setFeedback]=useState('');
  const alive=useRef(true);
  const activeId=useRef<string|null>(null);
@@ -40,7 +41,7 @@ export function ReplayResearchPanel({strategy,selection,start,end,onStatus}:{str
   const token=++generation.current;
   try{
    setFeedback('');
-   const reply=kind==='replay'?await api.executionReplay(payload):kind==='holdout'?await api.researchHoldout(payload):await api.futuresValidation(payload);
+   const reply=kind==='replay'?await api.executionReplay(payload):kind==='holdout'?await api.researchHoldout(payload):kind==='futures-validation'?await api.futuresValidation(payload):await api.futuresParityAudit(payload);
    if(!alive.current||generation.current!==token)return;
    const id=reply.job_id;
    activeId.current=id;
@@ -54,7 +55,8 @@ export function ReplayResearchPanel({strategy,selection,start,end,onStatus}:{str
      if(job.status==='COMPLETE'){
       if(kind==='replay')setReplay(job.result);
       else if(kind==='holdout')setHoldout(job.result);
-      else setValidation(job.result);
+      else if(kind==='futures-validation')setValidation(job.result);
+      else setParity(job.result);
       setFeedback(kind==='replay'?'Execution replay completed.':'Holdout comparison completed.');
      }else if(job.status==='CANCELLED'){
       setFeedback('Research stopped at a safe checkpoint. Existing results are preserved.');
@@ -93,6 +95,10 @@ export function ReplayResearchPanel({strategy,selection,start,end,onStatus}:{str
     futures_fee_multipliers:fees,futures_funding_multipliers:funding});return;
   }
   void run('replay',{...selection,start,end,strategy,extra_half_spread_percent:hs,extra_slippage_ticks:ts});
+ }
+ function auditFutures(){
+  if(activeId.current||submitting.current)return;
+  void run('futures-parity',{...selection,start,end,strategy,storage_mode:'COMPACT',bar_gap_policy:'REQUIRE'});
  }
  function validateFutures(){
   if(activeId.current||submitting.current)return;
@@ -137,6 +143,15 @@ export function ReplayResearchPanel({strategy,selection,start,end,onStatus}:{str
  <button disabled={running||!start||!end} onClick={validateFutures}>Run futures validation</button>
  {active?.kind==='futures-validation'&&<ResearchJobProgress job={active.job} onStop={()=>void stop()}/>}
  {validation&&<div className="table-wrap"><p>{validation.note}</p><table><thead><tr><th>Period</th><th>Trades</th><th>Net $</th><th>PF</th><th>Fees $</th><th>Drawdown $</th><th>Net without best $</th><th>Unresolved</th></tr></thead><tbody>{(['train','holdout','holdout_stressed'] as const).map(key=><tr key={key}><td>{key}</td><td>{validation[key]?.trades}</td><td>{num(validation[key]?.net_closed_usd)}</td><td>{num(validation[key]?.profit_factor)}</td><td>{num(validation[key]?.fees_including_gst_usd)}</td><td>{num(validation[key]?.estimated_candle_close_drawdown_usd)}</td><td>{num(validation[key]?.best_trade_removed_net_usd)}</td><td>{validation[key]?.unresolved_position?'Yes':'No'}</td></tr>)}</tbody></table>{validation.warnings?.map((w:string,i:number)=><p key={i} className="research-job-feedback">{w}</p>)}</div>}
+ </div>}
+ {strategy.market_type==='FUTURES'&&<div>
+ <h3>Milestone 6 · Chart/backtest internal parity audit</h3>
+ <p>Checks completed-candle chart rules, OHLC entry pricing, fee/P&amp;L arithmetic, positions and markers. Limit chart range to 30,000 candles. This does not prove exchange-executable fills.</p>
+ <button disabled={running||!start||!end} onClick={auditFutures}>Audit futures chart parity</button>
+ {active?.kind==='futures-parity'&&<ResearchJobProgress job={active.job} onStop={()=>void stop()}/>}
+ {parity&&<div><strong>{parity.status}</strong> · {parity.checked_closed_trades} closed trades · {parity.checked_preview_signals} checked chart signals
+ {(parity.failures||[]).map((x:string,i:number)=><p key={'fail-'+i} className="research-job-feedback">{x}</p>)}
+ {(parity.warnings||[]).map((x:string,i:number)=><p key={'warn-'+i} className="research-job-feedback">{x}</p>)}</div>}
  </div>}
  {feedback&&<p className="research-job-feedback" role="status">{feedback}</p>}
  </section>;
