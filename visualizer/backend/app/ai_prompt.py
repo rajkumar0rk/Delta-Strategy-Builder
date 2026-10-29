@@ -60,7 +60,7 @@ def build_strategy_prompt(req: AiStrategyPromptRequest) -> str:
             "Historical funding requires futures_funding.csv with timestamp/symbol/funding_rate "
             "or an explicit EXCLUDE_WITH_WARNING research choice. Never invent funding rates.\n"
             "Margin breaches, fills and liquidation prices are estimates, NOT Delta-verified. "
-            "Set risk.profit_protection.mode=NONE. Do not enable the unsupported "
+            "Option-only profit_protection is preserved in JSON but ignored by Futures execution; use futures price stops and targets. Do not enable the unsupported "
             "breakout_retest.require_retest_for_entry feature. Options selection and options "
             "premium execution fields remain in the schema for legacy compatibility, but are ignored for futures.\n"
             "Use no future information to generate signals. No real orders are placed. "
