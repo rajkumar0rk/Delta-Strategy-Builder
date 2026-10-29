@@ -1,4 +1,4 @@
-# Workflow
+# Legacy manual-options research workflow
 
 ## Run One Experiment
 
@@ -33,3 +33,6 @@ can resume.
 Keep engine changes narrowly scoped, add regression tests, and avoid silently
 changing historical assumptions. When semantics change, create a new scenario
 instead of rewriting old results.
+
+## Current Strategy Lab work
+The commands above run the separate `backtest/` manual options pipeline, **not** the `visualizer/` BTCUSD futures validation tool. For that tool read `visualizer/codex/COMMANDS.md` and `visualizer/codex/FUTURES_BACKTEST.md`. Use the Lab's futures historical validation and chart parity jobs only after checking local data coverage; the result remains `RESEARCH_ONLY`.
