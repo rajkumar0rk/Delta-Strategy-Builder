@@ -55,7 +55,7 @@ def test_futures_preflight_does_not_need_option_files(tmp_path,monkeypatch):
     store._bar_gap_policy='REQUIRE'
     p=store.resolve('sample')
     assert p.instruments is None
-    result=store.preflight([p],'2026-01-01T00:00:00Z','2026-01-01T00:55:00Z',_strategy())
+    result=store.preflight([p],'2026-01-01T00:00:00Z','2026-01-01T01:00:00Z',_strategy())
     assert result['ok'],result['errors']
     assert not any('option' in e.lower() for e in result['errors'])
 
@@ -64,7 +64,7 @@ def test_long_futures_runs_without_option_quotes_and_preserves_fee_consistency(t
     _seed(tmp_path,monkeypatch)
     s=_strategy()
     result=run_backtest(BacktestRequest(dataset_id='sample',
-        start='2026-01-01T00:00:00Z',end='2026-01-01T00:55:00Z',strategy=s))
+        start='2026-01-01T00:00:00Z',end='2026-01-01T01:00:00Z',strategy=s))
     assert result['strategy']['market_type']=='FUTURES'
     assert result['metrics']['trades']>=1
     assert result['reliability']['grade']=='RESEARCH_ONLY'
@@ -107,6 +107,6 @@ def test_missing_funding_can_be_explicitly_excluded(tmp_path,monkeypatch):
     s=_strategy()
     s.futures.funding_mode='EXCLUDE_WITH_WARNING'
     result=run_backtest(BacktestRequest(dataset_id='sample',
-        start='2026-01-01T00:00:00Z',end='2026-01-01T00:55:00Z',strategy=s))
+        start='2026-01-01T00:00:00Z',end='2026-01-01T01:00:00Z',strategy=s))
     assert result['futures_research']['funding_mode']=='EXCLUDE_WITH_WARNING'
     assert any('Funding excluded' in str(x) for x in result['reliability']['limitations'])
