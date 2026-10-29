@@ -110,3 +110,31 @@ def test_missing_funding_can_be_explicitly_excluded(tmp_path,monkeypatch):
         start='2026-01-01T00:00:00Z',end='2026-01-01T01:00:00Z',strategy=s))
     assert result['futures_research']['funding_mode']=='EXCLUDE_WITH_WARNING'
     assert any('Funding excluded' in str(x) for x in result['reliability']['limitations'])
+
+
+def test_short_execution_uses_directional_btc_pnl_without_option_instruments(tmp_path,monkeypatch):
+    _seed(tmp_path,monkeypatch)
+    s=_strategy()
+    s.direction_mode='PUT'
+    s.put_entry=RuleGroup(conditions=[
+        Condition(id='short_entry',left='close',operator='GT',value=98)])
+    s.put_entry_lifecycles=[EntryBehavior(id='short-one',delay_bars=0)]
+    result=run_backtest(BacktestRequest(dataset_id='sample',
+        start='2026-01-01T00:00:00Z',end='2026-01-01T01:00:00Z',strategy=s))
+    assert result['metrics']['trades']>=1
+    assert all(t['direction']=='SHORT' for t in result['trades'])
+    for trade in result['trades']:
+        expected=(trade['entry_price']-trade['exit_price'])*trade['quantity']
+        assert trade['gross_pnl_usd']==pytest.approx(expected)
+
+
+def test_futures_rejects_underfunded_entries_instead_of_fabricating_leverage(tmp_path,monkeypatch):
+    _seed(tmp_path,monkeypatch)
+    s=_strategy()
+    s.risk.starting_balance_usd=.01
+    s.futures.leverage=1
+    result=run_backtest(BacktestRequest(dataset_id='sample',
+        start='2026-01-01T00:00:00Z',end='2026-01-01T01:00:00Z',strategy=s))
+    assert result['metrics']['trades']==0
+    assert result['metrics']['insufficient_margin_rejections']>=1
+    assert result['unresolved_position'] is None
