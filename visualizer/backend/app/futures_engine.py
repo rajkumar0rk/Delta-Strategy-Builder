@@ -10,6 +10,7 @@ import json
 import math
 from pathlib import Path
 import pandas as pd
+from zoneinfo import ZoneInfo
 from .data_store import DataStore, parse_time, iso
 from .warmup import required_warmup_candles, historical_bar_sources, warmup_diagnostics, load_daily_source
 from .indicators import compute_indicators
@@ -132,16 +133,15 @@ def run_futures_backtest(req, progress=None):
     _prepare_strategy_state(frame,strategy)
     rates,missing_funding=funding_events(parts,req.start,req.end,
         required=cfg.funding_mode=='REQUIRE_CSV')
-    funding_sorted=sorted((t,v) for t,v in rates.items() if parse_time(req.start)<=t.to_pydatetime()<parse_time(req.end))
     if progress: progress('Evaluating LONG and SHORT futures signals',45,'BACKTEST','Results')
     balance=float(strategy.risk.starting_balance_usd)
     initial=balance;peak=balance;max_dd=0.0;max_dd_pct=0.0
     qty=cfg.quantity_lots*cfg.contract_btc
-    cash_notional_floor=0
     markers=list(alert_markers(frame,strategy,req.start,req.end))
     trades=[];equity_curve=[{'timestamp':req.start,'equity_usd':balance,'peak_equity_usd':balance,'drawdown_usd':0.0,'drawdown_percent':0.0}]
     position=None;pending=None;fee_total=0.0;fund_total=0.0
     risk_rejects=0;ambiguous=0;unresolved=None
+    daily={'day':None,'start_balance':initial,'entries':0,'consecutive_losses':0,'realized':0.0,'blocks':0}
     # Reuse existing CALL-side bullish and PUT-side bearish rule trees, gates,
     # score and lifecycle readiness. No option instruments are loaded.
     call_enabled=strategy.direction_mode in ('CALL','BOTH') and strategy.call_signal_mode!='ALERT_ONLY'
@@ -149,7 +149,6 @@ def run_futures_backtest(req, progress=None):
     cycles={'LONG':_cycle_states(_entry_behaviors(strategy,'CALL')) if call_enabled else {},
             'SHORT':_cycle_states(_entry_behaviors(strategy,'PUT')) if put_enabled else {}}
     tf={'5m':5,'10m':10,'15m':15,'30m':30,'1h':60}[strategy.timeframe]
-    window=frame.loc[(frame.index>=pd.Timestamp(req.start)) & (frame.index<pd.Timestamp(req.end))]
     def fee(price):
         return price*qty*cfg.taker_fee_percent/100*(1+cfg.gst_percent/100)
     def close(pos,exit_time,price,reason):
@@ -175,6 +174,8 @@ def run_futures_backtest(req, progress=None):
           'exit_reason':reason,'entry_execution_side':'ASK_PROXY' if sign==1 else 'BID_PROXY',
           'exit_execution_side':'BID_PROXY' if sign==1 else 'ASK_PROXY'}
         trades.append(trade)
+        daily['realized']+=net
+        daily['consecutive_losses']=daily['consecutive_losses']+1 if net<0 else 0
         markers.append({'id':f"future-exit-{len(trades)}",'time':int(pd.Timestamp(exit_time).timestamp()),
           'kind':'exit','direction':'CALL' if sign==1 else 'PUT','text':reason,'pnl_usd':net,
           'details':{'title':reason,'net_pnl_usd':net,'symbol':cfg.symbol}})
@@ -182,26 +183,16 @@ def run_futures_backtest(req, progress=None):
         max_dd_pct=max(max_dd_pct,(peak-balance)/max(peak,1e-12)*100)
         equity_curve.append({'timestamp':pd.Timestamp(exit_time).isoformat(),'equity_usd':balance,
             'peak_equity_usd':peak,'drawdown_usd':peak-balance,'drawdown_percent':(peak-balance)/max(peak,1e-12)*100})
-    prev_time=None
-    last_bar=None
     for i,(ts,row) in enumerate(frame.iterrows()):
         if ts<pd.Timestamp(req.start) or ts>=pd.Timestamp(req.end):continue
-        last_bar=(ts,row)
-        # Apply recorded funding events strictly after position entry and at or
-        # before the completed bar, requiring exchange funding data for full coverage.
-        if position:
-            sign=1 if position['direction']=='LONG' else -1
-            for t,rate in funding_sorted:
-                if prev_time is not None and prev_time<t<=ts and t>pd.Timestamp(position['entry_time']):
-                    funding=-sign*float(row.open)*qty*rate
-                    position['funding_usd']+=funding
-                    balance+=funding
-                    fund_total+=funding
-        prev_time=ts
+        at_open=ts-pd.Timedelta(minutes=tf)
+        day=at_open.tz_convert(ZoneInfo(strategy.session.timezone)).date()
+        if daily['day']!=day:
+            daily.update(day=day,start_balance=balance,entries=0,consecutive_losses=0,realized=0.0)
         # Exits signalled on a prior completed bar fill at this bar OPEN.
         closed=False
         if isinstance(pending,tuple) and pending[0]=='CLOSE' and position is not None:
-            close(position,ts,float(row.open),'CONDITION_EXIT')
+            close(position,at_open,float(row.open),pending[1])
             position=None;pending=None;closed=True
         # Pending signal from previous completed candle fills at the current
         # bar open, not on the signal bar close.
@@ -210,17 +201,33 @@ def run_futures_backtest(req, progress=None):
             px=_slipped(float(row.open),direction,True,cfg.slippage_bps)
             margin=px*qty/cfg.leverage
             start_fee=fee(px)
-            if balance<margin+start_fee:
+            if ((strategy.risk.max_trades_per_day is not None and daily['entries']>=strategy.risk.max_trades_per_day)
+              or (strategy.risk.max_consecutive_losses is not None and daily['consecutive_losses']>=strategy.risk.max_consecutive_losses)
+              or (strategy.risk.max_daily_loss_percent is not None and strategy.risk.stop_trading_after_daily_loss_limit
+                  and daily['realized']<=-daily['start_balance']*strategy.risk.max_daily_loss_percent/100)
+              or not _session_allowed(at_open,strategy.session)):
+                risk_rejects+=1;daily['blocks']+=1
+            elif balance<margin+start_fee:
                 risk_rejects+=1
             else:
-                balance-=start_fee;fee_total+=start_fee
-                position={'direction':direction,'entry_time':ts.isoformat(),'entry_price':px,
+                balance-=start_fee;fee_total+=start_fee;daily['entries']+=1
+                position={'direction':direction,'entry_time':at_open.isoformat(),'entry_price':px,
                     'entry_fee':start_fee,'margin':margin,'funding_usd':0.0,
                     'mfe':0.0,'mae':0.0}
-                markers.append({'id':f"future-entry-{len(trades)+1}",'time':int(ts.timestamp()),
+                markers.append({'id':f"future-entry-{len(trades)+1}",'time':int(at_open.timestamp()),
                     'kind':'entry','direction':'CALL' if direction=='LONG' else 'PUT',
                     'text':direction,'details':{'title':direction+' future','entry_ask':px,'symbol':cfg.symbol}})
         if position:
+            # Funding is evaluated at scheduled UTC candle closes. If a stop
+            # happens intrabar in that candle, true funding eligibility cannot
+            # be reconstructed from OHLC; the result stays research only.
+            rate=rates.get(ts)
+            if rate is not None and ts>pd.Timestamp(position['entry_time']):
+                funding_sign=1 if position['direction']=='LONG' else -1
+                funding=-funding_sign*float(row.close)*qty*rate
+                position['funding_usd']+=funding
+                balance+=funding
+                fund_total+=funding
             sign=1 if position['direction']=='LONG' else -1
             favorable=(float(row.high)-position['entry_price'])/position['entry_price'] if sign==1 else (position['entry_price']-float(row.low))/position['entry_price']
             adverse=(float(row.low)-position['entry_price'])/position['entry_price'] if sign==1 else (position['entry_price']-float(row.high))/position['entry_price']
@@ -229,7 +236,9 @@ def run_futures_backtest(req, progress=None):
             # Insolvency check is deliberately approximate, NOT Delta's engine.
             worst=(float(row.low) if sign==1 else float(row.high))
             maintenance=worst*qty*cfg.maintenance_margin_percent/100
-            stressed=balance+(worst-position['entry_price'])*qty*sign
+            unrealized=(worst-position['entry_price'])*qty*sign
+            stressed=((position['margin']+unrealized+position['funding_usd']-position['entry_fee'])
+                      if cfg.margin_mode=='ISOLATED' else balance+unrealized)
             if stressed<=maintenance:
                 close(position,ts,worst,'ESTIMATED_MARGIN_BREACH')
                 position=None;closed=True
@@ -243,18 +252,23 @@ def run_futures_backtest(req, progress=None):
                             ambiguous+=1
                     close(position,ts,hit[1],hit[0]);position=None;closed=True
                 elif strategy.risk.max_hold_minutes is not None and (ts-pd.Timestamp(position['entry_time'])).total_seconds()/60>=strategy.risk.max_hold_minutes:
-                    close(position,ts,float(row.close),'TIME_STOP');position=None;closed=True
+                    pending=('CLOSE','TIME_STOP')
                 elif strategy.risk.close_at_session_end and _session_end_due(ts,strategy.session,tf):
-                    close(position,ts,float(row.close),'SESSION_END_EXIT');position=None;closed=True
+                    pending=('CLOSE','SESSION_END_EXIT')
                 elif ((position['direction']=='LONG' and evaluate_group(frame,i,strategy.call_exit)['passed'] and strategy.call_exit.configured())
                    or (position['direction']=='SHORT' and evaluate_group(frame,i,strategy.put_exit)['passed'] and strategy.put_exit.configured())):
                     # Condition known at this candle's close: cannot execute
                     # at this candle's close. Next bar open is required.
-                    pending=('CLOSE',position['direction'])
+                    pending=('CLOSE','CONDITION_EXIT')
         if closed or position or pending is not None or not _session_allowed(ts,strategy.session):continue
         if strategy.risk.close_at_session_end and _session_end_due(ts,strategy.session,tf):continue
         if strategy.no_trade.configured() and evaluate_group(frame,i,strategy.no_trade)['passed']:continue
-        # Do not silently reinterpret daily circuit breakers as lifetime limits.
+        if (strategy.risk.max_trades_per_day is not None and daily['entries']>=strategy.risk.max_trades_per_day
+          or strategy.risk.max_consecutive_losses is not None and daily['consecutive_losses']>=strategy.risk.max_consecutive_losses
+          or strategy.risk.max_daily_loss_percent is not None and strategy.risk.stop_trading_after_daily_loss_limit
+             and daily['realized']<=-daily['start_balance']*strategy.risk.max_daily_loss_percent/100):
+            daily['blocks']+=1
+            continue
         eligible=[]
         for direction,enabled,group,nt,side in (
             ('LONG',call_enabled,strategy.call_entry,strategy.call_no_trade,'CALL'),
@@ -293,7 +307,8 @@ def run_futures_backtest(req, progress=None):
       'avg_mae_percent':sum(t['mae_percent'] for t in trades)/len(trades) if trades else 0,
       'estimated_margin_breaches':sum(t['exit_reason']=='ESTIMATED_MARGIN_BREACH' for t in trades),
       'unresolved_position_count':int(unresolved is not None),
-      'alerts_triggered':sum(m['kind']=='alert' for m in markers),'daily_risk_blocks':risk_rejects,
+      'alerts_triggered':sum(m['kind']=='alert' for m in markers),'daily_risk_blocks':daily['blocks'],
+      'insufficient_margin_rejections':risk_rejects,
       'ambiguous_intrabar_stop_target':ambiguous}
     run_id,out=_new_result_dir(strategy.name)
     result={'run_id':run_id,'result_dir':str(out),'start':req.start,'end':req.end,
