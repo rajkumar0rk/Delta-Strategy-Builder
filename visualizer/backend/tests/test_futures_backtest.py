@@ -138,3 +138,36 @@ def test_futures_rejects_underfunded_entries_instead_of_fabricating_leverage(tmp
     assert result['metrics']['trades']==0
     assert result['metrics']['insufficient_margin_rejections']>=1
     assert result['unresolved_position'] is None
+
+
+def test_futures_slippage_rounds_adversely_to_valid_ticks():
+    assert _slipped(100.1,'LONG',True,0,0.5)==100.5
+    assert _slipped(100.1,'SHORT',True,0,0.5)==100.0
+    assert _slipped(100.1,'LONG',False,0,0.5)==100.0
+    assert _slipped(100.1,'SHORT',False,0,0.5)==100.5
+    assert _slipped(100,'LONG',True,0,0.5,2)==101.0
+
+
+def test_short_take_profit_rejects_impossible_negative_price():
+    with pytest.raises(ValidationError):
+        FuturesConfig(take_profit_percent=100)
+
+
+def test_repeated_futures_signals_respect_one_entry_per_activation(tmp_path,monkeypatch):
+    _seed(tmp_path,monkeypatch)
+    s=_strategy()
+    s.call_entry_lifecycles=[EntryBehavior(id='one-per-trigger',max_entries_per_activation=1)]
+    s.futures.stop_loss_percent=None
+    s.futures.take_profit_percent=0.2
+    result=run_backtest(BacktestRequest(dataset_id='sample',
+        start='2026-01-01T00:00:00Z',end='2026-01-01T01:00:00Z',strategy=s))
+    assert len(result['trades'])==1
+
+
+def test_futures_legacy_config_still_validates_without_tick_fields():
+    data=StrategyConfig(market_type='FUTURES').model_dump()
+    data['futures'].pop('tick_size')
+    data['futures'].pop('slippage_ticks')
+    updated=StrategyConfig.model_validate(data)
+    assert updated.futures.tick_size==0.5
+    assert updated.futures.slippage_ticks==0
