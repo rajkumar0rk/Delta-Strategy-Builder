@@ -40,7 +40,14 @@ def _funding_files(parts):
 
 
 def funding_events(parts, start, end, *, required):
-    """Import settlement-time BTCUSD funding rates. Never infer missing rates."""
+    """Return historical funding only in REQUIRE_CSV mode.
+
+    required=False is the EXCLUDE_WITH_WARNING research choice: ignore *all*
+    source funding rows even if a CSV happens to be present. Previously this
+    mode could quietly charge/credit cash when a file existed.
+    """
+    if not required:
+        return {}, []
     first=pd.Timestamp(start)
     first=first.tz_localize('UTC') if first.tzinfo is None else first.tz_convert('UTC')
     if first < pd.Timestamp(EIGHT_HOUR_FUNDING_FROM_UTC):
@@ -72,12 +79,6 @@ def funding_events(parts, start, end, *, required):
     first=pd.Timestamp(start);last=pd.Timestamp(end)
     first=first.tz_localize('UTC') if first.tzinfo is None else first.tz_convert('UTC')
     last=last.tz_localize('UTC') if last.tzinfo is None else last.tz_convert('UTC')
-    # Funding was exchanged minute-by-minute before 2025-09-08 12:00 UTC.
-    # Historical minute-rate ingestion is deliberately unsupported here.
-    if first < pd.Timestamp(EIGHT_HOUR_FUNDING_FROM_UTC):
-        if required:
-            raise ValueError('FUTURES_HISTORICAL_FUNDING_REGIME_UNSUPPORTED: pre-2025-09-08 minute-by-minute funding requires a separate historical model; use EXCLUDE_WITH_WARNING only for explicitly funding-excluded research')
-        return {}, []
     # Current 8h snapshots at 00:00/08:00/16:00 UTC; verify historical changes.
     # Require ALL schedule records in requested range, not merely during a position.
     expected=pd.date_range(first.ceil('8h'),last-pd.Timedelta(nanoseconds=1),freq='8h',tz='UTC')
@@ -146,7 +147,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':6,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':7,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
