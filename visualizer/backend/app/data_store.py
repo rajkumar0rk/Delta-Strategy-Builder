@@ -710,7 +710,7 @@ class DataStore:
                 text = ', '.join(f"{g['start']} → {g['end_exclusive']}" for g in gaps[:4])
                 errors.append(f'Unified archive catalog has uncovered interval(s) in the requested range: {text}')
             missing_bars = [p.id for p in parts if not p.bars.exists()]
-            order_needed = any(
+            order_needed = strategy.market_type == 'OPTIONS' and any(
                 direction in {"CALL", "PUT"} and
                 (strategy.call_signal_mode if direction == "CALL" else strategy.put_signal_mode) != "ALERT_ONLY"
                 for direction in (["CALL", "PUT"] if strategy.direction_mode == "BOTH" else [strategy.direction_mode])
@@ -770,7 +770,7 @@ class DataStore:
 
         enabled_dirs = [
             direction for direction in (['CALL', 'PUT'] if strategy.direction_mode == 'BOTH' else [strategy.direction_mode])
-            if (strategy.call_signal_mode if direction == 'CALL' else strategy.put_signal_mode) != 'ALERT_ONLY'
+            if strategy.market_type == 'OPTIONS' and (strategy.call_signal_mode if direction == 'CALL' else strategy.put_signal_mode) != 'ALERT_ONLY'
         ]
         if progress:
             progress('Preflight: checking option instruments for enabled direction(s)…')
