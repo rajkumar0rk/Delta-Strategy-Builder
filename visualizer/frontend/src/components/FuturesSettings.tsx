@@ -18,7 +18,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   <label>{label}<input type="number" min="0.01" step="0.1" placeholder="disabled"
   value={f[name]??''} onChange={e=>set({[name]:e.target.value===''?null:Number(e.target.value)})}/></label>
  );
- return <section className="card"><h2>BTCUSD perpetual futures research</h2>
+ return <><section className="card"><h2>BTCUSD perpetual futures research</h2>
  <p>CALL rules become LONG, PUT rules become SHORT. Entries and condition exits are placed at the following candle open. Only one position at a time. No option contracts are required.</p>
  <div className="form-grid">
   <label>Direction<select value={value.direction_mode} onChange={e=>onChange({...value,direction_mode:e.target.value as Strategy['direction_mode']})}><option value="BOTH">LONG + SHORT</option><option value="CALL">LONG only</option><option value="PUT">SHORT only</option></select></label>
@@ -53,5 +53,5 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
  </div>)}</div>
  <button className="mini ghost" onClick={()=>session({windows:[...windows,{start:'00:00',end:'23:59'}]})}>+ Add session window</button>
  <p>Entry windows limit new positions. Existing positions remain protected by their price stop and take profit. Session-end exits and time exits are executed at the following candle open.</p>
- </section>
+ </section></>
 }
