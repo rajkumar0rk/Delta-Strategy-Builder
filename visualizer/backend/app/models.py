@@ -464,6 +464,7 @@ class FuturesConfig(BaseModel):
     stop_loss_percent: float | None = Field(default=1, gt=0, le=100)
     take_profit_percent: float | None = Field(default=2, gt=0, le=1000)
     funding_mode: Literal["REQUIRE_CSV", "EXCLUDE_WITH_WARNING"] = "REQUIRE_CSV"
+    margin_tier_mode: Literal["FLAT_RESEARCH", "DELTA_PUBLISHED_SNAPSHOT"] = "FLAT_RESEARCH"
 
     @model_validator(mode="after")
     def validate_futures(self):
