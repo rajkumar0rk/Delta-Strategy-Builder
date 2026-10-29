@@ -6,6 +6,7 @@ are touched. Candle OHLC cannot prove orderbook fills or intrabar paths.
 """
 from __future__ import annotations
 import csv
+import json
 import math
 from pathlib import Path
 import pandas as pd
@@ -197,6 +198,11 @@ def run_futures_backtest(req, progress=None):
                     balance+=funding
                     fund_total+=funding
         prev_time=ts
+        # Exits signalled on a prior completed bar fill at this bar OPEN.
+        closed=False
+        if isinstance(pending,tuple) and pending[0]=='CLOSE' and position is not None:
+            close(position,ts,float(row.open),'CONDITION_EXIT')
+            position=None;pending=None;closed=True
         # Pending signal from previous completed candle fills at the current
         # bar open, not on the signal bar close.
         if pending is not None and position is None:
@@ -214,7 +220,6 @@ def run_futures_backtest(req, progress=None):
                 markers.append({'id':f"future-entry-{len(trades)+1}",'time':int(ts.timestamp()),
                     'kind':'entry','direction':'CALL' if direction=='LONG' else 'PUT',
                     'text':direction,'details':{'title':direction+' future','entry_ask':px,'symbol':cfg.symbol}})
-        closed=False
         if position:
             sign=1 if position['direction']=='LONG' else -1
             favorable=(float(row.high)-position['entry_price'])/position['entry_price'] if sign==1 else (position['entry_price']-float(row.low))/position['entry_price']
@@ -246,15 +251,10 @@ def run_futures_backtest(req, progress=None):
                     # Condition known at this candle's close: cannot execute
                     # at this candle's close. Next bar open is required.
                     pending=('CLOSE',position['direction'])
-        if pending is not None and isinstance(pending,tuple) and position:
-            # Exit on the next bar after signal, not on the same close.
-            pass
-        if closed or position or not _session_allowed(ts,strategy.session):continue
+        if closed or position or pending is not None or not _session_allowed(ts,strategy.session):continue
         if strategy.risk.close_at_session_end and _session_end_due(ts,strategy.session,tf):continue
         if strategy.no_trade.configured() and evaluate_group(frame,i,strategy.no_trade)['passed']:continue
-        if strategy.risk.max_trades_per_day is not None:
-            # Conservative limit across this backtest; per-day tracking comes later.
-            if len(trades)>=strategy.risk.max_trades_per_day:continue
+        # Do not silently reinterpret daily circuit breakers as lifetime limits.
         eligible=[]
         for direction,enabled,group,nt,side in (
             ('LONG',call_enabled,strategy.call_entry,strategy.call_no_trade,'CALL'),
