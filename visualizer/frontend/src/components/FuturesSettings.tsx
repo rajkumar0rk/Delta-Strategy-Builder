@@ -33,6 +33,21 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   {optional('take_profit_percent','Price-based take-profit %')}
   <label>Funding history<select value={f.funding_mode} onChange={e=>set({funding_mode:e.target.value as FuturesConfig['funding_mode']})}><option value="REQUIRE_CSV">Require historical funding CSV</option><option value="EXCLUDE_WITH_WARNING">Exclude funding (research only)</option></select></label>
  </div>
+ <div className="form-grid">
+  {(['call','put'] as const).map(side=><div key={side}>
+   <b>{side==='call'?'LONG':'SHORT'} signal delivery</b>
+   {(['entry','exit'] as const).map(kind=>{
+    const field=(side+(kind==='entry'?'_signal_mode':'_exit_signal_mode')) as
+     'call_signal_mode'|'put_signal_mode'|'call_exit_signal_mode'|'put_exit_signal_mode';
+    return <label key={kind}>{kind==='entry'?'Entry':'Exit'}<select value={value[field]||'ORDER_ONLY'}
+      onChange={e=>onChange({...value,[field]:e.target.value})}>
+      <option value="ORDER_ONLY">Simulate orders</option>
+      <option value="ALERT_ONLY">Alert only</option>
+      <option value="BOTH">Order + alert</option>
+    </select></label>;
+   })}
+  </div>)}
+ </div>
  <div className="warning-box"><b>Accuracy limitations:</b> Futures fills use historical 5m-derived OHLC and assumed slippage, not recorded futures order-book quotes. Funding requires <code>futures_funding.csv</code> with timestamp, symbol and decimal funding_rate. Collateral and liquidation are approximations; no Delta exchange liquidation precision is claimed. Backtests never place orders.</div>
  </section>
  <section className="card"><h2>Futures risk and entry sessions</h2>
@@ -52,6 +67,11 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   <button className="mini danger" disabled={windows.length===1} onClick={()=>{const next=windows.filter((_,j)=>i!==j);session({windows:next,start:next[0].start,end:next[0].end})}}>Remove</button>
  </div>)}</div>
  <button className="mini ghost" onClick={()=>session({windows:[...windows,{start:'00:00',end:'23:59'}]})}>+ Add session window</button>
+ <div className="weekdays">{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((day,i)=><label key={day}>
+  <input type="checkbox" checked={value.session.blocked_weekdays.includes(i)}
+   onChange={e=>session({blocked_weekdays:e.target.checked?
+    [...value.session.blocked_weekdays,i]:value.session.blocked_weekdays.filter(n=>n!==i)})}/>
+  <span>Block {day}</span></label>)}</div>
  <p>Entry windows limit new positions. Existing positions remain protected by their price stop and take profit. Session-end exits and time exits are executed at the following candle open.</p>
  </section></>
 }
