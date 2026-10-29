@@ -307,3 +307,21 @@ def test_futures_independent_lifecycle_audit_with_real_chart_payload(tmp_path,mo
     assert checked['independent_lifecycle'] is not None
     assert checked['independent_lifecycle']['checked']==len(result['trades'])+int(bool(result['unresolved_position']))
     assert checked['independent_lifecycle']['failures']==[]
+
+
+def test_compact_futures_audit_preview_matches_small_chart_and_result(tmp_path,monkeypatch):
+    from app.futures_audit_preview import futures_audit_payload
+    from app.futures_audit import audit_futures_parity
+    _seed(tmp_path,monkeypatch)
+    strategy=_strategy()
+    request=BacktestRequest(dataset_id='sample',
+        start='2026-01-01T00:00:00Z',end='2026-01-01T01:00:00Z',
+        strategy=strategy)
+    result=run_backtest(request)
+    compact=futures_audit_payload(request,result)
+    assert compact['audit_only'] is True
+    assert compact['source_candles_scanned']>=len(compact['condition_states'])
+    parity=audit_futures_parity(result,compact,timeframe_minutes=5)
+    assert parity['checked_closed_trades']==len(result['trades'])
+    assert parity['independent_lifecycle'] is not None
+    assert parity['failure_count']==0, parity['failures']
