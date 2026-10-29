@@ -132,7 +132,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':4,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':5,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
@@ -158,7 +158,9 @@ def run_futures_backtest(req, progress=None):
     markers=list(alert_markers(frame,strategy,req.start,req.end))
     trades=[];equity_curve=[{'timestamp':req.start,'equity_usd':balance,'peak_equity_usd':balance,'drawdown_usd':0.0,'drawdown_percent':0.0}]
     position=None;pending=None;pending_lifecycle_id=None;fee_total=0.0;fund_total=0.0
-    risk_rejects=0;ambiguous=0;margin_stop_ambiguous=0;unresolved=None
+    margin_rejects=0;ambiguous=0;margin_stop_ambiguous=0;unresolved=None
+    rejection_reasons={};decisions=[]
+    mark_peak=initial;mark_max_dd=0.0;mark_max_dd_pct=0.0;last_close=None;last_equity=initial
     daily={'day':None,'start_balance':initial,'entries':0,'consecutive_losses':0,'realized':0.0,'blocks':0}
     # Reuse existing CALL-side bullish and PUT-side bearish rule trees, gates,
     # score and lifecycle readiness. No option instruments are loaded.
@@ -235,11 +237,16 @@ def run_futures_backtest(req, progress=None):
               or (strategy.risk.max_daily_loss_percent is not None and strategy.risk.stop_trading_after_daily_loss_limit
                   and daily['realized']<=-daily['start_balance']*strategy.risk.max_daily_loss_percent/100)
               or not _session_allowed(at_open,strategy.session)):
-                risk_rejects+=1;daily['blocks']+=1
+                daily['blocks']+=1
+                rejection_reasons['RISK_OR_SESSION_BLOCK']=rejection_reasons.get('RISK_OR_SESSION_BLOCK',0)+1
+                decisions.append({'timestamp':at_open.isoformat(),'kind':'EXECUTION','direction':direction,'passed':False,'reason':'RISK_OR_SESSION_BLOCK'})
             elif balance<margin+start_fee:
-                risk_rejects+=1
+                margin_rejects+=1
+                rejection_reasons['INSUFFICIENT_MARGIN']=rejection_reasons.get('INSUFFICIENT_MARGIN',0)+1
+                decisions.append({'timestamp':at_open.isoformat(),'kind':'EXECUTION','direction':direction,'passed':False,'reason':'INSUFFICIENT_MARGIN'})
             else:
                 balance-=start_fee;fee_total+=start_fee;daily['entries']+=1
+                decisions.append({'timestamp':at_open.isoformat(),'kind':'EXECUTION','direction':direction,'passed':True,'reason':'ENTRY_FILLED'})
                 accepted_cycle=cycles[direction].get(lifecycle_id) if lifecycle_id else None
                 if accepted_cycle is not None:
                     accepted_cycle.entries+=1
@@ -295,7 +302,7 @@ def run_futures_backtest(req, progress=None):
             rate=rates.get(ts)
             if rate is not None and ts>pd.Timestamp(position['entry_time']):
                 funding_sign=1 if position['direction']=='LONG' else -1
-                funding=-funding_sign*float(row.close)*qty*rate
+                funding=-funding_sign*float(row.close)*qty*rate*cfg.funding_rate_multiplier
                 position['funding_usd']+=funding
                 balance+=funding
                 fund_total+=funding
@@ -305,6 +312,20 @@ def run_futures_backtest(req, progress=None):
             _update_lifecycles(frame,i,
                 strategy.call_entry if side=='CALL' else strategy.put_entry,
                 _entry_behaviors(strategy,side),cycles[position['direction']])
+        # Marked equity is a candle-close proxy, not the exchange mark.
+        # Reserve hypothetical exit taker fee on open exposures.
+        last_close=float(row.close)
+        unrealized=((last_close-position['entry_price'])*qty*(1 if position['direction']=='LONG' else -1)) if position else 0.0
+        reserved_exit_fee=fee(last_close) if position else 0.0
+        last_equity=balance+unrealized-reserved_exit_fee
+        mark_peak=max(mark_peak,last_equity)
+        mark_max_dd=max(mark_max_dd,mark_peak-last_equity)
+        mark_max_dd_pct=max(mark_max_dd_pct,(mark_peak-last_equity)/max(mark_peak,1e-12)*100)
+        equity_curve.append({'timestamp':ts.isoformat(),'equity_usd':last_equity,
+           'peak_equity_usd':mark_peak,'drawdown_usd':mark_peak-last_equity,
+           'drawdown_percent':(mark_peak-last_equity)/max(mark_peak,1e-12)*100,
+           'cash_balance_usd':balance,'unrealized_pnl_usd':unrealized,
+           'reserved_exit_fee_usd':reserved_exit_fee,'equity_source':'OHLC_CLOSE_PROXY'})
         if closed or position or pending is not None or not _session_allowed(ts,strategy.session):continue
         if strategy.risk.close_at_session_end and _session_end_due(ts,strategy.session,tf):continue
         if strategy.no_trade.configured() and evaluate_group(frame,i,strategy.no_trade)['passed']:continue
@@ -339,7 +360,10 @@ def run_futures_backtest(req, progress=None):
     if position:
         unresolved={'reason':'END_OF_RANGE_FUTURES_EXPOSURE','entry_time':position['entry_time'],
             'entry_price':position['entry_price'],'direction':position['direction'],
-            'marked_not_realized':True}
+            'marked_not_realized':True,'last_candle_close':last_close,
+            'estimated_unrealized_pnl_usd':(last_close-position['entry_price'])*qty*
+                (1 if position['direction']=='LONG' else -1),
+            'estimated_exit_fee_usd':fee(last_close)}
     wins=sum(t['net_pnl_usd']>0 for t in trades)
     gp=sum(max(0,t['net_pnl_usd']) for t in trades);gl=-sum(min(0,t['net_pnl_usd']) for t in trades)
     metrics={'trades':len(trades),'wins':wins,'losses':sum(t['net_pnl_usd']<0 for t in trades),
@@ -350,17 +374,21 @@ def run_futures_backtest(req, progress=None):
       'gst_usd':fee_total-fee_total/(1+cfg.gst_percent/100),
       'funding_usd':fund_total,'profit_factor':gp/gl if gl else None,
       'return_percent':(balance/initial-1)*100,'ending_balance_usd':balance,
+      'estimated_final_equity_usd':last_equity,
+      'estimated_equity_return_percent':(last_equity/initial-1)*100,
       'cash_balance_change_usd':balance-initial,
       'unresolved_entry_fee_usd':position['entry_fee'] if position else 0.0,
       'unresolved_funding_usd':position['funding_usd'] if position else 0.0,
       'max_closed_trade_drawdown_usd':max_dd,'max_closed_trade_drawdown_percent':max_dd_pct,
       'max_mark_to_market_drawdown_usd':None,'max_mark_to_market_drawdown_percent':None,
+      'estimated_candle_close_drawdown_usd':mark_max_dd,
+      'estimated_candle_close_drawdown_percent':mark_max_dd_pct,
       'avg_mfe_percent':sum(t['mfe_percent'] for t in trades)/len(trades) if trades else 0,
       'avg_mae_percent':sum(t['mae_percent'] for t in trades)/len(trades) if trades else 0,
       'estimated_margin_breaches':sum(t['exit_reason']=='ESTIMATED_MARGIN_BREACH' for t in trades),
       'unresolved_position_count':int(unresolved is not None),
       'alerts_triggered':sum(m['kind']=='alert' for m in markers),'daily_risk_blocks':daily['blocks'],
-      'insufficient_margin_rejections':risk_rejects,
+      'insufficient_margin_rejections':margin_rejects,'rejection_reasons':rejection_reasons,
       'ambiguous_intrabar_stop_target':ambiguous,'ambiguous_margin_stop':margin_stop_ambiguous}
     run_id,out=_new_result_dir(strategy.name)
     result={'run_id':run_id,'result_dir':str(out),'start':req.start,'end':req.end,
@@ -368,13 +396,13 @@ def run_futures_backtest(req, progress=None):
       'dataset_mode':getattr(req,'dataset_mode','SINGLE'),'storage_mode':req.storage_mode,
       'cache_key':key,'cache_hit':False,'strategy':strategy.model_dump(),
       'metrics':metrics,'trades':trades,'markers':markers,'equity_curve':equity_curve,
-      'decision_count':0,'preflight':preflight,'warmup':warmup,'series_meta':meta,
+      'decision_count':len(decisions),'preflight':preflight,'warmup':warmup,'series_meta':meta,
       'unresolved_position':unresolved,
       'reliability':{'grade':'RESEARCH_ONLY','execution_model':'UNDERLYING_OHLC_PROXY',
         'limitations':['No historical futures orderbook/spread or fills',
            'Intrabar stops/targets, slippage and margin breaches are estimates',
            'Option premium-based profit-protection fields are ignored in Futures mode; use futures price stop/target',
-           'True mark-to-market drawdown not computed without historical futures mark/executable quotes',
+           'Real exchange mark-to-market drawdown cannot be computed; candle-close proxy estimates are supplied separately',
            'Cash balance includes accrued funding and entry fees of any unresolved futures position; closed-trade net PnL excludes its open price exposure',
            'Funding excluded' if cfg.funding_mode=='EXCLUDE_WITH_WARNING' else 'Funding rates supplied externally and settlement notional approximated']},
       'fee_model':{'name':'DELTA_FUTURES_ASSUMED_TAKER','taker_fee_percent':cfg.taker_fee_percent,'gst_percent':cfg.gst_percent},
@@ -394,6 +422,9 @@ def run_futures_backtest(req, progress=None):
         write_json_gz(out/'markers.json.gz',markers);manifest['markers']='markers.json.gz'
     if req.storage_mode!='COMPACT' and equity_curve:
         write_csv_gz(out/'equity_curve.csv.gz',equity_curve);manifest['equity_curve']='equity_curve.csv.gz'
+    if req.storage_mode!='COMPACT' and decisions:
+        write_csv_gz(out/'decision_events.csv.gz',decisions)
+        manifest['decisions']='decision_events.csv.gz'
     summary['artifact_manifest']=manifest
     (out/'summary.json').write_text(json.dumps(summary,separators=(',',':'),allow_nan=False),encoding='utf-8')
     _write_cache(key,run_id);maybe_auto_cleanup();store.close()
