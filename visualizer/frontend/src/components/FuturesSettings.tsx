@@ -2,7 +2,7 @@ import type {FuturesConfig,Strategy} from '../types';
 
 const defaults:FuturesConfig={symbol:'BTCUSD',contract_btc:0.001,quantity_lots:1,leverage:5,
  margin_mode:'ISOLATED',maintenance_margin_percent:.25,taker_fee_percent:.05,
- gst_percent:18,slippage_bps:2,stop_loss_percent:1,take_profit_percent:2,
+ gst_percent:18,slippage_bps:2,tick_size:0.5,slippage_ticks:0,stop_loss_percent:1,take_profit_percent:2,
  funding_mode:'REQUIRE_CSV'};
 export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Strategy)=>void}){
  const f=value.futures||defaults;
@@ -29,6 +29,8 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   {number('taker_fee_percent','Taker fee % per side','0.001',0)}
   {number('gst_percent','GST % on fees','1',0)}
   {number('slippage_bps','Adverse slippage basis points','1',0)}
+   {number('tick_size','Assumed futures price tick ($)','0.5',0.000001)}
+   {number('slippage_ticks','Additional adverse execution ticks','1',0)}
   {optional('stop_loss_percent','Price-based stop-loss %')}
   {optional('take_profit_percent','Price-based take-profit %')}
   <label>Funding history<select value={f.funding_mode} onChange={e=>set({funding_mode:e.target.value as FuturesConfig['funding_mode']})}><option value="REQUIRE_CSV">Require historical funding CSV</option><option value="EXCLUDE_WITH_WARNING">Exclude funding (research only)</option></select></label>

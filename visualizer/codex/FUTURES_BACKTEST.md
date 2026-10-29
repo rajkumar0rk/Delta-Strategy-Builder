@@ -32,3 +32,10 @@ cd ..\frontend
 npm run test
 npm run build
 ```
+
+## Correctness hardening (review branch, October 2026)
+- Futures lifecycle states are warmed over pre-range history, and accepted entries consume their selected lifecycle's entry limit/cooldown.
+- Funding is applied only after a position survives the corresponding candle; OHLC cannot prove intrabar funding eligibility.
+- Stops take priority over estimated intrabar margin breaches unless a breach already exists at candle OPEN. The ambiguous case is counted; this is NOT a Delta liquidation replay.
+- Configurable `tick_size` (default research assumption $0.50) and `slippage_ticks` permit conservative fill rounding. These are assumptions, not verified against historical product metadata.
+- Futures historical funding schedule, fee tiers, maker executions, risk tier changes, actual liquidation fills and accurate marked equity remain unverified or unavailable. Never present these as modeled.

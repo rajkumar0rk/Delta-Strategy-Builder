@@ -22,13 +22,14 @@ describe('BTCUSD perpetual futures market editor',()=>{
  });
  it('clearly labels simulated futures fills in result report',()=>{
   const s=defaultStrategy();s.market_type='FUTURES';
-  const result={run_id:'test',storage_mode:'COMPACT',strategy:s,
-    decision_count:0,trades:[],metrics:{trades:0,wins:0,losses:0,win_rate_percent:0,
+  const result:BacktestResult={run_id:'test',result_dir:'test',storage_mode:'COMPACT',strategy:s,
+    start:'2026-01-01T00:00:00Z',end:'2026-01-02T00:00:00Z',
+    decision_count:0,trades:[],markers:[],equity_curve:[],metrics:{trades:0,wins:0,losses:0,win_rate_percent:0,
       gross_pnl_usd:0,net_pnl_usd:0,fees_usd:0,gst_usd:0,
       profit_factor:null,return_percent:0,max_closed_trade_drawdown_usd:0,
       max_closed_trade_drawdown_percent:0,avg_mfe_percent:0,avg_mae_percent:0,
       funding_usd:0,estimated_margin_breaches:0,ambiguous_intrabar_stop_target:0}
-  } as BacktestResult;
+  };
   const html=renderToStaticMarkup(<Results r={result}/>);
   expect(html).toContain('FUTURES OHLC RESEARCH ONLY');
   expect(html).toContain('funding');

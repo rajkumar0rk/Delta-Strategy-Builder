@@ -1,0 +1,42 @@
+name: Strategy Lab regression checks
+on:
+  pull_request:
+    paths:
+      - 'visualizer/**'
+      - '.github/workflows/strategy-lab-tests.yml'
+  push:
+    branches: [working]
+    paths:
+      - 'visualizer/**'
+      - '.github/workflows/strategy-lab-tests.yml'
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: visualizer/backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: visualizer/backend/requirements.txt
+      - run: pip install -r requirements.txt pytest
+      - run: python -m compileall -q app tests
+      - run: python -m pytest -q
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: visualizer/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: visualizer/frontend/package-lock.json
+      - run: npm ci
+      - run: npm run test -- --run
+      - run: npm run build

@@ -73,10 +73,25 @@ def funding_events(parts, start, end, *, required):
     return events,missing
 
 
-def _slipped(price, direction, entry, bps):
-    # LONG buys entry / sells exit; SHORT sells entry / buys exit.
+def _slipped(price, direction, entry, bps, tick_size=0.0, extra_ticks=0):
+    """Apply adverse execution costs then conservatively round to a valid tick."""
     adverse=1 if (direction=='LONG')==entry else -1
-    return price*(1+adverse*bps/10000)
+    px=float(price)*(1+adverse*bps/10000)+adverse*extra_ticks*tick_size
+    if px<=0:
+        raise ValueError('Nonpositive futures execution price')
+    if tick_size>0:
+        units=px/tick_size
+        px=(math.ceil(units-1e-10) if adverse>0 else math.floor(units+1e-10))*tick_size
+    return round(px,10)
+
+
+def _margin_breached(pos, price, balance, qty, cfg):
+    sign=1 if pos['direction']=='LONG' else -1
+    maintenance=price*qty*cfg.maintenance_margin_percent/100
+    unrealized=(price-pos['entry_price'])*qty*sign
+    stressed=(pos['margin']+unrealized+pos['funding_usd']-pos['entry_fee']
+              if cfg.margin_mode=='ISOLATED' else balance+unrealized)
+    return stressed<=maintenance
 
 
 def _exit_level(pos, bar, config):
@@ -117,7 +132,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':2,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':4,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
@@ -142,8 +157,8 @@ def run_futures_backtest(req, progress=None):
     qty=cfg.quantity_lots*cfg.contract_btc
     markers=list(alert_markers(frame,strategy,req.start,req.end))
     trades=[];equity_curve=[{'timestamp':req.start,'equity_usd':balance,'peak_equity_usd':balance,'drawdown_usd':0.0,'drawdown_percent':0.0}]
-    position=None;pending=None;fee_total=0.0;fund_total=0.0
-    risk_rejects=0;ambiguous=0;unresolved=None
+    position=None;pending=None;pending_lifecycle_id=None;fee_total=0.0;fund_total=0.0
+    risk_rejects=0;ambiguous=0;margin_stop_ambiguous=0;unresolved=None
     daily={'day':None,'start_balance':initial,'entries':0,'consecutive_losses':0,'realized':0.0,'blocks':0}
     # Reuse existing CALL-side bullish and PUT-side bearish rule trees, gates,
     # score and lifecycle readiness. No option instruments are loaded.
@@ -156,7 +171,7 @@ def run_futures_backtest(req, progress=None):
         return price*qty*cfg.taker_fee_percent/100*(1+cfg.gst_percent/100)
     def close(pos,exit_time,price,reason):
         nonlocal balance,fee_total,fund_total,peak,max_dd,max_dd_pct
-        exit_px=_slipped(price,pos['direction'],False,cfg.slippage_bps)
+        exit_px=_slipped(price,pos['direction'],False,cfg.slippage_bps,cfg.tick_size,cfg.slippage_ticks)
         sign=1 if pos['direction']=='LONG' else -1
         gross=(exit_px-pos['entry_price'])*qty*sign
         exit_fee=fee(exit_px)
@@ -187,7 +202,15 @@ def run_futures_backtest(req, progress=None):
         equity_curve.append({'timestamp':pd.Timestamp(exit_time).isoformat(),'equity_usd':balance,
             'peak_equity_usd':peak,'drawdown_usd':peak-balance,'drawdown_percent':(peak-balance)/max(peak,1e-12)*100})
     for i,(ts,row) in enumerate(frame.iterrows()):
-        if ts<pd.Timestamp(req.start) or ts>=pd.Timestamp(req.end):continue
+        if ts<pd.Timestamp(req.start):
+            # Warm up lifecycle state without placing pre-range orders.
+            for direction,enabled,group,side in (
+                ('LONG',call_enabled,strategy.call_entry,'CALL'),
+                ('SHORT',put_enabled,strategy.put_entry,'PUT')):
+                if enabled:
+                    _update_lifecycles(frame,i,group,_entry_behaviors(strategy,side),cycles[direction])
+            continue
+        if ts>=pd.Timestamp(req.end):continue
         if progress and i%500==0:
             progress(f'Backtesting futures candle {i+1}/{len(frame)}',min(95,45+50*i/max(len(frame),1)),'BACKTEST','Evaluate signals')
         at_open=ts-pd.Timedelta(minutes=tf)
@@ -203,7 +226,8 @@ def run_futures_backtest(req, progress=None):
         # bar open, not on the signal bar close.
         if pending is not None and position is None:
             direction=pending;pending=None
-            px=_slipped(float(row.open),direction,True,cfg.slippage_bps)
+            lifecycle_id=pending_lifecycle_id;pending_lifecycle_id=None
+            px=_slipped(float(row.open),direction,True,cfg.slippage_bps,cfg.tick_size,cfg.slippage_ticks)
             margin=px*qty/cfg.leverage
             start_fee=fee(px)
             if ((strategy.risk.max_trades_per_day is not None and daily['entries']>=strategy.risk.max_trades_per_day)
@@ -216,6 +240,10 @@ def run_futures_backtest(req, progress=None):
                 risk_rejects+=1
             else:
                 balance-=start_fee;fee_total+=start_fee;daily['entries']+=1
+                accepted_cycle=cycles[direction].get(lifecycle_id) if lifecycle_id else None
+                if accepted_cycle is not None:
+                    accepted_cycle.entries+=1
+                    accepted_cycle.last_entry_index=i
                 position={'direction':direction,'entry_time':at_open.isoformat(),'entry_price':px,
                     'entry_fee':start_fee,'margin':margin,'funding_usd':0.0,
                     'mfe':0.0,'mae':0.0}
@@ -223,40 +251,35 @@ def run_futures_backtest(req, progress=None):
                     'kind':'entry','direction':'CALL' if direction=='LONG' else 'PUT',
                     'text':direction,'details':{'title':direction+' future','entry_ask':px,'symbol':cfg.symbol}})
         if position:
-            # Funding is evaluated at scheduled UTC candle closes. If a stop
-            # happens intrabar in that candle, true funding eligibility cannot
-            # be reconstructed from OHLC; the result stays research only.
-            rate=rates.get(ts)
-            if rate is not None and ts>pd.Timestamp(position['entry_time']):
-                funding_sign=1 if position['direction']=='LONG' else -1
-                funding=-funding_sign*float(row.close)*qty*rate
-                position['funding_usd']+=funding
-                balance+=funding
-                fund_total+=funding
             sign=1 if position['direction']=='LONG' else -1
             favorable=(float(row.high)-position['entry_price'])/position['entry_price'] if sign==1 else (position['entry_price']-float(row.low))/position['entry_price']
             adverse=(float(row.low)-position['entry_price'])/position['entry_price'] if sign==1 else (position['entry_price']-float(row.high))/position['entry_price']
             position['mfe']=max(position['mfe'],favorable)
             position['mae']=min(position['mae'],adverse)
-            # Insolvency check is deliberately approximate, NOT Delta's engine.
+            # No OHLC path establishes which intrabar event came first.
+            # A margin breach already at OPEN takes precedence; subsequently
+            # prefer a protective stop over an ambiguous candle extreme.
             worst=(float(row.low) if sign==1 else float(row.high))
-            maintenance=worst*qty*cfg.maintenance_margin_percent/100
-            unrealized=(worst-position['entry_price'])*qty*sign
-            stressed=((position['margin']+unrealized+position['funding_usd']-position['entry_fee'])
-                      if cfg.margin_mode=='ISOLATED' else balance+unrealized)
-            if stressed<=maintenance:
-                close(position,ts,worst,'ESTIMATED_MARGIN_BREACH')
+            hit=_exit_level(position,row,cfg)
+            open_breach=_margin_breached(position,float(row.open),balance,qty,cfg)
+            worst_breach=_margin_breached(position,worst,balance,qty,cfg)
+            if open_breach:
+                close(position,at_open,float(row.open),'ESTIMATED_MARGIN_BREACH')
                 position=None;closed=True
-            else:
-                hit=_exit_level(position,row,cfg)
+            elif hit or worst_breach:
                 if hit:
+                    if worst_breach:margin_stop_ambiguous+=1
                     if cfg.stop_loss_percent and cfg.take_profit_percent:
                         stop=position['entry_price']*(1-cfg.stop_loss_percent/100*sign)
                         target=position['entry_price']*(1+cfg.take_profit_percent/100*sign)
                         if (float(row.low)<=min(stop,target) and float(row.high)>=max(stop,target)):
                             ambiguous+=1
                     close(position,ts,hit[1],hit[0]);position=None;closed=True
-                elif strategy.risk.max_hold_minutes is not None and (ts-pd.Timestamp(position['entry_time'])).total_seconds()/60>=strategy.risk.max_hold_minutes:
+                else:
+                    close(position,ts,worst,'ESTIMATED_MARGIN_BREACH')
+                    position=None;closed=True
+            else:
+                if strategy.risk.max_hold_minutes is not None and (ts-pd.Timestamp(position['entry_time'])).total_seconds()/60>=strategy.risk.max_hold_minutes:
                     pending=('CLOSE','TIME_STOP')
                 elif strategy.risk.close_at_session_end and _session_end_due(ts,strategy.session,tf):
                     pending=('CLOSE','SESSION_END_EXIT')
@@ -265,6 +288,23 @@ def run_futures_backtest(req, progress=None):
                     # Condition known at this candle's close: cannot execute
                     # at this candle's close. Next bar open is required.
                     pending=('CLOSE','CONDITION_EXIT')
+        if position is not None:
+            # Apply historical funding at scheduled candle CLOSE only to
+            # positions surviving that entire candle. Never charge a trade
+            # stopped intrabar before the settlement timestamp.
+            rate=rates.get(ts)
+            if rate is not None and ts>pd.Timestamp(position['entry_time']):
+                funding_sign=1 if position['direction']=='LONG' else -1
+                funding=-funding_sign*float(row.close)*qty*rate
+                position['funding_usd']+=funding
+                balance+=funding
+                fund_total+=funding
+            # Keep the active direction's lifecycle re-armed/reset on every bar,
+            # matching the exclusive-position options engine.
+            side='CALL' if position['direction']=='LONG' else 'PUT'
+            _update_lifecycles(frame,i,
+                strategy.call_entry if side=='CALL' else strategy.put_entry,
+                _entry_behaviors(strategy,side),cycles[position['direction']])
         if closed or position or pending is not None or not _session_allowed(ts,strategy.session):continue
         if strategy.risk.close_at_session_end and _session_end_due(ts,strategy.session,tf):continue
         if strategy.no_trade.configured() and evaluate_group(frame,i,strategy.no_trade)['passed']:continue
@@ -286,12 +326,16 @@ def run_futures_backtest(req, progress=None):
             score=_big_trend_score(frame,i,group,
                 strategy.call_big_trend_score if side=='CALL' else strategy.put_big_trend_score,side)
             if tree['passed'] and score['passed']:
-                eligible.append(direction)
+                eligible.append((direction,next(x['behavior'].id for x in state if x['eligible'])))
         if eligible:
+            selected=None
             if len(eligible)==2:
-                if strategy.conflict_policy=='PREFER_CALL':pending='LONG'
-                elif strategy.conflict_policy=='PREFER_PUT':pending='SHORT'
-            else:pending=eligible[0]
+                if strategy.conflict_policy=='PREFER_CALL':selected=next(x for x in eligible if x[0]=='LONG')
+                elif strategy.conflict_policy=='PREFER_PUT':selected=next(x for x in eligible if x[0]=='SHORT')
+            else:
+                selected=eligible[0]
+            if selected is not None:
+                pending,pending_lifecycle_id=selected
     if position:
         unresolved={'reason':'END_OF_RANGE_FUTURES_EXPOSURE','entry_time':position['entry_time'],
             'entry_price':position['entry_price'],'direction':position['direction'],
@@ -317,7 +361,7 @@ def run_futures_backtest(req, progress=None):
       'unresolved_position_count':int(unresolved is not None),
       'alerts_triggered':sum(m['kind']=='alert' for m in markers),'daily_risk_blocks':daily['blocks'],
       'insufficient_margin_rejections':risk_rejects,
-      'ambiguous_intrabar_stop_target':ambiguous}
+      'ambiguous_intrabar_stop_target':ambiguous,'ambiguous_margin_stop':margin_stop_ambiguous}
     run_id,out=_new_result_dir(strategy.name)
     result={'run_id':run_id,'result_dir':str(out),'start':req.start,'end':req.end,
       'dataset_id':getattr(req,'dataset_id',None),'dataset_ids':[p.id for p in parts],
@@ -336,7 +380,8 @@ def run_futures_backtest(req, progress=None):
       'fee_model':{'name':'DELTA_FUTURES_ASSUMED_TAKER','taker_fee_percent':cfg.taker_fee_percent,'gst_percent':cfg.gst_percent},
       'futures_research':{'symbol':cfg.symbol,'leverage':cfg.leverage,'margin_mode':cfg.margin_mode,
         'funding_mode':cfg.funding_mode,'funding_missing_intervals':len(missing_funding),
-        'venue_verified_liquidation':False,'volume_fill_verified':False}}
+        'venue_verified_liquidation':False,'volume_fill_verified':False,
+          'tick_size':cfg.tick_size,'execution_slippage_ticks':cfg.slippage_ticks}}
     (out/'strategy.json').write_text(json.dumps(strategy.model_dump(),indent=2),encoding='utf-8')
     if trades:
         with (out/'trades.csv').open('w',newline='',encoding='utf-8') as f:
