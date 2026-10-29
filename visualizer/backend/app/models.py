@@ -458,12 +458,16 @@ class FuturesConfig(BaseModel):
     taker_fee_percent: float = Field(default=0.05, ge=0, le=5)
     gst_percent: float = Field(default=18, ge=0, le=100)
     slippage_bps: float = Field(default=2, ge=0, le=1000)
+    tick_size: float = Field(default=0.5, gt=0)
+    slippage_ticks: int = Field(default=0, ge=0, le=1000)
     stop_loss_percent: float | None = Field(default=1, gt=0, le=100)
     take_profit_percent: float | None = Field(default=2, gt=0, le=1000)
     funding_mode: Literal["REQUIRE_CSV", "EXCLUDE_WITH_WARNING"] = "REQUIRE_CSV"
 
     @model_validator(mode="after")
     def validate_futures(self):
+        if self.take_profit_percent is not None and self.take_profit_percent>=100:
+            raise ValueError("Futures short take-profit must be below 100% of entry price")
         if self.maintenance_margin_percent >= 100 / self.leverage:
             raise ValueError("Futures maintenance margin must be below 100 / leverage")
         return self
