@@ -201,8 +201,8 @@ def run_futures_backtest(req, progress=None):
           'details':{'title':reason,'net_pnl_usd':net,'symbol':cfg.symbol}})
         peak=max(peak,balance);max_dd=max(max_dd,peak-balance)
         max_dd_pct=max(max_dd_pct,(peak-balance)/max(peak,1e-12)*100)
-        equity_curve.append({'timestamp':pd.Timestamp(exit_time).isoformat(),'equity_usd':balance,
-            'peak_equity_usd':peak,'drawdown_usd':peak-balance,'drawdown_percent':(peak-balance)/max(peak,1e-12)*100})
+        # The candle-close marked equity series is appended once per bar in
+        # the main loop. Do not append a duplicate exit timestamp here.
     for i,(ts,row) in enumerate(frame.iterrows()):
         if ts<pd.Timestamp(req.start):
             # Warm up lifecycle state without placing pre-range orders.
