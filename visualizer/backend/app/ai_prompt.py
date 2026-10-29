@@ -45,6 +45,35 @@ def build_strategy_prompt(req: AiStrategyPromptRequest) -> str:
     current = req.strategy.model_dump()
     dataset = _dataset_context(req)
 
+    if req.strategy.market_type == 'FUTURES':
+        return (
+            "Design ONE importable BTC Strategy Lab perpetual futures JSON strategy. "
+            "Return only an object with schema_version=15, app=BTC Strategy Lab and strategy matching the schema.\n"
+            "market_type must be FUTURES. CALL entry/exit rules represent LONG; PUT entry/exit rules represent SHORT. "
+            "Use direction_mode CALL, PUT or BOTH; position_policy EXCLUSIVE; no options are traded.\n"
+            "Reuse available completed-candle OHLCV indicators, rule trees, alerts, entry lifecycles and Big Trend Score. "
+            "All signal entries and rule-based exits occur at the NEXT candle open, using an adverse slippage proxy. "
+            "Stop loss and take profit are percentages of BTCUSD futures entry price, not of an option premium.\n"
+            "Use strategy.futures for contract_btc, quantity_lots, leverage, margin_mode, "
+            "maintenance_margin_percent, taker_fee_percent, gst_percent, slippage_bps, "
+            "stop_loss_percent, take_profit_percent, funding_mode. "
+            "Historical funding requires futures_funding.csv with timestamp/symbol/funding_rate "
+            "or an explicit EXCLUDE_WITH_WARNING research choice. Never invent funding rates.\n"
+            "Margin breaches, fills and liquidation prices are estimates, NOT Delta-verified. "
+            "Set risk.profit_protection.mode=NONE. Do not enable the unsupported "
+            "breakout_retest.require_retest_for_entry feature. Options selection and options "
+            "premium execution fields remain in the schema for legacy compatibility, but are ignored for futures.\n"
+            "Use no future information to generate signals. No real orders are placed. "
+            "No actual futures orderbook, maker fills, full historical leverage tiers or accurate "
+            "broker liquidation engine exists in the lab.\n"
+            "Current strategy:\n" + json.dumps(current, indent=2) +
+            "\nDataset context:\n" + json.dumps(dataset, indent=2) +
+            "\nIndicator catalog:\n" + json.dumps(indicators, indent=2) +
+            "\nAllowed rule operators:\n" + json.dumps(OPERATORS) +
+            "\nExact StrategyConfig JSON schema:\n" + json.dumps(schema, indent=2) +
+            "\nReturn the full importable JSON only.\n"
+        )
+
     return f"""You are designing a BTC options strategy for BTC Strategy Lab V15.2 / V16 research mode.
 
 IMPORTANT OUTPUT CONTRACT
