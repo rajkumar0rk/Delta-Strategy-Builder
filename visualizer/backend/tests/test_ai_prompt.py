@@ -49,3 +49,25 @@ def test_prompt_documents_daily_levels_and_identity_rearming():
                  'first backward chronological matches', 'intrabar event order'):
         assert text in prompt
     assert 'reset_operand' in StrategyConfig.model_json_schema()['$defs']['AlertRule']['properties']
+
+
+def test_futures_prompt_mentions_current_research_contract():
+    strategy=StrategyConfig(market_type="FUTURES")
+    prompt=build_strategy_prompt(AiStrategyPromptRequest(strategy=strategy))
+    for phrase in ("schema_version=15","funding_rate_multiplier",
+                   "September 8, 2025", "frozen holdout", "margin_tier_mode",
+                   "NOT fields in strategy JSON", "NOT Delta-verified"):
+        assert phrase in prompt
+
+
+def test_importable_futures_example_matches_current_strategy_schema():
+    import json
+    from pathlib import Path
+    example=Path(__file__).resolve().parents[2]/"examples"/"btcusd-futures-research.template.json"
+    payload=json.loads(example.read_text(encoding="utf-8"))
+    assert payload["schema_version"]==15
+    assert payload["app"]=="BTC Strategy Lab"
+    validated=StrategyConfig.model_validate(payload["strategy"])
+    assert validated.market_type=="FUTURES"
+    assert validated.futures.funding_mode=="EXCLUDE_WITH_WARNING"
+    assert validated.position_policy=="EXCLUSIVE"
