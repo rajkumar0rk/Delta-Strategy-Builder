@@ -34,6 +34,11 @@ def audit_futures_parity(result:dict, chart:dict, *, timeframe_minutes:int) -> d
     if timeframe_minutes not in (5,10,15,30,60):
         raise ValueError("Unsupported futures timeframe")
     trades=result.get("trades") or []
+    from .futures_engine import _slipped
+    futures=result.get("strategy",{}).get("futures",{})
+    bps=float(futures.get("slippage_bps",2))
+    tick=float(futures.get("tick_size",0.5))
+    extra_ticks=int(futures.get("slippage_ticks",0))
     markers=result.get("markers") or []
     states={int(s["time"]):s for s in chart.get("condition_states") or []}
     bars={int(b["time"]):b for b in chart.get("bars") or []}
@@ -74,8 +79,9 @@ def audit_futures_parity(result:dict, chart:dict, *, timeframe_minutes:int) -> d
             failures.append(f"Missing OHLC entry bar at {t['entry_time']}; cannot certify parity")
         else:
             opened=float(bar["open"]);fill=float(t["entry_price"])
-            if sign==1 and fill<opened-1e-8 or sign==-1 and fill>opened+1e-8:
-                failures.append(f"Futures entry fill improved beyond OHLC open: trade {t.get('id')}")
+            expected=_slipped(opened,direction,True,bps,tick,extra_ticks)
+            if not _same(fill,expected):
+                failures.append(f"Futures entry fill differs from configured adverse slippage/tick model: trade {t.get('id')}")
             checked_fills+=1
         signal=states.get(entry)
         if signal is None:
@@ -97,6 +103,12 @@ def audit_futures_parity(result:dict, chart:dict, *, timeframe_minutes:int) -> d
         used_entries[key]+=1
         if used_entries[key]>entries[key]:
             failures.append("Missing chart marker for unresolved futures entry")
+        if "quantity" in unresolved:
+            q=float(unresolved["quantity"])
+            expected_entry=_slipped(float(bars.get(_epoch(unresolved["entry_time"])+timeframe_minutes*60,{}).get("open",float("nan"))),
+                                    unresolved["direction"],True,bps,tick,extra_ticks) if _epoch(unresolved["entry_time"])+timeframe_minutes*60 in bars else None
+            if expected_entry is None or not _same(expected_entry,unresolved["entry_price"]):
+                failures.append("Unresolved futures entry fill cannot be reconciled with chart OHLC")
         warnings.append("Unresolved open exposure is excluded from closed-trade net P&L")
     if not chart.get("condition_states") or not chart.get("bars"):
         failures.append("Chart preview contains no rule states or OHLC bars")
@@ -113,6 +125,16 @@ def audit_futures_parity(result:dict, chart:dict, *, timeframe_minutes:int) -> d
         failures.append("Aggregate closed-trade net P&L does not reconcile")
     if checked_signals < len(trades) or checked_fills < len(trades):
         failures.append("Not all closed-trade signals and execution bars were independently checked")
+    metrics=result.get("metrics") or {}
+    if "cash_reconciliation_residual_usd" in metrics and not _same(metrics["cash_reconciliation_residual_usd"],0):
+        failures.append("Cash reconciliation residual is non-zero")
+    if "ending_balance_usd" in metrics and "cash_balance_change_usd" in metrics:
+        start=float(result.get("strategy",{}).get("risk",{}).get("starting_balance_usd",0))
+        if not _same(float(metrics["ending_balance_usd"])-start,metrics["cash_balance_change_usd"]):
+            failures.append("Cash balance change does not match ending minus starting balance")
+    if unresolved and "unresolved_entry_fee_usd" in metrics and not _same(
+        metrics["unresolved_entry_fee_usd"],unresolved.get("entry_fee_usd",0)):
+        failures.append("Unresolved entry fee does not reconcile")
     warnings.append("Chart lifecycle readiness is a diagnostic, not a position-aware replay")
     warnings.append("Chart markers are backtest overlays; source OHLC and rule states are independent")
     warnings.append("Actual Delta orderbook fills, historical mark prices, FX collateral and liquidations are not verified")

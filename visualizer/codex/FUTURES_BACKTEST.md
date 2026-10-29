@@ -63,3 +63,6 @@ The output separates closed-trade net P&L, fees/GST, funding, profit factor, rea
 
 ## October 2026 correctness audit
 Funding mode `EXCLUDE_WITH_WARNING` now excludes all funding entries, **even if** a funding CSV exists in the selected dataset. `REQUIRE_CSV` alone parses and applies supplied rates. Futures engine cache identity was incremented; regenerate old backtests. The internal parity job now **fails** when any closed trade lacks the chart signal or OHLC entry bar required for comparison rather than warning and reporting a misleading pass. This audit remains internal/research-only.
+
+## Accounting and loader follow-up
+The futures cash reconciliation now reports `metrics.cash_reconciliation_residual_usd`; the expected identity is ending cash minus starting cash = sum of closed-trade net P&L + any unresolved position's funding minus paid entry fee. Unresolved position metadata exposes its entry fee, funding and BTC quantity. The internal chart audit checks the **exact configured adverse bps/tick price**, not merely the sign of slippage. Futures cache identity is now version 8; recompute old results. Saved strategy loading from `/api/strategies/{strategy_id}` resolves the strategy directory from the actual project root. These checks remain research-only and do not reconstruct Delta's account ledger or true liquidation.

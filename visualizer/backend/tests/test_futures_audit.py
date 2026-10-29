@@ -4,8 +4,8 @@ from app.futures_audit import audit_futures_parity
 
 def sample():
     trade={'id':1,'direction':'LONG','entry_time':'2026-01-01T00:05:00Z',
-           'exit_time':'2026-01-01T00:15:00Z','entry_price':101,
-           'exit_price':110,'quantity':0.001,'entry_fee_usd':0.001,
+           'exit_time':'2026-01-01T00:15:00Z','entry_price':100.5,
+           'exit_price':109.5,'quantity':0.001,'entry_fee_usd':0.001,
            'exit_fee_usd':0.001,'fees_usd':0.002,'funding_usd':0,
            'gross_pnl_usd':0.009,'net_pnl_usd':0.007}
     return ({'strategy':{'market_type':'FUTURES'},'trades':[trade],
@@ -55,3 +55,10 @@ def test_audit_fails_closed_for_missing_signal_or_execution_bar():
     assert report['checked_preview_signals']==0
     assert report['checked_ohlc_entry_fills']==0
     assert any('Missing' in x for x in report['failures'])
+
+
+def test_audit_flags_exact_fill_mismatch():
+    result,chart=sample()
+    result['trades'][0]['entry_price']=101
+    assert any('configured adverse slippage' in x for x in
+        audit_futures_parity(result,chart,timeframe_minutes=5)['failures'])

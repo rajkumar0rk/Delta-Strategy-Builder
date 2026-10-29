@@ -244,3 +244,18 @@ def test_excluded_funding_never_applies_available_csv(tmp_path,monkeypatch):
         start='2026-01-01T00:00:00Z',end='2026-01-01T01:00:00Z',strategy=s))
     assert result['metrics']['funding_usd']==0
     assert all(t['funding_usd']==0 for t in result['trades'])
+
+
+def test_closed_trade_cash_reconciles_and_open_position_fees_are_explicit(tmp_path,monkeypatch):
+    _seed(tmp_path,monkeypatch)
+    s=_strategy()
+    s.futures.stop_loss_percent=None
+    s.futures.take_profit_percent=None
+    result=run_backtest(BacktestRequest(dataset_id='sample',
+        start='2026-01-01T00:00:00Z',end='2026-01-01T01:00:00Z',strategy=s))
+    m=result['metrics']
+    assert m['cash_reconciliation_residual_usd']==pytest.approx(0)
+    u=result['unresolved_position']
+    assert u is not None
+    assert u['entry_fee_usd']==pytest.approx(m['unresolved_entry_fee_usd'])
+    assert u['quantity']==pytest.approx(s.futures.quantity_lots*s.futures.contract_btc)
