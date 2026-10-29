@@ -292,3 +292,18 @@ def test_futures_flat_blocked_candles_advance_lifecycle(tmp_path,monkeypatch):
         assert t['entry_lifecycle_age_bars']>=3
     if result['unresolved_position']:
         assert result['unresolved_position']['entry_lifecycle_age_bars']>=3
+
+
+def test_futures_independent_lifecycle_audit_with_real_chart_payload(tmp_path,monkeypatch):
+    from app.engine import chart_payload
+    from app.futures_audit import audit_futures_parity
+    _seed(tmp_path,monkeypatch)
+    s=_strategy()
+    req=BacktestRequest(dataset_id='sample',
+        start='2026-01-01T00:00:00Z',end='2026-01-01T01:00:00Z',strategy=s)
+    result=run_backtest(req)
+    chart=chart_payload(req)
+    checked=audit_futures_parity(result,chart,timeframe_minutes=5)
+    assert checked['independent_lifecycle'] is not None
+    assert checked['independent_lifecycle']['checked']==len(result['trades'])+int(bool(result['unresolved_position']))
+    assert checked['independent_lifecycle']['failures']==[]
