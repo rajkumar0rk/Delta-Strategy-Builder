@@ -117,7 +117,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':2,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':3,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
@@ -142,7 +142,7 @@ def run_futures_backtest(req, progress=None):
     qty=cfg.quantity_lots*cfg.contract_btc
     markers=list(alert_markers(frame,strategy,req.start,req.end))
     trades=[];equity_curve=[{'timestamp':req.start,'equity_usd':balance,'peak_equity_usd':balance,'drawdown_usd':0.0,'drawdown_percent':0.0}]
-    position=None;pending=None;fee_total=0.0;fund_total=0.0
+    position=None;pending=None;pending_lifecycle_id=None;fee_total=0.0;fund_total=0.0
     risk_rejects=0;ambiguous=0;unresolved=None
     daily={'day':None,'start_balance':initial,'entries':0,'consecutive_losses':0,'realized':0.0,'blocks':0}
     # Reuse existing CALL-side bullish and PUT-side bearish rule trees, gates,
@@ -187,7 +187,15 @@ def run_futures_backtest(req, progress=None):
         equity_curve.append({'timestamp':pd.Timestamp(exit_time).isoformat(),'equity_usd':balance,
             'peak_equity_usd':peak,'drawdown_usd':peak-balance,'drawdown_percent':(peak-balance)/max(peak,1e-12)*100})
     for i,(ts,row) in enumerate(frame.iterrows()):
-        if ts<pd.Timestamp(req.start) or ts>=pd.Timestamp(req.end):continue
+        if ts<pd.Timestamp(req.start):
+            # Warm up lifecycle state without placing pre-range orders.
+            for direction,enabled,group,side in (
+                ('LONG',call_enabled,strategy.call_entry,'CALL'),
+                ('SHORT',put_enabled,strategy.put_entry,'PUT')):
+                if enabled:
+                    _update_lifecycles(frame,i,group,_entry_behaviors(strategy,side),cycles[direction])
+            continue
+        if ts>=pd.Timestamp(req.end):continue
         if progress and i%500==0:
             progress(f'Backtesting futures candle {i+1}/{len(frame)}',min(95,45+50*i/max(len(frame),1)),'BACKTEST','Evaluate signals')
         at_open=ts-pd.Timedelta(minutes=tf)
@@ -203,6 +211,7 @@ def run_futures_backtest(req, progress=None):
         # bar open, not on the signal bar close.
         if pending is not None and position is None:
             direction=pending;pending=None
+            lifecycle_id=pending_lifecycle_id;pending_lifecycle_id=None
             px=_slipped(float(row.open),direction,True,cfg.slippage_bps)
             margin=px*qty/cfg.leverage
             start_fee=fee(px)
@@ -216,6 +225,10 @@ def run_futures_backtest(req, progress=None):
                 risk_rejects+=1
             else:
                 balance-=start_fee;fee_total+=start_fee;daily['entries']+=1
+                accepted_cycle=cycles[direction].get(lifecycle_id) if lifecycle_id else None
+                if accepted_cycle is not None:
+                    accepted_cycle.entries+=1
+                    accepted_cycle.last_entry_index=i
                 position={'direction':direction,'entry_time':at_open.isoformat(),'entry_price':px,
                     'entry_fee':start_fee,'margin':margin,'funding_usd':0.0,
                     'mfe':0.0,'mae':0.0}
@@ -265,6 +278,13 @@ def run_futures_backtest(req, progress=None):
                     # Condition known at this candle's close: cannot execute
                     # at this candle's close. Next bar open is required.
                     pending=('CLOSE','CONDITION_EXIT')
+        if position is not None:
+            # Keep the active direction's lifecycle re-armed/reset on every bar,
+            # matching the exclusive-position options engine.
+            side='CALL' if position['direction']=='LONG' else 'PUT'
+            _update_lifecycles(frame,i,
+                strategy.call_entry if side=='CALL' else strategy.put_entry,
+                _entry_behaviors(strategy,side),cycles[position['direction']])
         if closed or position or pending is not None or not _session_allowed(ts,strategy.session):continue
         if strategy.risk.close_at_session_end and _session_end_due(ts,strategy.session,tf):continue
         if strategy.no_trade.configured() and evaluate_group(frame,i,strategy.no_trade)['passed']:continue
@@ -286,12 +306,16 @@ def run_futures_backtest(req, progress=None):
             score=_big_trend_score(frame,i,group,
                 strategy.call_big_trend_score if side=='CALL' else strategy.put_big_trend_score,side)
             if tree['passed'] and score['passed']:
-                eligible.append(direction)
+                eligible.append((direction,next(x['behavior'].id for x in state if x['eligible'])))
         if eligible:
+            selected=None
             if len(eligible)==2:
-                if strategy.conflict_policy=='PREFER_CALL':pending='LONG'
-                elif strategy.conflict_policy=='PREFER_PUT':pending='SHORT'
-            else:pending=eligible[0]
+                if strategy.conflict_policy=='PREFER_CALL':selected=next(x for x in eligible if x[0]=='LONG')
+                elif strategy.conflict_policy=='PREFER_PUT':selected=next(x for x in eligible if x[0]=='SHORT')
+            else:
+                selected=eligible[0]
+            if selected is not None:
+                pending,pending_lifecycle_id=selected
     if position:
         unresolved={'reason':'END_OF_RANGE_FUTURES_EXPOSURE','entry_time':position['entry_time'],
             'entry_price':position['entry_price'],'direction':position['direction'],
