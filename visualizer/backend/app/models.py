@@ -447,8 +447,32 @@ def find_condition_for_validation(group: RuleGroup, condition_id: str) -> Condit
     return None
 
 
+class FuturesConfig(BaseModel):
+    """BTCUSD perpetual research assumptions, never an exchange-margin oracle."""
+    symbol: Literal["BTCUSD"] = "BTCUSD"
+    contract_btc: float = Field(default=0.001, gt=0)
+    quantity_lots: int = Field(default=1, ge=1, le=100000)
+    leverage: float = Field(default=5.0, ge=1, le=200)
+    margin_mode: Literal["ISOLATED", "CROSS"] = "ISOLATED"
+    maintenance_margin_percent: float = Field(default=0.25, gt=0, le=20)
+    taker_fee_percent: float = Field(default=0.05, ge=0, le=5)
+    gst_percent: float = Field(default=18, ge=0, le=100)
+    slippage_bps: float = Field(default=2, ge=0, le=1000)
+    stop_loss_percent: float | None = Field(default=1, gt=0, le=100)
+    take_profit_percent: float | None = Field(default=2, gt=0, le=1000)
+    funding_mode: Literal["REQUIRE_CSV", "EXCLUDE_WITH_WARNING"] = "REQUIRE_CSV"
+
+    @model_validator(mode="after")
+    def validate_futures(self):
+        if self.maintenance_margin_percent >= 100 / self.leverage:
+            raise ValueError("Futures maintenance margin must be below 100 / leverage")
+        return self
+
+
 class StrategyConfig(BaseModel):
     name: str = "New BTC options strategy"
+    market_type: Literal["OPTIONS", "FUTURES"] = "OPTIONS"
+    futures: FuturesConfig = Field(default_factory=FuturesConfig)
     timeframe: Literal["5m", "10m", "15m", "30m", "1h"] = "5m"
     direction_mode: Literal["CALL", "PUT", "BOTH"] = "BOTH"
     call_action: Literal["BUY", "SELL"] = "BUY"
