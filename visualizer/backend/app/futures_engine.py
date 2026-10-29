@@ -95,6 +95,11 @@ def _exit_level(pos, bar, config):
 
 def run_futures_backtest(req, progress=None):
     strategy=req.strategy;cfg=strategy.futures
+    if strategy.risk.profit_protection.mode!='NONE':
+        raise ValueError('Futures mode does not yet support option premium profit protection. Set profit_protection.mode=NONE; use futures price stop/target instead.')
+    if ((strategy.call_breakout_retest.enabled and strategy.call_breakout_retest.require_retest_for_entry)
+       or (strategy.put_breakout_retest.enabled and strategy.put_breakout_retest.require_retest_for_entry)):
+        raise ValueError('Futures retest entry override is not implemented; disable require_retest_for_entry or express it with normal indicator conditions.')
     store=DataStore()
     if parse_time(req.end)<=parse_time(req.start):
         raise ValueError('Backtest end must exceed start')
@@ -255,8 +260,8 @@ def run_futures_backtest(req, progress=None):
                     pending=('CLOSE','TIME_STOP')
                 elif strategy.risk.close_at_session_end and _session_end_due(ts,strategy.session,tf):
                     pending=('CLOSE','SESSION_END_EXIT')
-                elif ((position['direction']=='LONG' and evaluate_group(frame,i,strategy.call_exit)['passed'] and strategy.call_exit.configured())
-                   or (position['direction']=='SHORT' and evaluate_group(frame,i,strategy.put_exit)['passed'] and strategy.put_exit.configured())):
+                elif ((position['direction']=='LONG' and strategy.call_exit_signal_mode!='ALERT_ONLY' and evaluate_group(frame,i,strategy.call_exit)['passed'] and strategy.call_exit.configured())
+                   or (position['direction']=='SHORT' and strategy.put_exit_signal_mode!='ALERT_ONLY' and evaluate_group(frame,i,strategy.put_exit)['passed'] and strategy.put_exit.configured())):
                     # Condition known at this candle's close: cannot execute
                     # at this candle's close. Next bar open is required.
                     pending=('CLOSE','CONDITION_EXIT')
