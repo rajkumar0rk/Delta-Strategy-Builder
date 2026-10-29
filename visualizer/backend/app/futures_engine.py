@@ -147,7 +147,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':7,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':8,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
@@ -384,7 +384,8 @@ def run_futures_backtest(req, progress=None):
     if position:
         unresolved={'reason':'END_OF_RANGE_FUTURES_EXPOSURE','entry_time':position['entry_time'],
             'entry_price':position['entry_price'],'direction':position['direction'],
-            'marked_not_realized':True,'last_candle_close':last_close,
+            'entry_fee_usd':position['entry_fee'],'funding_usd':position['funding_usd'],
+            'quantity':qty,'marked_not_realized':True,'last_candle_close':last_close,
             'estimated_unrealized_pnl_usd':(last_close-position['entry_price'])*qty*
                 (1 if position['direction']=='LONG' else -1),
             'estimated_exit_fee_usd':fee(last_close)}
@@ -401,6 +402,9 @@ def run_futures_backtest(req, progress=None):
       'estimated_final_equity_usd':last_equity,
       'estimated_equity_return_percent':(last_equity/initial-1)*100,
       'cash_balance_change_usd':balance-initial,
+      'cash_reconciliation_residual_usd':(balance-initial
+         -sum(t['net_pnl_usd'] for t in trades)
+         -((-position['entry_fee']+position['funding_usd']) if position else 0.0)),
       'unresolved_entry_fee_usd':position['entry_fee'] if position else 0.0,
       'unresolved_funding_usd':position['funding_usd'] if position else 0.0,
       'max_closed_trade_drawdown_usd':max_dd,'max_closed_trade_drawdown_percent':max_dd_pct,
