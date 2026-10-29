@@ -64,6 +64,19 @@ def audit_futures_parity(result:dict, chart:dict, *, timeframe_minutes:int) -> d
             failures.append(f"Missing entry chart marker at {t['entry_time']} {direction}")
         if used_exits[(finish,side)]>exits[(finish,side)]:
             failures.append(f"Missing exit chart marker at {t['exit_time']} {direction}")
+        # Provenance comes from the engine's consumed, position-aware lifecycle
+        # rather than the independent chart preview's non-consuming state.
+        if "entry_lifecycle_id" in t:
+            if not t.get("entry_lifecycle_eligible") or t.get("entry_lifecycle_expired"):
+                failures.append(f"Entry lifecycle was not eligible: trade {t.get('id')}")
+            if int(t.get("entry_lifecycle_age_bars", -1)) < int(t.get("entry_lifecycle_delay_bars", 0)):
+                failures.append(f"Entry lifecycle delay not satisfied: trade {t.get('id')}")
+            if int(t.get("entry_lifecycle_entries_before", 0)) >= int(t.get("entry_lifecycle_max_entries", 1)):
+                failures.append(f"Entry lifecycle activation limit exceeded: trade {t.get('id')}")
+            if _epoch(t["entry_lifecycle_signal_time"]) + timeframe_minutes*60 != entry:
+                failures.append(f"Entry lifecycle signal/next-open mismatch: trade {t.get('id')}")
+        else:
+            warnings.append(f"Legacy result has no lifecycle provenance: trade {t.get('id')}")
         quantity=float(t["quantity"])
         gross=(float(t["exit_price"])-float(t["entry_price"]))*quantity*sign
         fees=float(t["entry_fee_usd"])+float(t["exit_fee_usd"])
@@ -109,6 +122,11 @@ def audit_futures_parity(result:dict, chart:dict, *, timeframe_minutes:int) -> d
                                     unresolved["direction"],True,bps,tick,extra_ticks) if _epoch(unresolved["entry_time"])+timeframe_minutes*60 in bars else None
             if expected_entry is None or not _same(expected_entry,unresolved["entry_price"]):
                 failures.append("Unresolved futures entry fill cannot be reconciled with chart OHLC")
+        if "entry_lifecycle_id" in unresolved and (
+            not unresolved.get("entry_lifecycle_eligible") or
+            _epoch(unresolved["entry_lifecycle_signal_time"])+timeframe_minutes*60!=_epoch(unresolved["entry_time"])
+        ):
+            failures.append("Unresolved position lifecycle provenance is invalid")
         warnings.append("Unresolved open exposure is excluded from closed-trade net P&L")
     if not chart.get("condition_states") or not chart.get("bars"):
         failures.append("Chart preview contains no rule states or OHLC bars")
@@ -135,7 +153,7 @@ def audit_futures_parity(result:dict, chart:dict, *, timeframe_minutes:int) -> d
     if unresolved and "unresolved_entry_fee_usd" in metrics and not _same(
         metrics["unresolved_entry_fee_usd"],unresolved.get("entry_fee_usd",0)):
         failures.append("Unresolved entry fee does not reconcile")
-    warnings.append("Chart lifecycle readiness is a diagnostic, not a position-aware replay")
+    warnings.append("Entry lifecycle provenance is a position-aware engine trace; it is not independently recomputed from source candles")
     warnings.append("Chart markers are backtest overlays; source OHLC and rule states are independent")
     warnings.append("Actual Delta orderbook fills, historical mark prices, FX collateral and liquidations are not verified")
     return {

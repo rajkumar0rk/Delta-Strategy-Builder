@@ -259,3 +259,36 @@ def test_closed_trade_cash_reconciles_and_open_position_fees_are_explicit(tmp_pa
     assert u is not None
     assert u['entry_fee_usd']==pytest.approx(m['unresolved_entry_fee_usd'])
     assert u['quantity']==pytest.approx(s.futures.quantity_lots*s.futures.contract_btc)
+
+
+def test_futures_entry_provenance_reconciles_completed_signal(tmp_path,monkeypatch):
+    _seed(tmp_path,monkeypatch)
+    s=_strategy()
+    s.futures.stop_loss_percent=None
+    s.futures.take_profit_percent=0.2
+    result=run_backtest(BacktestRequest(dataset_id='sample',
+        start='2026-01-01T00:00:00Z',end='2026-01-01T01:00:00Z',strategy=s))
+    assert result['trades']
+    for trade in result['trades']:
+        assert trade['entry_lifecycle_id']=='long-one'
+        assert trade['entry_lifecycle_eligible'] is True
+        assert trade['entry_lifecycle_expired'] is False
+        assert pd.Timestamp(trade['entry_time'])==pd.Timestamp(trade['entry_lifecycle_signal_time'])
+        assert trade['entry_lifecycle_entries_before']<trade['entry_lifecycle_max_entries']
+
+
+def test_futures_flat_blocked_candles_advance_lifecycle(tmp_path,monkeypatch):
+    _seed(tmp_path,monkeypatch)
+    s=_strategy()
+    s.call_entry_lifecycles=[EntryBehavior(id='delayed',delay_bars=3,max_entries_per_activation=1)]
+    s.futures.stop_loss_percent=None
+    s.futures.take_profit_percent=None
+    # Temporarily block all early entry OPENs, but allow the trigger to age.
+    from app.models import SessionWindow
+    s.session.windows=[SessionWindow(start='00:20',end='23:59')]
+    result=run_backtest(BacktestRequest(dataset_id='sample',
+        start='2026-01-01T00:00:00Z',end='2026-01-01T01:00:00Z',strategy=s))
+    for t in result['trades']:
+        assert t['entry_lifecycle_age_bars']>=3
+    if result['unresolved_position']:
+        assert result['unresolved_position']['entry_lifecycle_age_bars']>=3
