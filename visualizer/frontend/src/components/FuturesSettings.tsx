@@ -11,7 +11,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
  const windows=value.session.windows?.length?value.session.windows:[{start:'00:00',end:'23:59'}];
  const set=(patch:Partial<FuturesConfig>)=>onChange({...value,futures:{...f,...patch}});
  const number=(name:keyof FuturesConfig,label:string,step:string,min:number)=>(
-  <label key={name}>{label}<input type="number" min={min} step={step} value={f[name] as number??''}
+  <label key={name}>{label}<input type="number" min={min} step={step} value={Number(f[name] ?? 0)}
   onChange={e=>set({[name]:Number(e.target.value)} as Partial<FuturesConfig>)}/></label>
  );
  const optional=(name:'stop_loss_percent'|'take_profit_percent',label:string)=>(
