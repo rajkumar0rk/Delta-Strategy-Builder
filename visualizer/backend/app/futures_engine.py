@@ -95,8 +95,6 @@ def _exit_level(pos, bar, config):
 
 def run_futures_backtest(req, progress=None):
     strategy=req.strategy;cfg=strategy.futures
-    if strategy.risk.profit_protection.mode!='NONE':
-        raise ValueError('Futures mode does not yet support option premium profit protection. Set profit_protection.mode=NONE; use futures price stop/target instead.')
     if ((strategy.call_breakout_retest.enabled and strategy.call_breakout_retest.require_retest_for_entry)
        or (strategy.put_breakout_retest.enabled and strategy.put_breakout_retest.require_retest_for_entry)):
         raise ValueError('Futures retest entry override is not implemented; disable require_retest_for_entry or express it with normal indicator conditions.')
@@ -328,6 +326,7 @@ def run_futures_backtest(req, progress=None):
       'reliability':{'grade':'RESEARCH_ONLY','execution_model':'UNDERLYING_OHLC_PROXY',
         'limitations':['No historical futures orderbook/spread or fills',
            'Intrabar stops/targets, slippage and margin breaches are estimates',
+           'Option premium-based profit-protection fields are ignored in Futures mode; use futures price stop/target',
            'True mark-to-market drawdown not computed without historical futures mark/executable quotes',
            'Funding excluded' if cfg.funding_mode=='EXCLUDE_WITH_WARNING' else 'Funding rates supplied externally and settlement notional approximated']},
       'fee_model':{'name':'DELTA_FUTURES_ASSUMED_TAKER','taker_fee_percent':cfg.taker_fee_percent,'gst_percent':cfg.gst_percent},
