@@ -17,5 +17,5 @@ export function EquityDrawdown({result}:{result:BacktestResult|null}){
   return()=>{ro.disconnect();chart.remove()};
  },[result]);
  if(!result?.equity_curve?.length)return null;
- return <section className="card"><div className="card-head"><div><h2>Equity & drawdown</h2><p>Closed-trade equity after Delta fees + GST. Drawdown is shown as a negative percentage of the prior equity peak.</p></div></div><div ref={ref} className="equity-chart"/></section>
+ return <section className="card"><div className="card-head"><div><h2>Equity & drawdown</h2><p>{result?.strategy.market_type==='FUTURES'?'Estimated futures candle-close equity (including unrealized P&L and assumed exit fee); NOT an exchange mark price. Drawdown is an OHLC proxy.':'Closed-trade equity after Delta fees + GST. Drawdown is shown as a negative percentage of the prior equity peak.'}</p></div></div><div ref={ref} className="equity-chart"/></section>
 }

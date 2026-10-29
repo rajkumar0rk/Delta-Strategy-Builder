@@ -171,3 +171,35 @@ def test_futures_legacy_config_still_validates_without_tick_fields():
     updated=StrategyConfig.model_validate(data)
     assert updated.futures.tick_size==0.5
     assert updated.futures.slippage_ticks==0
+
+
+def test_futures_reports_candle_close_equity_without_overstating_realized_pnl(tmp_path,monkeypatch):
+    _seed(tmp_path,monkeypatch)
+    s=_strategy()
+    s.futures.stop_loss_percent=None
+    s.futures.take_profit_percent=None
+    result=run_backtest(BacktestRequest(dataset_id='sample',
+        start='2026-01-01T00:00:00Z',end='2026-01-01T01:00:00Z',strategy=s))
+    m=result['metrics']
+    assert result['unresolved_position'] is not None
+    assert result['unresolved_position']['estimated_unrealized_pnl_usd'] != 0
+    assert m['estimated_final_equity_usd']==pytest.approx(result['equity_curve'][-1]['equity_usd'])
+    assert m['estimated_candle_close_drawdown_percent']>=0
+    assert m['max_mark_to_market_drawdown_usd'] is None
+    times=[p['timestamp'] for p in result['equity_curve']]
+    assert len(times)==len(set(times))
+    assert m['net_pnl_usd']==sum(t['net_pnl_usd'] for t in result['trades'])
+
+
+def test_underfunded_futures_events_are_not_all_risk_blocks(tmp_path,monkeypatch):
+    _seed(tmp_path,monkeypatch)
+    s=_strategy()
+    s.risk.starting_balance_usd=.01
+    s.futures.leverage=1
+    result=run_backtest(BacktestRequest(dataset_id='sample',
+        start='2026-01-01T00:00:00Z',end='2026-01-01T01:00:00Z',
+        storage_mode='ANALYSIS',strategy=s))
+    assert result['metrics']['insufficient_margin_rejections']>=1
+    assert result['metrics']['rejection_reasons']['INSUFFICIENT_MARGIN']>=1
+    assert result['decision_count']>=1
+    assert (tmp_path/'results'/result['run_id']/'decision_events.csv.gz').is_file()

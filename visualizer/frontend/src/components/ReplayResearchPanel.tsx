@@ -19,6 +19,9 @@ const num=(value:any)=>{const n=Number(value);return Number.isFinite(n)?n.toFixe
 export function ReplayResearchPanel({strategy,selection,start,end,onStatus}:{strategy:Strategy;selection:any;start:string;end:string;onStatus:(s:string)=>void}){
  const [spread,setSpread]=useState('0,0.5,1,2');
  const [ticks,setTicks]=useState('0,1');
+ const [futureBps,setFutureBps]=useState('0,5,10');
+ const [feeMultipliers,setFeeMultipliers]=useState('1');
+ const [fundMultipliers,setFundMultipliers]=useState('1');
  const [train,setTrain]=useState(.7);
  const [embargo,setEmbargo]=useState(0);
  const [active,setActive]=useState<ResearchProgress|null>(null);
@@ -74,8 +77,18 @@ export function ReplayResearchPanel({strategy,selection,start,end,onStatus}:{str
   if(activeId.current||submitting.current)return;
   const parse=(v:string)=>v.split(',').map(x=>Number(x.trim()));
   const hs=parse(spread),ts=parse(ticks);
-  if(hs.some(x=>!Number.isFinite(x)||x<0)||ts.some(x=>!Number.isInteger(x)||x<0)||!hs.length||!ts.length){
+  if((strategy.market_type!=='FUTURES'&&(hs.some(x=>!Number.isFinite(x)||x<0)||!hs.length))||ts.some(x=>!Number.isInteger(x)||x<0)||!ts.length){
    setFeedback('Use nonnegative half-spreads and integer tick values.');return;
+  }
+
+  if(strategy.market_type==='FUTURES'){
+   const bps=parse(futureBps),fees=parse(feeMultipliers),funding=parse(fundMultipliers);
+   if(!bps.length||!fees.length||!funding.length||bps.some(x=>!Number.isFinite(x)||x<0)||fees.some(x=>!Number.isFinite(x)||x<1)||funding.some(x=>!Number.isFinite(x)||x<0)){
+    setFeedback('Futures bps, fee and funding multipliers must be valid nonnegative numbers; fees at least 1.');return;
+   }
+   void run('replay',{...selection,start,end,strategy,
+    extra_futures_slippage_bps:bps,extra_slippage_ticks:ts,
+    futures_fee_multipliers:fees,futures_funding_multipliers:funding});return;
   }
   void run('replay',{...selection,start,end,strategy,extra_half_spread_percent:hs,extra_slippage_ticks:ts});
  }
@@ -94,11 +107,17 @@ export function ReplayResearchPanel({strategy,selection,start,end,onStatus}:{str
  const running=!!active;
  return <section className="card">
  <h2>V16.2 / V16.3 · Execution replay &amp; robustness</h2>
- <p>Research-only, synthetic/unverified BBO. Execution replay reruns all strategy decisions under additional adverse bid/ask spread and slippage. No historical L1 depth or fill probability is invented.</p>
- <div className="form-grid"><label>Extra half-spread % scenarios<input disabled={running} value={spread} onChange={e=>setSpread(e.target.value)}/></label><label>Extra ticks (each side)<input disabled={running} value={ticks} onChange={e=>setTicks(e.target.value)}/></label></div>
+ <p>{strategy.market_type==='FUTURES'?'Futures OHLC replay: vary adverse execution basis points, ticks, taker fees and recorded funding multipliers. No historical mark price or L1 liquidity is available.':'Research-only, synthetic/unverified BBO. Execution replay reruns decisions under additional adverse bid/ask spread and slippage.'}</p>
+ <div className="form-grid">
+ {strategy.market_type==='FUTURES'?<>
+  <label>Extra futures adverse slippage (bps)<input disabled={running} value={futureBps} onChange={e=>setFutureBps(e.target.value)}/></label>
+  <label>Taker-fee multipliers<input disabled={running} value={feeMultipliers} onChange={e=>setFeeMultipliers(e.target.value)}/></label>
+  <label>Recorded funding multipliers<input disabled={running} value={fundMultipliers} onChange={e=>setFundMultipliers(e.target.value)}/></label>
+ </>:<label>Extra half-spread % scenarios<input disabled={running} value={spread} onChange={e=>setSpread(e.target.value)}/></label>}
+ <label>Extra ticks (each side)<input disabled={running} value={ticks} onChange={e=>setTicks(e.target.value)}/></label></div>
  <button disabled={running||!start||!end} onClick={replayNow}>{active?.kind==='replay'?'Running replay…':'Run full execution replay'}</button>
  {active?.kind==='replay'&&<ResearchJobProgress job={active.job} onStop={()=>void stop()}/>}
- {replay&&<div className="table-wrap"><p>{replay.note}</p><table><thead><tr><th>Half spread +%</th><th>Extra ticks</th><th>Trades</th><th>Net $</th><th>Change $</th><th>Unresolved</th></tr></thead><tbody>{(replay.scenarios||[]).map((r:any,i:number)=><tr key={i}><td>{r.extra_half_spread_percent}</td><td>{r.extra_slippage_ticks}</td><td>{r.trades}</td><td>{num(r.metrics?.net_pnl_usd)}</td><td>{num(r.delta_net_pnl_usd)}</td><td>{r.unresolved_position?'Yes':'No'}</td></tr>)}</tbody></table></div>}
+ {replay&&<div className="table-wrap"><p>{replay.note}</p><table><thead><tr><th>{strategy.market_type==='FUTURES'?'Extra bps':'Half spread +%'}</th><th>Extra ticks</th><th>Trades</th><th>Net $</th><th>Change $</th><th>Unresolved</th></tr></thead><tbody>{(replay.scenarios||[]).map((r:any,i:number)=><tr key={i}><td>{strategy.market_type==='FUTURES'?r.extra_futures_slippage_bps:r.extra_half_spread_percent}</td><td>{r.extra_slippage_ticks}</td><td>{r.trades}</td><td>{num(r.metrics?.net_pnl_usd)}</td><td>{num(r.delta_net_pnl_usd)}</td><td>{r.unresolved_position?'Yes':'No'}</td></tr>)}</tbody></table></div>}
  <h3>Chronological train / unseen holdout</h3>
  <p>Freeze strategy parameters before comparing periods. The test segment never selects parameters using its results.</p>
  <div className="form-grid"><label>Training fraction<select disabled={running} value={train} onChange={e=>setTrain(Number(e.target.value))}><option value={.6}>60%</option><option value={.7}>70%</option><option value={.8}>80%</option></select></label><label>Embargo candles<input disabled={running} type="number" min={0} max={288} value={embargo} onChange={e=>setEmbargo(Number(e.target.value))}/></label></div>

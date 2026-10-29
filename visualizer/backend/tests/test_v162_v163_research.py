@@ -168,3 +168,29 @@ def test_replay_cancellation_interrupts_between_inner_checkpoints(monkeypatch):
     with pytest.raises(Cancelled, match='Stopped'):
         run_execution_replay(req, interrupt)
     assert len(runs) == 1
+
+
+def test_futures_replay_uses_futures_inputs_and_preserves_original(monkeypatch):
+    calls=[]
+    strategy=StrategyConfig(market_type='FUTURES')
+    strategy.futures.funding_mode='EXCLUDE_WITH_WARNING'
+    def fake(req, progress=None):
+        cfg=req.strategy.futures
+        calls.append((cfg.slippage_bps,cfg.slippage_ticks,cfg.taker_fee_percent,
+                      cfg.funding_rate_multiplier,req.strategy.execution.slippage_ticks))
+        return {'run_id':str(len(calls)),'trades':[],
+                'metrics':{'net_pnl_usd':100-cfg.slippage_bps-cfg.slippage_ticks}}
+    monkeypatch.setattr('app.research.run_backtest',fake)
+    req=ExecutionReplayRequest(dataset_id='dummy',start='2026-01-01T00:00:00Z',
+        end='2026-01-02T00:00:00Z',strategy=strategy,
+        extra_futures_slippage_bps=[0,5],extra_slippage_ticks=[0,2],
+        futures_fee_multipliers=[1],futures_funding_multipliers=[1])
+    result=run_execution_replay(req)
+    assert result['kind']=='FUTURES_EXECUTION_REPLAY'
+    assert len(calls)==4
+    assert calls[0][0]==strategy.futures.slippage_bps
+    assert calls[-1][0]==strategy.futures.slippage_bps+5
+    assert calls[-1][1]==strategy.futures.slippage_ticks+2
+    assert all(row[-1]==strategy.execution.slippage_ticks for row in calls)
+    assert result['scenarios'][-1]['delta_net_pnl_usd']==-7
+    assert strategy.futures.slippage_bps==2
