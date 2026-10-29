@@ -1,6 +1,18 @@
-# Architecture
+# BTC Strategy Lab architecture (maintained source)
 
-## Boundary
+For full module ownership and change impact read [codex/ARCHITECTURE.md](codex/ARCHITECTURE.md) and [codex/CHANGE_IMPACT_MATRIX.md](codex/CHANGE_IMPACT_MATRIX.md).
+
+The maintained source is `visualizer/`. React/Vite (`frontend/`) calls FastAPI (`backend/app/main.py`). `engine.py` routes `market_type=OPTIONS` through the options research backtester or `market_type=FUTURES` through `futures_engine.py`. The latter uses underlying OHLC proxies rather than exchange-executable historical order-book prices. Pydantic schema: `backend/app/models.py`. Data: repository-owned `backtest/data/delta-history/catalog.json`.
+
+Research modules: `backend/app/research.py` (replay/holdout), `futures_validation.py` (frozen-strategy holdout and stress), `futures_audit.py` (limited internal chart/backtest parity), `futures_contract.py` (dated published BTCUSD snapshot, research tier calculations). `backend/app/ai_prompt.py` builds importable strategy JSON instructions. `frontend/src/components/ReplayResearchPanel.tsx` exposes historical validation and internal parity actions.
+
+The entire app is **research-only**; no live broker order placement or guaranteed exchange fills. Chart overlays do not certify exact position-aware lifecycle parity; historic mark prices, actual liquidation and INR portfolio accounting remain unavailable.
+
+## Historical legacy visualizer integration (retained context)
+
+The original decision-trace visualization below describes an earlier integration and **is not the current app's sole architecture**.
+
+### Legacy boundary
 
 The visualizer is a read-only analytics application. Trading/research decisions
 remain in the existing Python backtest engine. `strategy.py` is not imported by
