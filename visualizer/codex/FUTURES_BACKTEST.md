@@ -39,3 +39,10 @@ npm run build
 - Stops take priority over estimated intrabar margin breaches unless a breach already exists at candle OPEN. The ambiguous case is counted; this is NOT a Delta liquidation replay.
 - Configurable `tick_size` (default research assumption $0.50) and `slippage_ticks` permit conservative fill rounding. These are assumptions, not verified against historical product metadata.
 - Futures historical funding schedule, fee tiers, maker executions, risk tier changes, actual liquidation fills and accurate marked equity remain unverified or unavailable. Never present these as modeled.
+
+## Futures stress/replay and accounting upgrade
+- Futures replay now varies extra adverse slippage bps, ticks, taker fees and **recorded** funding multiplier. Option-style synthetic half-spread replay remains exclusive to OPTIONS.
+- Futures analytics now include a candle-close equity proxy: cash balance + unrealized directional P&L - assumed exit taker fee, including funding in cash. This is not the historical Delta mark price and cannot capture all intrabar drawdown.
+- Rejection events identify margin-shortfall versus session/risk blocks; only ANALYSIS/FULL_DEBUG persist compressed decision events.
+- `net_pnl_usd` is closed trades only; `return_percent` is cash balance change; `estimated_equity_return_percent` includes marked open exposure. Do not equate them.
+- No L1 order book, exchange mark, liquidation tiers or validated funding schedule: RESEARCH_ONLY remains mandatory.
