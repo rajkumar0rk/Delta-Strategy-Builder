@@ -228,3 +228,19 @@ def test_pre_2025_minute_funding_cannot_be_misread_as_eight_hour(tmp_path,monkey
     rates,missing=funding_events(parts,'2025-08-01T00:00:00Z',
         '2025-08-02T00:00:00Z',required=False)
     assert rates=={} and missing==[]
+
+
+def test_excluded_funding_never_applies_available_csv(tmp_path,monkeypatch):
+    root=_seed(tmp_path,monkeypatch)
+    _write(root/'sample'/'futures_funding.csv',[
+        dict(timestamp='2026-01-01T00:00:00Z',symbol='BTCUSD',funding_rate='0.10')])
+    store=DataStore()
+    rates,missing=funding_events([store.resolve('sample')],
+        '2026-01-01T00:00:00Z','2026-01-01T00:55:00Z',required=False)
+    assert rates=={} and missing==[]
+    s=_strategy()
+    s.futures.funding_mode='EXCLUDE_WITH_WARNING'
+    result=run_backtest(BacktestRequest(dataset_id='sample',
+        start='2026-01-01T00:00:00Z',end='2026-01-01T01:00:00Z',strategy=s))
+    assert result['metrics']['funding_usd']==0
+    assert all(t['funding_usd']==0 for t in result['trades'])
