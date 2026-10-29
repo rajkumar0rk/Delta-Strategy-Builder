@@ -904,6 +904,9 @@ def _mark_to_market_value(pos: Position, q: dict[str, Any], cash_balance: float,
 
 
 def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = None) -> dict[str, Any]:
+    if req.strategy.market_type == 'FUTURES':
+        from .futures_engine import run_futures_backtest
+        return run_futures_backtest(req, progress)
     store = DataStore()
 
     def report(message: str, percent: float | None = None, stage: str | None = None, next_step: str | None = None):
