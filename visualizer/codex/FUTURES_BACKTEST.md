@@ -46,3 +46,10 @@ npm run build
 - Rejection events identify margin-shortfall versus session/risk blocks; only ANALYSIS/FULL_DEBUG persist compressed decision events.
 - `net_pnl_usd` is closed trades only; `return_percent` is cash balance change; `estimated_equity_return_percent` includes marked open exposure. Do not equate them.
 - No L1 order book, exchange mark, liquidation tiers or validated funding schedule: RESEARCH_ONLY remains mandatory.
+
+## Milestone 4 — public Delta contract audit (29 Oct 2026)
+The public [BTCUSD contract specification](https://www.delta.exchange/contracts) lists 0.001 BTC/lot, $0.50 tick, up to 200x leverage, 0.5% baseline initial margin, 0.25% maintenance margin, size-dependent IM/MM above $100,000 USD notional, 0.05% taker fee, 0.02% maker fee, INR settlement and $5,000,000 position limit. The $5m cap applies to new orders from 23 Aug 2026 ([announcement](https://www.delta.exchange/support/solutions?articleId=80001220837)). This is the **present published contract snapshot**, not date-stamped historic specs.
+
+The futures `margin_tier_mode` defaults to `FLAT_RESEARCH` for backwards compatibility. `DELTA_PUBLISHED_SNAPSHOT` raises required initial/maintenance margin to the published tier minimum at the evaluated notional. This **does not** implement genuine Delta margin, changing account state, INR FX, mark-to-market or liquidation. Recalculate previous futures tests: cache semantics changed.
+
+The [Delta perpetual guide](https://guides.delta.exchange/delta-exchange-india-user-guide/derivatives-guide/docs) reports minute-by-minute funding until 8 Sep 2025 17:30 IST; the current model requires sampled 8-hour funding after the transition. The engine now fails closed with `FUTURES_HISTORICAL_FUNDING_REGIME_UNSUPPORTED` if REQUIRE_CSV spans the earlier minute-by-minute regime, rather than assuming current settlement frequency. EXCLUDE_WITH_WARNING explicitly excludes funding for those older spans. Historical funding rates and USD/INR settlement remain externally supplied/unverified. The present-day contract schedule can change over time; no 2025 funding payments are invented.
