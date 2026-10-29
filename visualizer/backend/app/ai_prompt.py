@@ -56,7 +56,7 @@ def build_strategy_prompt(req: AiStrategyPromptRequest) -> str:
             "Stop loss and take profit are percentages of BTCUSD futures entry price, not of an option premium.\n"
             "Use strategy.futures for contract_btc, quantity_lots, leverage, margin_mode, "
             "maintenance_margin_percent, taker_fee_percent, gst_percent, slippage_bps, tick_size, slippage_ticks, "
-            "stop_loss_percent, take_profit_percent, funding_mode. "
+            "stop_loss_percent, take_profit_percent, funding_mode, margin_tier_mode. "
             "Historical funding requires futures_funding.csv with timestamp/symbol/funding_rate "
             "or an explicit EXCLUDE_WITH_WARNING research choice. Never invent funding rates.\n"
             "Margin breaches, fills and liquidation prices are estimates, NOT Delta-verified. "

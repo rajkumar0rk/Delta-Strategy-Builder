@@ -3,7 +3,7 @@ import type {FuturesConfig,Strategy} from '../types';
 const defaults:FuturesConfig={symbol:'BTCUSD',contract_btc:0.001,quantity_lots:1,leverage:5,
  margin_mode:'ISOLATED',maintenance_margin_percent:.25,taker_fee_percent:.05,
  gst_percent:18,slippage_bps:2,tick_size:0.5,slippage_ticks:0,stop_loss_percent:1,take_profit_percent:2,
- funding_mode:'REQUIRE_CSV'};
+ funding_mode:'REQUIRE_CSV',margin_tier_mode:'FLAT_RESEARCH'};
 export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Strategy)=>void}){
  const f=value.futures||defaults;
  const risk=(patch:Record<string,any>)=>onChange({...value,risk:{...value.risk,...patch}});
@@ -24,6 +24,10 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   <label>Direction<select value={value.direction_mode} onChange={e=>onChange({...value,direction_mode:e.target.value as Strategy['direction_mode']})}><option value="BOTH">LONG + SHORT</option><option value="CALL">LONG only</option><option value="PUT">SHORT only</option></select></label>
   {number('quantity_lots','Quantity (lots of 0.001 BTC)','1',1)}
   {number('leverage','Assumed leverage ×','1',1)}
+  <label>Margin tier assumption<select value={f.margin_tier_mode||'FLAT_RESEARCH'} onChange={e=>set({margin_tier_mode:e.target.value as 'FLAT_RESEARCH'|'DELTA_PUBLISHED_SNAPSHOT'})}>
+   <option value="FLAT_RESEARCH">Legacy flat-margin research</option>
+   <option value="DELTA_PUBLISHED_SNAPSHOT">Current published BTCUSD size-tier snapshot (not historical)</option>
+  </select></label>
   <label>Margin mode<select value={f.margin_mode} onChange={e=>set({margin_mode:e.target.value as FuturesConfig['margin_mode']})}><option value="ISOLATED">Isolated (research estimate)</option><option value="CROSS">Cross (research estimate)</option></select></label>
   {number('maintenance_margin_percent','Assumed maintenance margin %','0.05',0.01)}
   {number('taker_fee_percent','Taker fee % per side','0.001',0)}
@@ -50,7 +54,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
    })}
   </div>)}
  </div>
- <div className="warning-box"><b>Accuracy limitations:</b> Futures fills use historical 5m-derived OHLC and assumed slippage, not recorded futures order-book quotes. Funding requires <code>futures_funding.csv</code> with timestamp, symbol and decimal funding_rate. Collateral and liquidation are approximations; no Delta exchange liquidation precision is claimed. Backtests never place orders.</div>
+ <div className="warning-box"><b>Accuracy limitations:</b> Futures fills use historical 5m-derived OHLC and assumed slippage, not recorded futures order-book quotes. Funding requires <code>futures_funding.csv</code> with timestamp, symbol and decimal funding_rate. Collateral and liquidation are approximations; no Delta exchange liquidation precision is claimed. Current published snapshot supports size-dependent margins above $100,000 notional; INR conversion, historical collateral tiers, and genuine liquidation remain unmodeled. Pre-8-Sep-2025 minute-by-minute funding is not supported by the 8-hour funding importer. Backtests never place orders.</div>
  </section>
  <section className="card"><h2>Futures risk and entry sessions</h2>
  <div className="form-grid">

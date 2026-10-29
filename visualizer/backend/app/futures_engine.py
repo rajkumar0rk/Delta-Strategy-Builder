@@ -18,6 +18,8 @@ from .alerts import alert_markers
 from .rules import evaluate_group
 from .storage import write_json_gz, write_csv_gz, maybe_auto_cleanup
 from .config import result_root
+from .futures_contract import (BTCUSD_SNAPSHOT, EIGHT_HOUR_FUNDING_FROM_UTC, assumed_initial_margin_usd,
+    assumed_maintenance_margin_usd, assumed_contract_warnings)
 from .engine import (_new_result_dir, _backtest_cache_key, _cached_result, _write_cache,
                      _prepare_strategy_state, _session_allowed, _session_end_due,
                      _entry_behaviors, _cycle_states, _update_lifecycles, _big_trend_score,
@@ -39,6 +41,12 @@ def _funding_files(parts):
 
 def funding_events(parts, start, end, *, required):
     """Import settlement-time BTCUSD funding rates. Never infer missing rates."""
+    first=pd.Timestamp(start)
+    first=first.tz_localize('UTC') if first.tzinfo is None else first.tz_convert('UTC')
+    if first < pd.Timestamp(EIGHT_HOUR_FUNDING_FROM_UTC):
+        if required:
+            raise ValueError('FUTURES_HISTORICAL_FUNDING_REGIME_UNSUPPORTED: pre-2025-09-08 minute-by-minute funding needs a separate model')
+        return {}, []
     events={}
     files=list(_funding_files(parts))
     if required and not files:
@@ -64,7 +72,13 @@ def funding_events(parts, start, end, *, required):
     first=pd.Timestamp(start);last=pd.Timestamp(end)
     first=first.tz_localize('UTC') if first.tzinfo is None else first.tz_convert('UTC')
     last=last.tz_localize('UTC') if last.tzinfo is None else last.tz_convert('UTC')
-    # Funding settlement clock is 00:00, 08:00, 16:00 UTC research assumption.
+    # Funding was exchanged minute-by-minute before 2025-09-08 12:00 UTC.
+    # Historical minute-rate ingestion is deliberately unsupported here.
+    if first < pd.Timestamp(EIGHT_HOUR_FUNDING_FROM_UTC):
+        if required:
+            raise ValueError('FUTURES_HISTORICAL_FUNDING_REGIME_UNSUPPORTED: pre-2025-09-08 minute-by-minute funding requires a separate historical model; use EXCLUDE_WITH_WARNING only for explicitly funding-excluded research')
+        return {}, []
+    # Current 8h snapshots at 00:00/08:00/16:00 UTC; verify historical changes.
     # Require ALL schedule records in requested range, not merely during a position.
     expected=pd.date_range(first.ceil('8h'),last-pd.Timedelta(nanoseconds=1),freq='8h',tz='UTC')
     missing=[t for t in expected if t not in events]
@@ -87,7 +101,7 @@ def _slipped(price, direction, entry, bps, tick_size=0.0, extra_ticks=0):
 
 def _margin_breached(pos, price, balance, qty, cfg):
     sign=1 if pos['direction']=='LONG' else -1
-    maintenance=price*qty*cfg.maintenance_margin_percent/100
+    maintenance=assumed_maintenance_margin_usd(price,qty,cfg)
     unrealized=(price-pos['entry_price'])*qty*sign
     stressed=(pos['margin']+unrealized+pos['funding_usd']-pos['entry_fee']
               if cfg.margin_mode=='ISOLATED' else balance+unrealized)
@@ -132,7 +146,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':5,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':6,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
@@ -151,6 +165,7 @@ def run_futures_backtest(req, progress=None):
     _prepare_strategy_state(frame,strategy)
     rates,missing_funding=funding_events(parts,req.start,req.end,
         required=cfg.funding_mode=='REQUIRE_CSV')
+    contract_warnings=assumed_contract_warnings(cfg)
     if progress: progress('Evaluating LONG and SHORT futures signals',45,'BACKTEST','Results')
     balance=float(strategy.risk.starting_balance_usd)
     initial=balance;peak=balance;max_dd=0.0;max_dd_pct=0.0
@@ -230,7 +245,7 @@ def run_futures_backtest(req, progress=None):
             direction=pending;pending=None
             lifecycle_id=pending_lifecycle_id;pending_lifecycle_id=None
             px=_slipped(float(row.open),direction,True,cfg.slippage_bps,cfg.tick_size,cfg.slippage_ticks)
-            margin=px*qty/cfg.leverage
+            margin=assumed_initial_margin_usd(px,qty,cfg)
             start_fee=fee(px)
             if ((strategy.risk.max_trades_per_day is not None and daily['entries']>=strategy.risk.max_trades_per_day)
               or (strategy.risk.max_consecutive_losses is not None and daily['consecutive_losses']>=strategy.risk.max_consecutive_losses)
@@ -240,6 +255,12 @@ def run_futures_backtest(req, progress=None):
                 daily['blocks']+=1
                 rejection_reasons['RISK_OR_SESSION_BLOCK']=rejection_reasons.get('RISK_OR_SESSION_BLOCK',0)+1
                 decisions.append({'timestamp':at_open.isoformat(),'kind':'EXECUTION','direction':direction,'passed':False,'reason':'RISK_OR_SESSION_BLOCK'})
+            elif (cfg.margin_tier_mode=='DELTA_PUBLISHED_SNAPSHOT' and
+                  pd.Timestamp(at_open)>=pd.Timestamp('2026-08-22T18:30:00Z') and
+                  px*qty>BTCUSD_SNAPSHOT['position_limit_usd']):
+                margin_rejects+=1
+                rejection_reasons['PUBLISHED_POSITION_LIMIT']=rejection_reasons.get('PUBLISHED_POSITION_LIMIT',0)+1
+                decisions.append({'timestamp':at_open.isoformat(),'kind':'EXECUTION','direction':direction,'passed':False,'reason':'PUBLISHED_POSITION_LIMIT'})
             elif balance<margin+start_fee:
                 margin_rejects+=1
                 rejection_reasons['INSUFFICIENT_MARGIN']=rejection_reasons.get('INSUFFICIENT_MARGIN',0)+1
@@ -406,9 +427,14 @@ def run_futures_backtest(req, progress=None):
            'Option premium-based profit-protection fields are ignored in Futures mode; use futures price stop/target',
            'Real exchange mark-to-market drawdown cannot be computed; candle-close proxy estimates are supplied separately',
            'Cash balance includes accrued funding and entry fees of any unresolved futures position; closed-trade net PnL excludes its open price exposure',
-           'Funding excluded' if cfg.funding_mode=='EXCLUDE_WITH_WARNING' else 'Funding rates supplied externally and settlement notional approximated']},
+           'Funding excluded' if cfg.funding_mode=='EXCLUDE_WITH_WARNING' else 'Funding rates supplied externally and settlement notional approximated',
+           'Current published BTCUSD margin tiers are not historical account margin; INR conversion and actual liquidation are not modeled']},
       'fee_model':{'name':'DELTA_FUTURES_ASSUMED_TAKER','taker_fee_percent':cfg.taker_fee_percent,'gst_percent':cfg.gst_percent},
-      'futures_research':{'symbol':cfg.symbol,'leverage':cfg.leverage,'margin_mode':cfg.margin_mode,
+      'futures_research':{'contract_snapshot':BTCUSD_SNAPSHOT,'contract_warnings':contract_warnings,
+        'historical_margin_tiers_verified':False,
+        'settlement_inr_conversion_modelled':False,
+        'funding_regime':'PRE_2025_MINUTE_FUNDING_EXCLUDED' if pd.Timestamp(req.start)<pd.Timestamp(EIGHT_HOUR_FUNDING_FROM_UTC) else 'EIGHT_HOUR_SNAPSHOT',
+        'symbol':cfg.symbol,'leverage':cfg.leverage,'margin_mode':cfg.margin_mode,
         'funding_mode':cfg.funding_mode,'funding_missing_intervals':len(missing_funding),
         'venue_verified_liquidation':False,'volume_fill_verified':False,
           'tick_size':cfg.tick_size,'execution_slippage_ticks':cfg.slippage_ticks}}

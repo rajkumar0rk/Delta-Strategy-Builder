@@ -6,12 +6,13 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import ORJSONResponse, FileResponse
 from .data_store import DataStore
 from .indicators import catalog_payload
-from .models import BacktestRequest, PreviewRequest, SaveStrategyRequest, AiStrategyPromptRequest, ResearchSweepRequest, AblationRequest, TrendDiscoveryRequest, ArchiveSyncRequest, ExecutionReplayRequest, HoldoutResearchRequest
+from .models import BacktestRequest, PreviewRequest, SaveStrategyRequest, AiStrategyPromptRequest, ResearchSweepRequest, AblationRequest, TrendDiscoveryRequest, ArchiveSyncRequest, ExecutionReplayRequest, HoldoutResearchRequest, FuturesValidationRequest
 from .engine import run_backtest, chart_payload
 from .jobs import jobs
 from .config import project_root, result_root
 from .analysis import build_analysis, build_analysis_package
 from .ai_prompt import build_strategy_prompt
+from .futures_validation import run_futures_validation
 from .research import run_sweep, run_ablation, list_results, run_execution_replay, run_holdout
 from .trend_discovery import run_trend_discovery
 from .archive_sync import plan_archive_sync, ensure_archive_data
@@ -226,6 +227,12 @@ def execution_replay(req: ExecutionReplayRequest):
 @app.post('/api/research/holdout')
 def research_holdout(req: HoldoutResearchRequest):
     jid = jobs.create(lambda progress: run_holdout(req, progress))
+    return {'job_id': jid}
+
+
+@app.post('/api/research/futures-validation')
+def futures_validation(req: FuturesValidationRequest):
+    jid = jobs.create(lambda progress: run_futures_validation(req, progress))
     return {'job_id': jid}
 
 

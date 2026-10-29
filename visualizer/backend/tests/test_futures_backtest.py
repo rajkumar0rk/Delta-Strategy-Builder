@@ -203,3 +203,28 @@ def test_underfunded_futures_events_are_not_all_risk_blocks(tmp_path,monkeypatch
     assert result['metrics']['rejection_reasons']['INSUFFICIENT_MARGIN']>=1
     assert result['decision_count']>=1
     assert (tmp_path/'results'/result['run_id']/'decision_events.csv.gz').is_file()
+
+
+def test_published_btcusd_margin_tiers_and_order_cap():
+    from app.futures_contract import (published_margin_percent, assumed_initial_margin_usd,
+        assumed_maintenance_margin_usd, BTCUSD_SNAPSHOT)
+    assert published_margin_percent(100_000,initial=True)==pytest.approx(.5)
+    assert published_margin_percent(200_000,initial=True)==pytest.approx(.75)
+    assert published_margin_percent(200_000,initial=False)==pytest.approx(.375)
+    cfg=FuturesConfig(margin_tier_mode='DELTA_PUBLISHED_SNAPSHOT',leverage=200)
+    assert assumed_initial_margin_usd(100_000,2,cfg)==pytest.approx(1500)
+    assert assumed_maintenance_margin_usd(100_000,2,cfg)==pytest.approx(750)
+    assert BTCUSD_SNAPSHOT['position_limit_usd']==5_000_000
+    assert FuturesConfig().margin_tier_mode=='FLAT_RESEARCH'
+
+
+def test_pre_2025_minute_funding_cannot_be_misread_as_eight_hour(tmp_path,monkeypatch):
+    from app.futures_engine import funding_events
+    _seed(tmp_path,monkeypatch)
+    store=DataStore()
+    parts=[store.resolve('sample')]
+    with pytest.raises(ValueError,match='FUTURES_HISTORICAL_FUNDING_REGIME_UNSUPPORTED'):
+        funding_events(parts,'2025-08-01T00:00:00Z','2025-08-02T00:00:00Z',required=True)
+    rates,missing=funding_events(parts,'2025-08-01T00:00:00Z',
+        '2025-08-02T00:00:00Z',required=False)
+    assert rates=={} and missing==[]
