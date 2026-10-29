@@ -46,7 +46,7 @@ def independently_replay_lifecycles(result: dict, source: list[dict], timeframe_
         "CALL": strategy.call_entry_lifecycles or [strategy.call_entry_behavior],
         "PUT": strategy.put_entry_lifecycles or [strategy.put_entry_behavior],
     }
-    selected = {side: {b.id: b for b in behaviors if b.enabled} for side, behaviors in selected.items()}
+    selected = {side: {b.id: b for b in behaviors if b.enabled}\n                if strategy.direction_mode in (side, "BOTH") and\n                   (strategy.call_signal_mode if side == "CALL" else strategy.put_signal_mode) != "ALERT_ONLY"\n                else {} for side, behaviors in selected.items()}
     cycles = {side: {ident: Cycle() for ident in group} for side, group in selected.items()}
     trades = list(result.get("trades") or [])
     if result.get("unresolved_position"):
