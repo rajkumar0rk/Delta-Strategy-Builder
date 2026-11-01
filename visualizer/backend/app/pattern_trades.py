@@ -127,6 +127,8 @@ class PatternTracker:
                 del self.active[key];continue
             # No confirmation on the 15m pattern candle itself. All following
             # bars require no stop breach; 15m event range remains frozen.
+            if event.side != side:
+                continue
             if age>0 and ((lo<=event.low) if event.side=="CALL" else (hi>=event.high)):
                 del self.active[key];continue
             if (age in range(1,self.cfg.confirmation_bars+1) and strong and volume_ok and
