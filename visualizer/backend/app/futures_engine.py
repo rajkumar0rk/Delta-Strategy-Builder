@@ -147,7 +147,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':9,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':10,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
@@ -184,7 +184,7 @@ def run_futures_backtest(req, progress=None):
     put_enabled=strategy.direction_mode in ('PUT','BOTH') and strategy.put_signal_mode!='ALERT_ONLY'
     cycles={'LONG':_cycle_states(_entry_behaviors(strategy,'CALL')) if call_enabled else {},
             'SHORT':_cycle_states(_entry_behaviors(strategy,'PUT')) if put_enabled else {}}
-    tf={'5m':5,'10m':10,'15m':15,'30m':30,'1h':60}[strategy.timeframe]
+    tf={'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'1D':1440}[strategy.timeframe]
     def fee(price):
         return price*qty*cfg.taker_fee_percent/100*(1+cfg.gst_percent/100)
     def close(pos,exit_time,price,reason):
