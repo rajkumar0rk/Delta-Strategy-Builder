@@ -1701,6 +1701,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 max_entries_per_activation=chosen_behavior.max_entries_per_activation,
                 activation_age_bars=i - int(chosen_cycle.start_index if chosen_cycle.start_index is not None else i),
                 entry_delay_bars=chosen_behavior.delay_bars,
+                pattern_trade=pattern_level,
                 trigger_condition_id=chosen_behavior.trigger_condition_id,
                 entry_lifecycle_id=chosen_behavior.id, entry_lifecycle_name=chosen_behavior.name,
                 max_wait_bars=chosen_behavior.max_wait_bars,
@@ -1758,6 +1759,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 'symbol': pos.symbol, 'direction': pos.direction, 'action': pos.action,
                 'entry_time': pos.entry_time, 'entry_price': pos.entry_price,
                 'quantity': pos.quantity,
+                'pattern_trade':pos.pattern_levels,
                 'last_quote_timestamp': last_ts.isoformat() if last_ts is not None else None,
                 'quote_age_seconds': quote_age,
                 'max_allowed_quote_age_seconds': allowed_age,
@@ -1775,14 +1777,18 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         for leg in trades:
             key=leg.get('position_group_id',str(leg['id']))
             pattern_position_nets[key]=pattern_position_nets.get(key,0.)+leg['net_pnl_usd']
-    pattern_returns=list(pattern_position_nets.values())
+    pattern_closed_ids={leg['position_group_id'] for leg in trades
+                         if leg.get('pattern_trade') is not None and not leg.get('partial_exit')}
+    pattern_returns=[value for key,value in pattern_position_nets.items()
+                     if key in pattern_closed_ids]
     pattern_wins=sum(p>0 for p in pattern_returns)
     pattern_gp=sum(max(0,p) for p in pattern_returns)
     pattern_gl=-sum(min(0,p) for p in pattern_returns)
     metrics = {
         'trade_legs':len(trades),
         'positions':len(pattern_position_nets) if strategy.pattern_trade.enabled else len(trades),
-        'trades': len(pattern_position_nets) if strategy.pattern_trade.enabled else len(trades),
+        'partial_exit_legs':sum(bool(leg.get('partial_exit')) for leg in trades),
+        'trades': len(pattern_closed_ids) if strategy.pattern_trade.enabled else len(trades),
         'alerts_triggered': len(alert_events),
         'wins': pattern_wins if strategy.pattern_trade.enabled else wins,
         'losses': sum(p<0 for p in pattern_returns) if strategy.pattern_trade.enabled else losses,
