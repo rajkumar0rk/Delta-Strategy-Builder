@@ -20,6 +20,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
  );
  return <><section className="card"><h2>BTCUSD perpetual futures research</h2>
  <p>CALL rules become LONG, PUT rules become SHORT. Entries and condition exits are placed at the following candle open. Only one position at a time. No option contracts are required.</p>
+ <p>In unified ARCHIVE backtests, missing completed Delta India 1-minute mark, index and funding-rate candles are automatically downloaded once and reused from the data folder. Rate candles are not verified funding settlements: REQUIRE_CSV still needs validated settlement observations; EXCLUDE_WITH_WARNING leaves funding out. No real historical data has been fetched by this upgrade.</p>
  <div className="form-grid">
   <label>Direction<select value={value.direction_mode} onChange={e=>onChange({...value,direction_mode:e.target.value as Strategy['direction_mode']})}><option value="BOTH">LONG + SHORT</option><option value="CALL">LONG only</option><option value="PUT">SHORT only</option></select></label>
   {number('quantity_lots','Quantity (lots of 0.001 BTC)','1',1)}
