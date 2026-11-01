@@ -297,7 +297,7 @@ DATA LIMITATIONS
 - Existing normalized option quote data can provide bid, ask, bid_size, ask_size, volume, and open_interest when present in the source rows.
 - V15.1 does NOT provide historical IV, delta, gamma, theta, vega, or rho. Do not reference them.
 - V15.1 can optionally append uncovered completed UTC days from the repository history archive before a backtest; strategy logic itself never fetches or uses future/incomplete data.
-- strategy.timeframe supports "5m", "10m", "15m", "30m", "1h", with completed UTC 5m source aggregation.
+- strategy.timeframe supports "5m", "10m", "15m", "30m", "1h", "1D", with completed UTC 5m source aggregation.
 
 V15.1 STATEFUL BIG-TREND FEATURES
 - Big Trend score supports BINARY and CONTINUOUS components. CONTINUOUS maps a numeric left operand from zero_at to full_at and gives partial weight between them.
