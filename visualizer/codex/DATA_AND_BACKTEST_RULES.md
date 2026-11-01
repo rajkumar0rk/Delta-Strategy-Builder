@@ -179,3 +179,5 @@ Options and futures support `strategy.timeframe=1D` and `IndicatorInstance.timef
 
 - Optional `pattern_trade.take_profit_stages` adds 2–6 ordered stages with `r_multiple` and `quantity_fraction` (sum exactly 1); omitting it preserves the previous target_1_r/target_2_r/first_exit_fraction behavior. If a candle closes beyond multiple targets, all reached stages execute against the same available quote; no quote means no fill. Engine cache version 177 avoids stale 2-target results.
 - `STRATEGY_LAB_MAX_RETAINED_JOBS` defaults to 200 (10..10000) and trims terminal in-memory job records at submission time; on queue overload `POST` job endpoints return HTTP 429 instead of a generic 500. Pinned disk results are unaffected.
+
+- `STRATEGY_LAB_MAX_BACKTEST_DAYS` defaults to 0 (unlimited); when set to a positive finite day count, both options and futures reject longer requested ranges with `BACKTEST_RANGE_LIMIT_EXCEEDED` **before any automatic download**. This is an admission guard, not a guarantee of RAM usage inside a permitted range; startup warm-up can extend the actual loaded data window.
