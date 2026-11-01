@@ -9,6 +9,7 @@ from .config import result_root, cache_root
 from .storage import read_csv_any, read_json_any
 from .execution_stress import build_execution_stress
 from .robustness_v163 import analyze_trade_robustness
+from .trade_positions import closed_positions
 
 IST = ZoneInfo('Asia/Kolkata')
 
@@ -71,9 +72,10 @@ def build_analysis(run_id: str) -> dict[str, Any]:
     decisions = _read_csv(path / 'decision_events.csv') or _read_csv(path / 'decision_events.csv.gz')
     markers = summary.get('markers') or _read_json(path / 'markers.json', []) or _read_json(path / 'markers.json.gz', [])
 
-    winners = [t for t in trades if (_f(t.get('net_pnl_usd')) or 0) > 0]
-    losers = [t for t in trades if (_f(t.get('net_pnl_usd')) or 0) < 0]
-    breakeven = [t for t in trades if (_f(t.get('net_pnl_usd')) or 0) == 0]
+    position_trades=closed_positions(trades)
+    winners = [t for t in position_trades if (_f(t.get('net_pnl_usd')) or 0) > 0]
+    losers = [t for t in position_trades if (_f(t.get('net_pnl_usd')) or 0) < 0]
+    breakeven = [t for t in position_trades if (_f(t.get('net_pnl_usd')) or 0) == 0]
 
     exit_reasons = Counter(str(t.get('exit_reason') or 'UNKNOWN') for t in trades)
     directions = Counter(str(t.get('direction') or 'UNKNOWN') for t in trades)
@@ -102,7 +104,7 @@ def build_analysis(run_id: str) -> dict[str, Any]:
             except Exception:
                 pass
 
-    for t in trades:
+    for t in position_trades:
         try:
             dt = datetime.fromisoformat(str(t.get('entry_time')).replace('Z', '+00:00')).astimezone(IST)
             pnl = _f(t.get('net_pnl_usd')) or 0.0
@@ -164,6 +166,8 @@ def build_analysis(run_id: str) -> dict[str, Any]:
         'equity_curve': summary.get('equity_curve') or _read_csv(path / 'equity_curve.csv') or _read_csv(path / 'equity_curve.csv.gz'),
         'fee_model': summary.get('fee_model', {}),
         'execution_stress': (None if (summary.get('strategy') or {}).get('market_type')=='FUTURES' else build_execution_stress(trades, summary.get('fee_model') or {}, summary.get('reliability') or {})),
+        'trade_legs':len(trades),
+        'closed_positions':len(position_trades),
         'robustness_v163': analyze_trade_robustness(trades),
     }
     analysis['observations'] = _observations(analysis)
