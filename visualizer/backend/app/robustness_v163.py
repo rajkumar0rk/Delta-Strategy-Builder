@@ -7,6 +7,7 @@ from __future__ import annotations
 import random
 import math
 from typing import Any
+from .trade_positions import closed_positions
 
 def _quantile(values: list[float], fraction: float) -> float | None:
     if not values:
@@ -30,7 +31,7 @@ def _drawdown(pnls: list[float]) -> float:
 def analyze_trade_robustness(trades: list[dict[str, Any]], *, simulations: int = 1000, seed: int = 163) -> dict[str, Any]:
     if not 100 <= simulations <= 10000:
         raise ValueError('simulations must be between 100 and 10000')
-    ordered = sorted(trades,key=lambda row: str(row.get('exit_time') or row.get('entry_time') or ''))
+    ordered = sorted(closed_positions(trades),key=lambda row: str(row.get('exit_time') or row.get('entry_time') or ''))
     pnls = [float(t['net_pnl_usd']) for t in ordered if t.get('net_pnl_usd') is not None]
     if any(not math.isfinite(x) for x in pnls):
         raise ValueError('Trade P&L must be finite')
