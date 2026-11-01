@@ -215,8 +215,9 @@ def build_analysis_package(run_id: str) -> Path:
     path = _safe_run_dir(run_id)
     summary = _read_json(path / 'summary.json', {})
     trades = summary.get('trades') or _read_csv(path / 'trades.csv')
-    winners = [t for t in trades if (_f(t.get('net_pnl_usd')) or 0) > 0]
-    losers = [t for t in trades if (_f(t.get('net_pnl_usd')) or 0) < 0]
+    position_trades=closed_positions(trades)
+    winners = [t for t in position_trades if (_f(t.get('net_pnl_usd')) or 0) > 0]
+    losers = [t for t in position_trades if (_f(t.get('net_pnl_usd')) or 0) < 0]
     decisions = _read_csv(path / 'decision_events.csv')
     rejected = [d for d in decisions if str(d.get('passed', '')).lower() != 'true']
     execution_rejected = [d for d in rejected if str(d.get('kind')) == 'EXECUTION']
