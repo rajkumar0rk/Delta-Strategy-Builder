@@ -4,6 +4,7 @@ import {defaultStrategy} from './defaults';
 import dayLevelAlerts from '../../examples/previous-day-swing-alerts.strategy.json';
 import type {ArchiveInfo,ArchiveSyncPlan,BacktestResult,ChartPayload,Dataset,IndicatorDefinition,JobState,PreflightResult,SavedStrategy,Strategy,StorageMode} from './types';
 import {IndicatorManager} from './components/IndicatorManager';
+import {PatternTradeEditor} from './components/PatternTradeEditor';
 import {RuleBuilder} from './components/RuleBuilder';
 import {AlertEditor} from './components/AlertEditor';
 import {EntryBehaviorEditor} from './components/EntryBehaviorEditor';
@@ -107,6 +108,7 @@ export default function App(){
  <BigTrendDetector payload={chart} strategy={strategy}/>
  {researchRange.start&&<TrendDiscoveryPanel selection={selectionBody()} start={researchRange.start} end={researchRange.end} strategy={strategy} onStatus={setStatus}/>}
  <IndicatorManager catalog={catalog} value={strategy.indicators} onChange={indicators=>setStrategy({...strategy,indicators})}/>
+  {strategy.market_type==='OPTIONS'&&<PatternTradeEditor strategy={strategy} operands={operands} onChange={setStrategy}/> }
  <section className="card"><h2>Strategy market</h2><p>Options and perpetual futures use independent execution engines, but share the same strategy indicators and rules.</p><label>Market <select value={strategy.market_type||'OPTIONS'} onChange={e=>{setStrategy({...strategy,market_type:e.target.value as 'OPTIONS'|'FUTURES'});setResult(null);setChart(null)}}><option value="OPTIONS">BTC options</option><option value="FUTURES">BTCUSD perpetual futures</option></select></label></section>
  {strategy.market_type==='FUTURES'?<FuturesSettings value={strategy} onChange={setStrategy}/>:<RiskOptions value={strategy} onChange={setStrategy}/>}
  <AlertEditor value={strategy.alerts||[]} strategy={strategy} operands={operands.filter(o=>strategy.indicators.some(i=>o.startsWith(i.id+'.')||o===i.id))} onChange={alerts=>setStrategy({...strategy,alerts})}/>
