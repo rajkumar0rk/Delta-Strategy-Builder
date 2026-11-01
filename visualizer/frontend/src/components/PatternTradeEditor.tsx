@@ -72,7 +72,7 @@ export function PatternTradeEditor({strategy,operands,onChange}:{strategy:Strate
  </div>
  <div className="form-grid">
   {(['pullback_patterns','breakout_patterns'] as const).map(k=><fieldset key={k}><legend>{k.replace('_',' ')}</legend>
-   {['HAMMER','SHOOTING_STAR','BULL_ENGULFING','BEAR_ENGULFING','MORNING_STAR','EVENING_STAR','BULL_MARUBOZU','BEAR_MARUBOZU'].map(name=>
+   {(k==='pullback_patterns'?['HAMMER','SHOOTING_STAR','BULL_ENGULFING','BEAR_ENGULFING','MORNING_STAR','EVENING_STAR']:['BULL_MARUBOZU','BEAR_MARUBOZU','BULL_ENGULFING','BEAR_ENGULFING']).map(name=>
     <label key={name}><input type="checkbox" checked={c[k].includes(name)}
       onChange={e=>set({[k]:e.target.checked?[...c[k],name]:c[k].filter(x=>x!==name)} as Partial<PatternTradeConfig>)}/>{name}</label>)}
   </fieldset>)}
