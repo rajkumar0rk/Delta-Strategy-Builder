@@ -88,3 +88,24 @@ def test_api_queue_backpressure_returns_429(monkeypatch):
         main._enqueue(lambda progress: None)
     assert ex.value.status_code==429
     assert "JOB_QUEUE_FULL" in ex.value.detail
+
+
+def test_legacy_csv_none_string_pattern_does_not_merge_positions():
+    legs=[
+        {'position_group_id':'same','pattern_trade':'None','partial_exit':'False','net_pnl_usd':'8'},
+        {'position_group_id':'same','pattern_trade':'None','partial_exit':'False','net_pnl_usd':'-3'},
+    ]
+    assert len(closed_positions(legs))==2
+
+
+def test_csv_string_pattern_partial_roundtrip():
+    legs=[
+        {'position_group_id':'p','pattern_trade':"{'pattern_type':'HAMMER'}",
+         'partial_exit':'True','quantity':'2','net_pnl_usd':'15'},
+        {'position_group_id':'p','pattern_trade':"{'pattern_type':'HAMMER'}",
+         'partial_exit':'False','quantity':'2','net_pnl_usd':'-5'},
+    ]
+    out=closed_positions(legs)
+    assert len(out)==1
+    assert out[0]['net_pnl_usd']==10
+    assert out[0]['quantity']==4
