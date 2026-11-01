@@ -109,3 +109,26 @@ def test_csv_string_pattern_partial_roundtrip():
     assert len(out)==1
     assert out[0]['net_pnl_usd']==10
     assert out[0]['quantity']==4
+
+
+@pytest.mark.parametrize('market', ['OPTIONS','FUTURES'])
+def test_range_admission_guard_fails_before_data_download(monkeypatch,market):
+    from app.engine import run_backtest
+    from app.models import BacktestRequest,StrategyConfig
+    monkeypatch.setenv('STRATEGY_LAB_MAX_BACKTEST_DAYS','7')
+    req=BacktestRequest(start='2026-01-01T00:00:00Z',end='2026-01-10T00:00:00Z',
+                        strategy=StrategyConfig(market_type=market))
+    with pytest.raises(ValueError,match='BACKTEST_RANGE_LIMIT_EXCEEDED'):
+        run_backtest(req)
+
+
+def test_range_admission_guard_default_does_not_limit(monkeypatch):
+    monkeypatch.delenv('STRATEGY_LAB_MAX_BACKTEST_DAYS',raising=False)
+    from app.engine import run_backtest
+    from app.models import BacktestRequest,StrategyConfig
+    req=BacktestRequest(start='2026-01-01T00:00:00Z',end='2026-02-01T00:00:00Z',
+                        strategy=StrategyConfig())
+    # Without a configured range budget, data resolution—not admission—fails.
+    with pytest.raises(Exception) as exc:
+        run_backtest(req)
+    assert 'BACKTEST_RANGE_LIMIT_EXCEEDED' not in str(exc.value)
