@@ -59,6 +59,9 @@ class Position:
     peak_return: float = 0.0
     worst_return: float = 0.0
     margin: dict[str, Any] | None = None
+    pattern_levels: dict[str, Any] | None = None
+    pattern_remaining_target1: bool = True
+    pattern_initial_quantity: float = 0.0
 
 
 def _finite(v):
@@ -312,7 +315,7 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
 
 def _backtest_cache_key(req: BacktestRequest, paths) -> str:
     payload = {
-        'engine_version': 175,  # observed account risk replay alongside hypothetical strategy backtests
+        'engine_version': 176,  # observed account risk replay alongside hypothetical strategy backtests
         'warmup_candles': req.warmup_candles,
         'warmup_policy': req.warmup_policy,
         'bar_gap_policy': req.bar_gap_policy,
@@ -984,6 +987,11 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
     frame, series_meta = compute_indicators(bars, strategy.indicators, strategy.timeframe,
         daily_source=daily_source, progress=lambda msg: report(msg, 25, 'INDICATORS', 'Prepare option quote indexes'))
     _prepare_strategy_state(frame, strategy)
+    pattern_tracker = None
+    pattern_side_events = {}
+    if strategy.pattern_trade.enabled:
+        from .pattern_trades import PatternTracker
+        pattern_tracker=PatternTracker(frame,strategy.pattern_trade)
     report('Preparing reusable option quote indexes…', 32, 'QUOTE_INDEX', 'Evaluate strategy candles')
     if needs_options:
         store.ensure_indexes(parts, lambda msg: report(msg, 32, 'QUOTE_INDEX', 'Evaluate strategy candles'))
@@ -1131,21 +1139,29 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             record_mtm_value(_mark_to_market_value(pos, q, balance, strategy, spot_at(stamp)))
 
     def close_position(exit_time: str, exit_price: float, reason: str, exit_rule: dict[str, Any] | None = None,
-                       *, settlement: bool = False, index_twap: float | None = None):
+                       *, settlement: bool = False, index_twap: float | None = None, partial_qty: float | None = None):
         nonlocal pos, balance, equity, peak_equity, max_dd, max_dd_percent, pos_quotes, q_cursor
         assert pos
         if parse_time(exit_time) >= parse_time(str(pos.spec['expiration'])) and not settlement:
             raise ValueError('Cannot execute a quote-based option exit at or after contract expiry')
         if settlement and parse_time(exit_time) != parse_time(str(pos.spec['expiration'])):
             raise ValueError('Settlement timestamp must match expiration')
+        original_qty = pos.quantity
+        close_qty = original_qty if partial_qty is None else float(partial_qty)
+        if not (0 < close_qty <= original_qty + 1e-10):
+            raise ValueError("Invalid partial exit quantity")
+        close_qty=min(close_qty,original_qty)
+        partial=close_qty < original_qty-1e-10
+        allocated_entry_fee=pos.entry_fee*(close_qty/original_qty)
+        allocated_entry_fees={k:v*(close_qty/original_qty) for k,v in pos.entry_fee_details.items()}
         cv = float(pos.spec['contract_value'])
         # Verified option settlement payoffs are distinct from futures candle closes.
         # If index TWAP is absent, the notional fee input is only a proxy.
         exit_spot = index_twap if settlement and index_twap is not None else spot_at(exit_time)
-        exit_fee_details = _delta_fee(exit_spot, exit_price, pos.quantity, cv, strategy.execution)
+        exit_fee_details = _delta_fee(exit_spot, exit_price, close_qty, cv, strategy.execution)
         exit_fee = exit_fee_details['total_fee_usd']
-        gross = ((exit_price - pos.entry_price) if pos.action == 'BUY' else (pos.entry_price - exit_price)) * pos.quantity * cv
-        net = gross - pos.entry_fee - exit_fee
+        gross = ((exit_price - pos.entry_price) if pos.action == 'BUY' else (pos.entry_price - exit_price)) * close_qty * cv
+        net = gross - allocated_entry_fee - exit_fee
         record_mtm_value(balance + net)
         balance += net
         equity = balance
@@ -1180,22 +1196,24 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             # Legacy aliases kept for existing V1-V8 analysis/UI imports.
             'entry_ask': pos.entry_price,
             'exit_bid': exit_price,
-            'quantity': pos.quantity,
+            'quantity': close_qty,
             'contract_value': cv,
+            'pattern_trade': pos.pattern_levels,
+            'partial_exit': partial,
             'gross_pnl_usd': gross,
-            'entry_notional_fee_usd': pos.entry_fee_details['notional_fee_usd'],
-            'entry_premium_cap_usd': pos.entry_fee_details['premium_cap_usd'],
-            'entry_base_fee_usd': pos.entry_fee_details['base_fee_usd'],
-            'entry_gst_usd': pos.entry_fee_details['gst_usd'],
-            'entry_fee_usd': pos.entry_fee,
+            'entry_notional_fee_usd': allocated_entry_fees['notional_fee_usd'],
+            'entry_premium_cap_usd': allocated_entry_fees['premium_cap_usd'],
+            'entry_base_fee_usd': allocated_entry_fees['base_fee_usd'],
+            'entry_gst_usd': allocated_entry_fees['gst_usd'],
+            'entry_fee_usd': allocated_entry_fee,
             'exit_notional_fee_usd': exit_fee_details['notional_fee_usd'],
             'exit_premium_cap_usd': exit_fee_details['premium_cap_usd'],
             'exit_base_fee_usd': exit_fee_details['base_fee_usd'],
             'exit_gst_usd': exit_fee_details['gst_usd'],
             'exit_fee_usd': exit_fee,
-            'base_fees_usd': pos.entry_fee_details['base_fee_usd'] + exit_fee_details['base_fee_usd'],
-            'gst_usd': pos.entry_fee_details['gst_usd'] + exit_fee_details['gst_usd'],
-            'fees_usd': pos.entry_fee + exit_fee,
+            'base_fees_usd': allocated_entry_fees['base_fee_usd'] + exit_fee_details['base_fee_usd'],
+            'gst_usd': allocated_entry_fees['gst_usd'] + exit_fee_details['gst_usd'],
+            'fees_usd': allocated_entry_fee + exit_fee,
             'net_pnl_usd': net,
             'return_percent': ret,
             'mfe_percent': pos.peak_return,
@@ -1244,9 +1262,16 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             ),
             net,
         )
-        pos = None
-        pos_quotes = None
-        q_cursor = 0
+        if partial:
+            pos.quantity=round(original_qty-close_qty,10)
+            pos.entry_fee-=allocated_entry_fee
+            for k in pos.entry_fee_details:
+                pos.entry_fee_details[k]-=allocated_entry_fees[k]
+            pos.pattern_remaining_target1=False
+        else:
+            pos = None
+            pos_quotes = None
+            q_cursor = 0
 
     measured_start = pd.Timestamp(parse_time(req.start))
     for i, (ts, row) in enumerate(frame.iterrows()):
@@ -1288,6 +1313,31 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 _update_lifecycles(frame, i, strategy.put_entry, put_behaviors, put_cycles)
 
         # Quote-driven protective exits up to this completed candle.
+        if pos is not None and pos.pattern_levels is not None:
+            levels=pos.pattern_levels
+            bullish=pos.direction=='CALL'
+            stop_hit=(float(row.low)<=levels['stop']) if bullish else (float(row.high)>=levels['stop'])
+            first_hit=(float(row.close)>=levels['target_1']) if bullish else (float(row.close)<=levels['target_1'])
+            final_hit=(float(row.close)>=levels['target_2']) if bullish else (float(row.close)<=levels['target_2'])
+            reason=('PATTERN_STOP' if stop_hit else
+                    'PATTERN_TARGET_2' if final_hit else
+                    'PATTERN_TARGET_1' if first_hit and pos.pattern_remaining_target1 else None)
+            if reason:
+                q=first_valid_exit_quote(pos,ts.isoformat())
+                if q is not None:
+                    part=None
+                    if reason=='PATTERN_TARGET_1':
+                        inc=float(pos.spec.get('size_increment') or 1)
+                        minq=float(pos.spec.get('min_quantity') or inc)
+                        target_qty=math.floor(pos.pattern_initial_quantity*strategy.pattern_trade.first_exit_fraction/inc)*inc
+                        if target_qty+1e-9 < minq or pos.quantity-target_qty+1e-9 < minq:
+                            # Keep protective stop and await T2 if a partial
+                            # contract execution would violate exchange lot rules.
+                            reason=None
+                        else:part=target_qty
+                    if reason:
+                        close_position(q['timestamp'],_executable_exit_price(pos,q,strategy),reason,partial_qty=part)
+                        closed_this_candle=True
         if pos is not None and pos_quotes is not None:
             while q_cursor < len(pos_quotes) and pos_quotes.iloc[q_cursor].timestamp <= ts:
                 q = pos_quotes.iloc[q_cursor].to_dict()
@@ -1302,7 +1352,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                     close_position(stamp, _executable_exit_price(pos, q, strategy), 'ESTIMATED_MARGIN_BREACH', health)
                     closed_this_candle = True
                     break
-                reason, _ = _stop_reason(pos, q, strategy)
+                reason, _ = (None,0) if pos.pattern_levels is not None else _stop_reason(pos, q, strategy)
                 if reason:
                     close_position(stamp, _executable_exit_price(pos, q, strategy), reason)
                     closed_this_candle = True
@@ -1423,6 +1473,20 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         put_entry_pass = _score_entry_pass(put, put_score, strategy.put_big_trend_score) if put_enabled else False
         call_candidate = bool(call_entry_pass and call_eligible and not shared_no_trade['passed'] and not call_no_trade['passed'])
         put_candidate = bool(put_entry_pass and put_eligible and not shared_no_trade['passed'] and not put_no_trade['passed'])
+        if pattern_tracker is not None:
+            config=strategy.pattern_trade
+            def setup_pass(side):
+                a=getattr(config,'call_pullback' if side=='CALL' else 'put_pullback')
+                b=getattr(config,'call_breakout' if side=='CALL' else 'put_breakout')
+                return {'PULLBACK':evaluate_group(frame,i,a)['passed'],
+                        'BREAKOUT':evaluate_group(frame,i,b)['passed']}
+            ev_call=pattern_tracker.at_close(i,'CALL',setup_pass('CALL'))
+            ev_put=pattern_tracker.at_close(i,'PUT',setup_pass('PUT'))
+            pattern_side_events={'CALL':ev_call,'PUT':ev_put}
+            # Pattern mode replaces generic lifecycle readiness with exact
+            # independently tracked 15m formations and 5m confirmations.
+            call_candidate=bool(call_entry_pass and ev_call and not shared_no_trade['passed'] and not call_no_trade['passed'])
+            put_candidate=bool(put_entry_pass and ev_put and not shared_no_trade['passed'] and not put_no_trade['passed'])
 
         blocked_no_trade=[]
         if call_entry_pass and call_eligible and (shared_no_trade['passed'] or call_no_trade['passed']): blocked_no_trade.append('CALL')
@@ -1507,7 +1571,21 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         effective_entry_quote = _effective_quote(q, strategy.execution)
         entry = (float(effective_entry_quote['ask']) + slip if action == 'BUY'
                  else max(0.0, float(effective_entry_quote['bid']) - slip))
-        qty, cost, quantity_reject = _quantity(strategy, spec, entry, float(row.close), balance, action)
+        pattern_level=None
+        if pattern_tracker is not None:
+            from .pattern_trades import levels,option_risk_quantity
+            ev=pattern_side_events.get(direction)
+            if ev is None:
+                continue
+            try:
+                pattern_level=levels(ev,float(row.close),strategy.pattern_trade.stop_buffer_points,
+                    strategy.pattern_trade.target_1_r,strategy.pattern_trade.target_2_r)
+                qty,cost,quantity_reject=option_risk_quantity(strategy,spec,entry,float(row.close),
+                    pattern_level['stop'],effective_entry_quote,balance)
+            except ValueError as err:
+                qty,cost,quantity_reject=0.,0.,str(err)
+        else:
+            qty, cost, quantity_reject = _quantity(strategy, spec, entry, float(row.close), balance, action)
         if qty <= 0:
             if quantity_reject == 'INSUFFICIENT_SELL_MARGIN_ESTIMATE':
                 estimated_margin_rejections += 1
@@ -1552,9 +1630,12 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             entry, qty, fee, entry_fee_details, atr, chosen_tree,
             entry_lifecycle_id=chosen_behavior.id, entry_lifecycle_name=chosen_behavior.name,
             margin=margin_details,
+            pattern_levels=pattern_level,pattern_initial_quantity=qty,
         )
         chosen_cycle.entries += 1
         chosen_cycle.last_entry_index = i
+        if pattern_tracker is not None and pattern_side_events.get(direction) is not None:
+            pattern_tracker.consume(pattern_side_events[direction])
         if chosen_breakout_origin is not None:
             consumed_breakout_origin[direction] = int(chosen_breakout_origin)
         daily_state['entries'] = int(daily_state['entries']) + 1
