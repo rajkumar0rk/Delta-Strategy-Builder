@@ -62,6 +62,7 @@ class Position:
     pattern_levels: dict[str, Any] | None = None
     pattern_remaining_target1: bool = True
     pattern_initial_quantity: float = 0.0
+    pattern_realized_net: float = 0.0
 
 
 def _finite(v):
@@ -1230,7 +1231,12 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         trades.append(trade)
         ensure_daily_state(exit_time)
         daily_state['realized_pnl'] = float(daily_state['realized_pnl']) + net
-        daily_state['consecutive_losses'] = (int(daily_state['consecutive_losses']) + 1) if net < 0 else 0
+        if pos.pattern_levels is not None:
+            pos.pattern_realized_net+=net
+            if not partial:
+                daily_state['consecutive_losses'] = (int(daily_state['consecutive_losses']) + 1) if pos.pattern_realized_net < 0 else 0
+        else:
+            daily_state['consecutive_losses'] = (int(daily_state['consecutive_losses']) + 1) if net < 0 else 0
         add_marker(
             exit_time,
             'exit',
@@ -1587,6 +1593,15 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 qty,cost,quantity_reject=0.,0.,str(err)
         else:
             qty, cost, quantity_reject = _quantity(strategy, spec, entry, float(row.close), balance, action)
+        if pattern_level is not None and qty>0:
+            # Both exits must satisfy exchange minimum and quantity increment.
+            # Do not silently turn a required 2R/3R split into a single target.
+            inc=float(spec.get('size_increment') or 1)
+            minq=float(spec.get('min_quantity') or inc)
+            first_qty=math.floor(qty*strategy.pattern_trade.first_exit_fraction/inc+1e-12)*inc
+            if first_qty+1e-9<minq or qty-first_qty+1e-9<minq:
+                quantity_reject="PATTERN_PARTIAL_EXIT_BELOW_MINIMUM"
+                qty=0.
         if qty <= 0:
             if quantity_reject == 'INSUFFICIENT_SELL_MARGIN_ESTIMATE':
                 estimated_margin_rejections += 1
@@ -1754,18 +1769,30 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
     losses = sum(t['net_pnl_usd'] < 0 for t in trades)
     gp = sum(max(0, t['net_pnl_usd']) for t in trades)
     gl = -sum(min(0, t['net_pnl_usd']) for t in trades)
+    # Partial exits are execution legs, not separate strategy positions.
+    pattern_position_nets={}
+    if strategy.pattern_trade.enabled:
+        for leg in trades:
+            key=leg.get('position_group_id',str(leg['id']))
+            pattern_position_nets[key]=pattern_position_nets.get(key,0.)+leg['net_pnl_usd']
+    pattern_returns=list(pattern_position_nets.values())
+    pattern_wins=sum(p>0 for p in pattern_returns)
+    pattern_gp=sum(max(0,p) for p in pattern_returns)
+    pattern_gl=-sum(min(0,p) for p in pattern_returns)
     metrics = {
-        'trades': len(trades),
+        'trade_legs':len(trades),
+        'positions':len(pattern_position_nets) if strategy.pattern_trade.enabled else len(trades),
+        'trades': len(pattern_position_nets) if strategy.pattern_trade.enabled else len(trades),
         'alerts_triggered': len(alert_events),
-        'wins': wins,
-        'losses': losses,
-        'win_rate_percent': (wins / len(trades) * 100 if trades else 0),
+        'wins': pattern_wins if strategy.pattern_trade.enabled else wins,
+        'losses': sum(p<0 for p in pattern_returns) if strategy.pattern_trade.enabled else losses,
+        'win_rate_percent': (pattern_wins/len(pattern_returns)*100 if pattern_returns else 0) if strategy.pattern_trade.enabled else (wins / len(trades) * 100 if trades else 0),
         'gross_pnl_usd': sum(t['gross_pnl_usd'] for t in trades),
         'net_pnl_usd': sum(t['net_pnl_usd'] for t in trades),
         'base_fees_usd': sum(t['base_fees_usd'] for t in trades),
         'gst_usd': sum(t['gst_usd'] for t in trades),
         'fees_usd': sum(t['fees_usd'] for t in trades),
-        'profit_factor': (gp / gl if gl > 0 else None),
+        'profit_factor': (pattern_gp/pattern_gl if pattern_gl>0 else None) if strategy.pattern_trade.enabled else (gp / gl if gl > 0 else None),
         'ending_balance_usd': balance,
         'return_percent': (balance / strategy.risk.starting_balance_usd - 1) * 100,
         'max_closed_trade_drawdown_usd': max_dd,
