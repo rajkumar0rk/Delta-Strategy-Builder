@@ -76,3 +76,15 @@ def test_queue_limit_rejects_excess_and_preserves_existing_job(monkeypatch):
     finally:
         block.set()
         manager._pool.shutdown(wait=True)
+
+
+def test_api_queue_backpressure_returns_429(monkeypatch):
+    from fastapi import HTTPException
+    from app import main
+    def saturated(_fn):
+        raise RuntimeError("JOB_QUEUE_FULL: busy")
+    monkeypatch.setattr(main.jobs,"create",saturated)
+    with pytest.raises(HTTPException) as ex:
+        main._enqueue(lambda progress: None)
+    assert ex.value.status_code==429
+    assert "JOB_QUEUE_FULL" in ex.value.detail
