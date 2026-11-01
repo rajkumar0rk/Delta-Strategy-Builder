@@ -292,3 +292,59 @@ def test_futures_flat_blocked_candles_advance_lifecycle(tmp_path,monkeypatch):
         assert t['entry_lifecycle_age_bars']>=3
     if result['unresolved_position']:
         assert result['unresolved_position']['entry_lifecycle_age_bars']>=3
+
+
+def test_futures_independent_lifecycle_audit_with_real_chart_payload(tmp_path,monkeypatch):
+    from app.engine import chart_payload
+    from app.futures_audit import audit_futures_parity
+    _seed(tmp_path,monkeypatch)
+    s=_strategy()
+    req=BacktestRequest(dataset_id='sample',
+        start='2026-01-01T00:00:00Z',end='2026-01-01T01:00:00Z',strategy=s)
+    result=run_backtest(req)
+    chart=chart_payload(req)
+    checked=audit_futures_parity(result,chart,timeframe_minutes=5)
+    assert checked['independent_lifecycle'] is not None
+    assert checked['independent_lifecycle']['checked']==len(result['trades'])+int(bool(result['unresolved_position']))
+    assert checked['independent_lifecycle']['failures']==[]
+
+
+def test_compact_futures_audit_preview_matches_small_chart_and_result(tmp_path,monkeypatch):
+    from app.futures_audit_preview import futures_audit_payload
+    from app.futures_audit import audit_futures_parity
+    _seed(tmp_path,monkeypatch)
+    strategy=_strategy()
+    request=BacktestRequest(dataset_id='sample',
+        start='2026-01-01T00:00:00Z',end='2026-01-01T01:00:00Z',
+        strategy=strategy)
+    result=run_backtest(request)
+    compact=futures_audit_payload(request,result)
+    assert compact['audit_only'] is True
+    assert compact['source_candles_scanned']>=len(compact['condition_states'])
+    parity=audit_futures_parity(result,compact,timeframe_minutes=5)
+    assert parity['checked_closed_trades']==len(result['trades'])
+    assert parity['independent_lifecycle'] is not None
+    assert parity['failure_count']==0, parity['failures']
+
+
+def test_futures_archive_auto_sync_reuses_existing_repair_hook_without_network(tmp_path,monkeypatch):
+    from app import futures_history_sync
+    calls=[]
+    def fake_sync(start,end,progress=None):
+        calls.append((start,end))
+        return {"downloaded":False}
+    monkeypatch.setattr(futures_history_sync,"ensure_futures_observations",fake_sync)
+    _seed(tmp_path,monkeypatch)
+    strategy=_strategy()
+    request=BacktestRequest(dataset_id="sample",dataset_mode="ARCHIVE",
+        auto_download_missing_data=True,
+        start="2026-01-01T00:00:00Z",end="2026-01-01T01:00:00Z",strategy=strategy)
+    # Archive sync is already independently tested and must not be networked.
+    monkeypatch.setattr("app.archive_sync.ensure_archive_data",lambda *args,**kwargs:None)
+    # Mock dataset selection where this micro fixture lacks a catalog.
+    original=DataStore.resolve_request
+    monkeypatch.setattr(DataStore,"resolve_request",
+        lambda store,req,require_options=False:original(store,req.model_copy(update={"dataset_mode":"SINGLE"}),require_options=require_options))
+    result=run_backtest(request)
+    assert calls==[(request.start,request.end)]
+    assert result["strategy"]["market_type"]=="FUTURES"
