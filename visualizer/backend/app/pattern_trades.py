@@ -157,6 +157,39 @@ def levels(event:PatternEvent, entry:float, buffer_points:float,
             "pattern_type":event.kind,"setup_type":event.setup,"pattern_id":event.id}
 
 
+
+def configured_exit_stages(config) -> list[dict[str, float]]:
+    """Legacy two-stage parameters remain canonical when stages are omitted."""
+    if config.take_profit_stages:
+        return [{"r_multiple":float(s.r_multiple),"fraction":float(s.quantity_fraction)}
+                for s in config.take_profit_stages]
+    return [{"r_multiple":float(config.target_1_r),"fraction":float(config.first_exit_fraction)},
+            {"r_multiple":float(config.target_2_r),"fraction":1.0-float(config.first_exit_fraction)}]
+
+
+def plan_stage_quantities(quantity: float, spec:dict, config) -> list[float] | None:
+    """Never invent fractional contract fills; last stage receives roundoff."""
+    stages=configured_exit_stages(config)
+    inc=float(spec.get("size_increment") or 1)
+    minimum=float(spec.get("min_quantity") or inc)
+    if inc<=0 or minimum<=0 or quantity<=0:
+        return None
+    valid_minimum=math.ceil(minimum/inc-1e-12)*inc
+    planned=[]
+    for stage in stages[:-1]:
+        proposed=math.floor(quantity*stage["fraction"]/inc+1e-12)*inc
+        if proposed+1e-9<valid_minimum:
+            return None
+        planned.append(proposed)
+    remaining=quantity-sum(planned)
+    if remaining+1e-9<valid_minimum:
+        return None
+    if abs(remaining/inc-round(remaining/inc))>1e-8*max(1,remaining/inc):
+        return None
+    planned.append(round(remaining,10))
+    return planned
+
+
 def option_risk_quantity(strategy,spec,entry_option_price,spot,stop,quote,balance):
     """Explicit approximate option premium downside, never 'exact Delta risk'.
 
