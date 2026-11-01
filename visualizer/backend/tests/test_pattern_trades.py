@@ -23,7 +23,7 @@ def candles(n=48):
 
 
 def test_pattern_detection_on_completed_candles():
-    bar=pd.DataFrame([{"open":100,"high":111,"low":99,"close":110,"volume":1}])
+    bar=pd.DataFrame([{"open":100,"high":110,"low":100,"close":110,"volume":1}])
     assert ("BULL_MARUBOZU","CALL",1) in _detect(bar)
 
 
