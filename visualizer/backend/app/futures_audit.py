@@ -73,7 +73,7 @@ def audit_futures_parity(result:dict, chart:dict, *, timeframe_minutes:int) -> d
                 failures.append(f"Entry lifecycle delay not satisfied: trade {t.get('id')}")
             if int(t.get("entry_lifecycle_entries_before", 0)) >= int(t.get("entry_lifecycle_max_entries", 1)):
                 failures.append(f"Entry lifecycle activation limit exceeded: trade {t.get('id')}")
-            if _epoch(t["entry_lifecycle_signal_time"]) + timeframe_minutes*60 != entry:
+            if _epoch(t["entry_lifecycle_signal_time"]) != entry:
                 failures.append(f"Entry lifecycle signal/next-open mismatch: trade {t.get('id')}")
         else:
             warnings.append(f"Legacy result has no lifecycle provenance: trade {t.get('id')}")
@@ -124,7 +124,7 @@ def audit_futures_parity(result:dict, chart:dict, *, timeframe_minutes:int) -> d
                 failures.append("Unresolved futures entry fill cannot be reconciled with chart OHLC")
         if "entry_lifecycle_id" in unresolved and (
             not unresolved.get("entry_lifecycle_eligible") or
-            _epoch(unresolved["entry_lifecycle_signal_time"])+timeframe_minutes*60!=_epoch(unresolved["entry_time"])
+            _epoch(unresolved["entry_lifecycle_signal_time"])!=_epoch(unresolved["entry_time"])
         ):
             failures.append("Unresolved position lifecycle provenance is invalid")
         warnings.append("Unresolved open exposure is excluded from closed-trade net P&L")
@@ -153,7 +153,15 @@ def audit_futures_parity(result:dict, chart:dict, *, timeframe_minutes:int) -> d
     if unresolved and "unresolved_entry_fee_usd" in metrics and not _same(
         metrics["unresolved_entry_fee_usd"],unresolved.get("entry_fee_usd",0)):
         failures.append("Unresolved entry fee does not reconcile")
-    warnings.append("Entry lifecycle provenance is a position-aware engine trace; it is not independently recomputed from source candles")
+    from .futures_lifecycle_replay import independently_replay_lifecycles
+    timeline=chart.get("lifecycle_triggers")
+    replay=None
+    if timeline is None:
+        warnings.append("Historical independent lifecycle trigger timeline unavailable")
+    else:
+        replay=independently_replay_lifecycles(result,timeline,timeframe_minutes)
+        failures.extend(replay["failures"])
+    warnings.append("Lifecycle replay independently evaluates trigger transitions, but not exchange orders or fill outcomes")
     warnings.append("Chart markers are backtest overlays; source OHLC and rule states are independent")
     warnings.append("Actual Delta orderbook fills, historical mark prices, FX collateral and liquidations are not verified")
     return {
@@ -169,4 +177,5 @@ def audit_futures_parity(result:dict, chart:dict, *, timeframe_minutes:int) -> d
         "exchange_fills_verified":False,
         "mark_price_verified":False,
         "unresolved_position":bool(unresolved),
+        "independent_lifecycle":replay,
     }
