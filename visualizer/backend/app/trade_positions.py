@@ -16,13 +16,20 @@ def _partial(value: Any) -> bool:
     return str(value).strip().lower() in {"true", "1", "yes"}
 
 
+def _pattern_record(value: Any) -> bool:
+    # CSV round-trips turn Python None into the literal string "None".
+    if isinstance(value,dict):
+        return bool(value)
+    return isinstance(value,str) and value.lstrip().startswith("{") and value.strip() not in ("{}", "{ }")
+
+
 def closed_positions(legs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """One row per completed position; standalone legacy trades remain unchanged."""
     grouped: dict[str, dict[str, Any]] = {}
     single: list[dict[str, Any]] = []
     for leg in legs:
         key = leg.get("position_group_id")
-        if not key or not leg.get("pattern_trade"):
+        if not key or not _pattern_record(leg.get("pattern_trade")):
             single.append(dict(leg))
             continue
         key = str(key)
