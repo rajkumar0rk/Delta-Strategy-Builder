@@ -103,3 +103,39 @@ def test_pattern_stop_has_priority_over_target_in_same_underlying_candle(tmp_pat
         start="2026-11-01T00:05:00Z",end="2026-11-01T01:35:00Z",
         strategy=config(),storage_mode="COMPACT"))
     assert result["trades"][0]["exit_reason"]=="PATTERN_STOP"
+
+
+
+def test_configurable_three_stage_pattern_executes_all_crossed_targets(tmp_path,monkeypatch):
+    fixture(tmp_path,monkeypatch)
+    strategy=config()
+    strategy.pattern_trade.take_profit_stages=[
+        {"r_multiple":1.0,"quantity_fraction":.2},
+        {"r_multiple":1.5,"quantity_fraction":.3},
+        {"r_multiple":2.0,"quantity_fraction":.5},
+    ]
+    # Assignment bypasses model validation but is accepted on JSON round-trip.
+    strategy=StrategyConfig.model_validate(strategy.model_dump())
+    result=run_backtest(BacktestRequest(dataset_id="sample",
+        start="2026-11-01T00:05:00Z",end="2026-11-01T01:35:00Z",
+        strategy=strategy,storage_mode="COMPACT"))
+    legs=result["trades"]
+    assert [x["exit_reason"] for x in legs]==[
+        "PATTERN_TARGET_1","PATTERN_TARGET_2","PATTERN_TARGET_3"]
+    assert result["metrics"]["trades"]==1
+    assert result["metrics"]["trade_legs"]==3
+    assert result["metrics"]["fees_usd"]==pytest.approx(sum(x["fees_usd"] for x in legs))
+    assert result["metrics"]["net_pnl_usd"]==pytest.approx(sum(x["net_pnl_usd"] for x in legs))
+
+
+def test_target_stage_configuration_fails_on_invalid_fractions_or_order():
+    from app.models import PatternTradeConfig
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError,match="total 1"):
+        PatternTradeConfig(take_profit_stages=[
+            {"r_multiple":1,"quantity_fraction":.3},
+            {"r_multiple":2,"quantity_fraction":.3}])
+    with pytest.raises(ValidationError,match="increasing"):
+        PatternTradeConfig(take_profit_stages=[
+            {"r_multiple":3,"quantity_fraction":.5},
+            {"r_multiple":2,"quantity_fraction":.5}])
