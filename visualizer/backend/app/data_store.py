@@ -396,7 +396,7 @@ class DataStore:
         return self.load_bars_many([p], start, end, timeframe)
 
     def load_bars_many(self, parts: list[DatasetPaths], start: str, end: str, timeframe: str = '5m', warmup_candles: int = 0) -> pd.DataFrame:
-        timeframe_minutes = {'5m': 5, '10m': 10, '15m': 15, '30m': 30, '1h': 60}
+        timeframe_minutes = {'5m': 5, '10m': 10, '15m': 15, '30m': 30, '1h': 60, '1D': 1440}
         if timeframe not in timeframe_minutes:
             raise ValueError(f'Unsupported timeframe: {timeframe}')
         s = pd.Timestamp(parse_time(start))

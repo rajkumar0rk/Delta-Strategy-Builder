@@ -27,7 +27,7 @@ class IndicatorInstance(BaseModel):
     # `strategy` means calculate on the strategy timeframe. Higher-timeframe
     # indicators are calculated only from fully completed aggregated candles and
     # forward-filled onto later lower-timeframe candles (no look-ahead).
-    timeframe: Literal["strategy", "5m", "10m", "15m", "30m", "1h"] = "strategy"
+    timeframe: Literal["strategy", "5m", "10m", "15m", "30m", "1h", "1D"] = "strategy"
 
     @model_validator(mode="after")
     def validate_day_levels(self):
@@ -479,7 +479,7 @@ class StrategyConfig(BaseModel):
     name: str = "New BTC options strategy"
     market_type: Literal["OPTIONS", "FUTURES"] = "OPTIONS"
     futures: FuturesConfig = Field(default_factory=FuturesConfig)
-    timeframe: Literal["5m", "10m", "15m", "30m", "1h"] = "5m"
+    timeframe: Literal["5m", "10m", "15m", "30m", "1h", "1D"] = "5m"
     direction_mode: Literal["CALL", "PUT", "BOTH"] = "BOTH"
     call_action: Literal["BUY", "SELL"] = "BUY"
     put_action: Literal["BUY", "SELL"] = "BUY"
@@ -570,7 +570,7 @@ class StrategyConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_strategy_references(self):
-        tf_minutes = {"5m":5,"10m":10,"15m":15,"30m":30,"1h":60}
+        tf_minutes = {"5m":5,"10m":10,"15m":15,"30m":30,"1h":60,"1D":1440}
         base = tf_minutes[self.timeframe]
         for indicator in self.indicators:
             if indicator.timeframe == "strategy":
@@ -719,7 +719,7 @@ class BacktestRequest(DatasetSelection):
 class PreviewRequest(DatasetSelection):
     start: str
     end: str
-    timeframe: Literal["5m", "10m", "15m", "30m", "1h"] = "5m"
+    timeframe: Literal["5m", "10m", "15m", "30m", "1h", "1D"] = "5m"
     indicators: list[IndicatorInstance] = Field(default_factory=list)
     strategy: StrategyConfig | None = None
 

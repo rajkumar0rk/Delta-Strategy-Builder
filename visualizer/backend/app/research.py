@@ -155,7 +155,7 @@ def _walk_forward(req: ResearchSweepRequest, combos: list[tuple[float, ...]], pr
         # Embargo is a temporal gap between training and holdout evaluation;
         # it must never be used in either period's strategy selection.
         test_start += timedelta(
-            minutes={'5m':5,'10m':10,'15m':15,'30m':30,'1h':60}[req.strategy.timeframe]
+            minutes={'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'1D':1440}[req.strategy.timeframe]
             * req.walk_forward_embargo_bars,
         )
         if test_start >= test_end:
@@ -491,7 +491,7 @@ def run_holdout(req: HoldoutResearchRequest, progress: Callable[..., None] | Non
     start, end = _parse_dt(req.start), _parse_dt(req.end)
     if end <= start:
         raise ValueError('End must follow start')
-    tf_minutes = {'5m':5, '10m':10, '15m':15, '30m':30, '1h':60}[req.strategy.timeframe]
+    tf_minutes = {'5m':5, '10m':10, '15m':15, '30m':30, '1h':60,'1D':1440}[req.strategy.timeframe]
     step = tf_minutes*60
     total_candles = int((end-start).total_seconds()//step)
     embargo = req.embargo_bars

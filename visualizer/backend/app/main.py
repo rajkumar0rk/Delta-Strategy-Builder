@@ -240,7 +240,7 @@ def futures_parity_audit(req: BacktestRequest):
         progress('Recomputing independent chart signals',96,'PARITY_AUDIT','Compare executed trades')
         from .futures_audit_preview import futures_audit_payload
         chart = futures_audit_payload(req, result)
-        timeframe={'5m':5,'10m':10,'15m':15,'30m':30,'1h':60}[req.strategy.timeframe]
+        timeframe={'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'1D':1440}[req.strategy.timeframe]
         return audit_futures_parity(result,chart,timeframe_minutes=timeframe)
     return {'job_id': jobs.create(work)}
 

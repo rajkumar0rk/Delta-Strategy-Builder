@@ -88,7 +88,7 @@ IMPORTANT OUTPUT CONTRACT
 - Use only data and indicators explicitly supported below. Do not invent historical IV, Greeks, funding, order-flow, or external/news data.
 - alerts is a list of up to 30 historical chart-only AlertRule entries: id, name, message, enabled, direction (CALL/PUT/NEUTRAL), trigger_mode (ON_ENTER/EVERY_BAR), cooldown_bars, source (CALL_ENTRY, PUT_ENTRY, CALL_EXIT, PUT_EXIT, NO_TRADE, CALL_NO_TRADE, PUT_NO_TRADE) and optional condition_id and reset_operand. reset_operand references a numeric indicator output such as daily.day_id; changes rearm ON_ENTER and clear cooldown, while missing identity suppresses the alert. Alerts REUSE an existing full rule tree or ONE condition from that tree; do not make a separate alert conditions rule tree. Each alert has its own message and enabled toggle. Multiple alerts can fire on the same completed candle without changing trades or P&L. Legacy saved custom alerts may use source=LEGACY_CUSTOM and conditions but do not create new ones. Built-in CALL/PUT entry alerts use call_alert_message/put_alert_message; exit alerts use call_exit_alert_message/put_exit_alert_message. No real-time push notifications.
 - Indicators marked chart_only=true are visual research indicators and MUST NOT be referenced by CALL entry, PUT entry, CALL exit, PUT exit, or NO TRADE rules.
-- Conditions are evaluated on COMPLETED strategy-timeframe candles. Supported strategy timeframes are 5m, 10m, 15m, 30m and 1h. Aggregated bars are built only from complete groups of downloaded 5m candles. There is no look-ahead.
+- Conditions are evaluated on COMPLETED strategy-timeframe candles. Supported strategy timeframes are 5m, 10m, 15m, 30m, 1h and 1D (UTC). Aggregated bars are built only from complete groups of downloaded 5m candles. There is no look-ahead.
 - Higher-timeframe candles and indicators are anchored to fixed UTC clock-close boundaries, independent of the requested From time. Example: 00:05 + 00:10 form the 10m candle ending 00:10. HTF values become usable only after that HTF candle closes.
 - BUY option entry fills use historical ASK + slippage and exits SELL at historical BID - slippage. SELL option entry fills at historical BID - slippage and exits BUY-to-close at historical ASK + slippage. SELL margin requirements are venue/account specific; optional research-only user-calibrated collateral/leverage assumptions are not exchange validated. Never present them as actual Delta initial margin, leverage entitlement, or liquidation.
 - Protective stop/take-profit/profit-protection checks are quote driven when applicable.
@@ -151,7 +151,7 @@ Allowed operators: {json.dumps(OPERATORS)}
 - COUNT_TRUE_GTE counts bars where left > 0.5. Use bullish_close or bearish_close for candle-direction counts. value is the required count and lookback_bars is the window.
 - COUNT_CROSS_ABOVE_GTE / COUNT_CROSS_BELOW_GTE / COUNT_CROSS_EITHER_GTE count crosses between left/right within lookback_bars; value is the minimum required count.
 - SLOPE_GT/GTE/LT/LTE calculate (current - value N bars ago) / N and compare the points-per-bar slope with value.
-- IndicatorInstance.timeframe may be strategy, 5m, 10m, 15m, 30m or 1h. A higher timeframe must be an exact multiple of the strategy timeframe and is usable only after that higher-timeframe candle is complete.
+- IndicatorInstance.timeframe may be strategy, 5m, 10m, 15m, 30m, 1h or 1D. A higher timeframe must be an exact multiple of the strategy timeframe and is usable only after that higher-timeframe candle is complete.
 - FORMULA is a safe derived indicator. Its expression may use raw operands and previously calculated indicator operands with + - * / **, parentheses and abs(...). Put dependency indicators before the formula. Examples: (ema9 - ema50) / atr14, atrx.atr / atrx.atr_sma, (close - ema20) / atr14.
 - ADX_DMI outputs .adx, .plus_di and .minus_di. CANDLE_STRENGTH outputs body_size, range_size, body_range_percent, body_atr, upper_wick_ratio, lower_wick_ratio, bullish and bearish. ATR_EXPANSION outputs atr, atr_sma, atr_ratio, atr_slope and atr_rising. OVEREXTENSION outputs distance_atr and abs_distance_atr.
 - call_big_trend_score and put_big_trend_score create a weighted 0-100 score from entry condition ids. GATE requires the normal entry tree plus score >= threshold; SCORE_ONLY lets score be the directional decision.
@@ -297,7 +297,7 @@ DATA LIMITATIONS
 - Existing normalized option quote data can provide bid, ask, bid_size, ask_size, volume, and open_interest when present in the source rows.
 - V15.1 does NOT provide historical IV, delta, gamma, theta, vega, or rho. Do not reference them.
 - V15.1 can optionally append uncovered completed UTC days from the repository history archive before a backtest; strategy logic itself never fetches or uses future/incomplete data.
-- strategy.timeframe supports "5m", "10m", "15m", "30m", "1h", with completed UTC 5m source aggregation.
+- strategy.timeframe supports "5m", "10m", "15m", "30m", "1h", "1D", with completed UTC 5m source aggregation.
 
 V15.1 STATEFUL BIG-TREND FEATURES
 - Big Trend score supports BINARY and CONTINUOUS components. CONTINUOUS maps a numeric left operand from zero_at to full_at and gives partial weight between them.
