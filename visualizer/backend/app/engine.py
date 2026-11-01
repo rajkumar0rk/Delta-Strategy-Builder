@@ -1,5 +1,5 @@
 from __future__ import annotations
-import csv, json, math, re, hashlib, uuid
+import csv, json, math, re, hashlib, uuid, os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -909,6 +909,13 @@ def _mark_to_market_value(pos: Position, q: dict[str, Any], cash_balance: float,
 
 
 def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = None) -> dict[str, Any]:
+    # Optional per-process admission guard, disabled by default. Applied before
+    # options/futures dispatch and before automatic history synchronization.
+    max_days=float(os.getenv('STRATEGY_LAB_MAX_BACKTEST_DAYS','0'))
+    if not math.isfinite(max_days) or max_days<0:
+        raise ValueError('STRATEGY_LAB_MAX_BACKTEST_DAYS must be finite and nonnegative')
+    if max_days and (parse_time(req.end)-parse_time(req.start)).total_seconds()>max_days*86400+1e-6:
+        raise ValueError(f'BACKTEST_RANGE_LIMIT_EXCEEDED: maximum configured range is {max_days:g} days')
     if req.strategy.market_type == 'FUTURES':
         from .futures_engine import run_futures_backtest
         return run_futures_backtest(req, progress)
