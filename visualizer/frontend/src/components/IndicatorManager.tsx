@@ -1,7 +1,7 @@
 import type {IndicatorDefinition,IndicatorInstance} from '../types';
 
 function move<T>(items:T[],index:number,delta:number){const next=[...items];const to=index+delta;if(to<0||to>=next.length)return items;[next[index],next[to]]=[next[to],next[index]];return next}
-const timeframes=['strategy','5m','10m','15m','30m','1h'] as const;
+const timeframes=['strategy','5m','10m','15m','30m','1h','1D'] as const;
 
 export function IndicatorManager({catalog,value,onChange}:{catalog:IndicatorDefinition[];value:IndicatorInstance[];onChange:(x:IndicatorInstance[])=>void}){
  const add=(d:IndicatorDefinition)=>{let base=d.kind.toLowerCase().replace(/_/g,'');let id=base;let i=2;while(value.some(x=>x.id===id))id=`${base}${i++}`;const params:Record<string,number|string>={};Object.entries(d.params).forEach(([k,p])=>params[k]=p.default);onChange([...value,{id,kind:d.kind,params,visible:true,chart_only:true,timeframe:'strategy'}])};
