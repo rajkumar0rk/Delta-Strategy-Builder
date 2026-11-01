@@ -8,6 +8,7 @@ from .models import ResearchSweepRequest, AblationRequest, StrategyConfig, Backt
 from .engine import run_backtest
 from .config import result_root
 from .robustness_v163 import analyze_trade_robustness
+from .trade_positions import closed_positions
 
 UTC = timezone.utc
 
@@ -185,10 +186,11 @@ def _walk_forward(req: ResearchSweepRequest, combos: list[tuple[float, ...]], pr
             'test_run_id': test['run_id'],
             'test_cache_hit': bool(test.get('cache_hit')),
         })
-    wins = sum(float(t.get('net_pnl_usd') or 0.0) > 0 for t in selected_test_trades)
-    losses = sum(float(t.get('net_pnl_usd') or 0.0) < 0 for t in selected_test_trades)
-    gp = sum(max(0.0, float(t.get('net_pnl_usd') or 0.0)) for t in selected_test_trades)
-    gl = -sum(min(0.0, float(t.get('net_pnl_usd') or 0.0)) for t in selected_test_trades)
+    selected_test_positions=closed_positions(selected_test_trades)
+    wins = sum(float(t.get('net_pnl_usd') or 0.0) > 0 for t in selected_test_positions)
+    losses = sum(float(t.get('net_pnl_usd') or 0.0) < 0 for t in selected_test_positions)
+    gp = sum(max(0.0, float(t.get('net_pnl_usd') or 0.0)) for t in selected_test_positions)
+    gl = -sum(min(0.0, float(t.get('net_pnl_usd') or 0.0)) for t in selected_test_positions)
     nets = [float(x['test_metrics'].get('net_pnl_usd') or 0.0) for x in fold_rows]
     return {
         'folds': fold_rows,
@@ -198,10 +200,10 @@ def _walk_forward(req: ResearchSweepRequest, combos: list[tuple[float, ...]], pr
             'net_pnl_usd': sum(nets),
             'worst_fold_net_pnl_usd': min(nets) if nets else 0.0,
             'best_fold_net_pnl_usd': max(nets) if nets else 0.0,
-            'trades': len(selected_test_trades),
+            'trades': len(selected_test_positions),
             'wins': wins,
             'losses': losses,
-            'win_rate_percent': wins / len(selected_test_trades) * 100.0 if selected_test_trades else 0.0,
+            'win_rate_percent': wins / len(selected_test_positions) * 100.0 if selected_test_positions else 0.0,
             'profit_factor': gp / gl if gl > 0 else None,
         },
     }
@@ -289,6 +291,12 @@ def run_ablation(req: AblationRequest, progress: Callable[[str], None] | None = 
             if alert.get('source') == 'LEGACY_CUSTOM':
                 _remove_indicator_conditions(alert.get('conditions', {}), indicator.id, set())
             kept_alerts.append(alert)
+        pattern=payload.get('pattern_trade') or {}
+        for scope in ('call_pullback','call_breakout','put_pullback','put_breakout'):
+            if scope in pattern:
+                _remove_indicator_conditions(pattern[scope],indicator.id,removed_ids)
+        if pattern.get('enabled') and any(not (pattern.get(scope,{}).get('conditions') or pattern.get(scope,{}).get('groups')) for scope in ('call_pullback','call_breakout','put_pullback','put_breakout')):
+            pattern['enabled']=False
         payload['alerts'] = kept_alerts
         for side in ('call','put'):
             for lifecycle in payload.get(f'{side}_entry_lifecycles', []):
