@@ -22,6 +22,7 @@ export function PatternTradeEditor({strategy,operands,onChange}:{strategy:Strate
  <p>Optional separate setup/entry mode. Every completed 15m pattern stores its own high/low and expires after exactly six subsequent completed 5m candles. A breakout requires strong 5m close and volume confirmation. Keep 1H directional conditions in the ordinary CALL/PUT entry rules and 30m setup indicators below. No extra data download.</p>
  <label className="switch"><input type="checkbox" checked={c.enabled} onChange={e=>set({enabled:e.target.checked})}/><span>Enable exact pattern event mode</span></label>
  <div className="form-grid">
+  {numeric('confirmation_bars','Confirmation window (completed 5m candles)',1)}
   {numeric('max_risk_usd','Maximum estimated loss per trade (USD)',.5)}
   {numeric('option_delta_assumption','Absolute option delta assumption (required)',.05)}
   {numeric('min_body_range_ratio','Minimum 5m candle body/range',.05)}
@@ -32,6 +33,13 @@ export function PatternTradeEditor({strategy,operands,onChange}:{strategy:Strate
   {numeric('target_1_r','First target R',.25)}
   {numeric('target_2_r','Final target R',.25)}
   {numeric('first_exit_fraction','Fraction to exit at first target',.05)}
+ </div>
+ <div className="form-grid">
+  {(['pullback_patterns','breakout_patterns'] as const).map(k=><fieldset key={k}><legend>{k.replace('_',' ')}</legend>
+   {['HAMMER','SHOOTING_STAR','BULL_ENGULFING','BEAR_ENGULFING','MORNING_STAR','EVENING_STAR','BULL_MARUBOZU','BEAR_MARUBOZU'].map(name=>
+    <label key={name}><input type="checkbox" checked={c[k].includes(name)}
+      onChange={e=>set({[k]:e.target.checked?[...c[k],name]:c[k].filter(x=>x!==name)} as Partial<PatternTradeConfig>)}/>{name}</label>)}
+  </fieldset>)}
  </div>
  <p>Confirmed 5m closes are used for BTC targets; actual option exits require a fresh executable quote. In ambiguous intrabar candles, protective stops take precedence. Delta-based option risk remains an estimate, not an option premium guarantee.</p>
  {(['call_pullback','call_breakout','put_pullback','put_breakout'] as const).map(k=>
