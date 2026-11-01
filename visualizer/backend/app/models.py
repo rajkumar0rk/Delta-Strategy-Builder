@@ -354,6 +354,42 @@ class SellMarginConfig(BaseModel):
         return self
 
 
+class PatternTradeConfig(BaseModel):
+    """Opt-in BUY-option pattern strategy; BTC levels require explicit delta sizing assumption."""
+    enabled: bool = False
+    confirmation_bars: Literal[6] = 6
+    pullback_patterns: list[Literal["HAMMER","BULL_ENGULFING","MORNING_STAR","SHOOTING_STAR","BEAR_ENGULFING","EVENING_STAR"]] = Field(
+        default_factory=lambda:["HAMMER","BULL_ENGULFING","MORNING_STAR","SHOOTING_STAR","BEAR_ENGULFING","EVENING_STAR"])
+    breakout_patterns: list[Literal["BULL_MARUBOZU","BEAR_MARUBOZU","BULL_ENGULFING","BEAR_ENGULFING"]] = Field(
+        default_factory=lambda:["BULL_MARUBOZU","BEAR_MARUBOZU"])
+    call_pullback: RuleGroup = Field(default_factory=RuleGroup)
+    call_breakout: RuleGroup = Field(default_factory=RuleGroup)
+    put_pullback: RuleGroup = Field(default_factory=RuleGroup)
+    put_breakout: RuleGroup = Field(default_factory=RuleGroup)
+    min_body_range_ratio: float = Field(default=.60,ge=0,le=1)
+    volume_lookback_bars: int = Field(default=20,ge=1,le=500)
+    min_volume_ratio: float = Field(default=1.25,gt=0)
+    breakout_buffer_points: float = Field(default=0,ge=0)
+    stop_buffer_points: float = Field(default=0,ge=0)
+    max_risk_usd: float = Field(default=10,gt=0)
+    option_delta_assumption: float | None = Field(default=None,gt=0,le=1)
+    target_1_r: float = Field(default=2,gt=0)
+    target_2_r: float = Field(default=3,gt=0)
+    first_exit_fraction: float = Field(default=.5,gt=0,lt=1)
+
+    @model_validator(mode="after")
+    def validate_mode(self):
+        if self.target_2_r<=self.target_1_r:
+            raise ValueError("Second R target must exceed first R target")
+        if self.enabled:
+            if self.option_delta_assumption is None:
+                raise ValueError("Pattern options require explicit option_delta_assumption")
+            if not all(x.configured() for x in (self.call_pullback,self.call_breakout,
+                                                 self.put_pullback,self.put_breakout)):
+                raise ValueError("Enabled pattern strategy requires all four 30m setup rule trees")
+        return self
+
+
 class RiskConfig(BaseModel):
     sell_margin: SellMarginConfig = Field(default_factory=SellMarginConfig)
     stop_loss: StopLoss = Field(default_factory=StopLoss)
@@ -479,6 +515,7 @@ class StrategyConfig(BaseModel):
     name: str = "New BTC options strategy"
     market_type: Literal["OPTIONS", "FUTURES"] = "OPTIONS"
     futures: FuturesConfig = Field(default_factory=FuturesConfig)
+    pattern_trade: PatternTradeConfig = Field(default_factory=PatternTradeConfig)
     timeframe: Literal["5m", "10m", "15m", "30m", "1h", "1D"] = "5m"
     direction_mode: Literal["CALL", "PUT", "BOTH"] = "BOTH"
     call_action: Literal["BUY", "SELL"] = "BUY"
@@ -581,6 +618,11 @@ class StrategyConfig(BaseModel):
                     f"Indicator '{indicator.id}' timeframe {indicator.timeframe} must be an exact multiple "
                     f"of strategy timeframe {self.timeframe}"
                 )
+        if self.pattern_trade.enabled:
+            if self.timeframe != "5m":
+                raise ValueError("Pattern trade execution requires strategy timeframe 5m")
+            if self.market_type != "OPTIONS" or self.call_action != "BUY" or self.put_action != "BUY":
+                raise ValueError("Pattern trade execution currently supports BUY options only")
         blocked = {x.id for x in self.indicators if x.chart_only}
 
         def walk(g: RuleGroup):

@@ -299,6 +299,12 @@ DATA LIMITATIONS
 - V15.1 can optionally append uncovered completed UTC days from the repository history archive before a backtest; strategy logic itself never fetches or uses future/incomplete data.
 - strategy.timeframe supports "5m", "10m", "15m", "30m", "1h", "1D", with completed UTC 5m source aggregation.
 
+OPT-IN BUY OPTIONS PATTERN STRATEGY (NOVEMBER 2026)
+- strategy.pattern_trade.enabled defaults false; it requires strategy.timeframe=5m, BUY CALL/PUT, explicit option_delta_assumption, and four configured directional 30m setup trees: call_pullback,call_breakout,put_pullback,put_breakout. Use regular completed-30m indicator outputs in those setup trees. Ordinary call_entry/put_entry conditions should specify 1H directional EMA/ADX filters and any further gating.
+- Recognized completed 15m patterns: HAMMER,SHOOTING_STAR,BULL_ENGULFING,BEAR_ENGULFING,MORNING_STAR,EVENING_STAR,BULL_MARUBOZU,BEAR_MARUBOZU. Each event stores true formation high/low and confirms only on the next six completed 5m closes. The confirmation candle needs body/range and relative volume, and breakout of that event's high/low. Pattern stops use original 15m formation boundary; R targets use BTC spot distance, not option-premium percentages.
+- risk sizing is an explicitly assumed option-delta risk proxy, NOT an exchange-observed loss cap. Entry and partial exits still require executable-side quote proxies and historical fee/GST math. 2R exit reduces position, 3R closes remainder. If lot-size cannot be divided into two valid fills, reject entry. No inferred Greeks and no SELL-option pattern mode.
+- Old strategy files default to disabled and their execution is unchanged.
+
 V15.1 STATEFUL BIG-TREND FEATURES
 - Big Trend score supports BINARY and CONTINUOUS components. CONTINUOUS maps a numeric left operand from zero_at to full_at and gives partial weight between them.
 - Score persistence can require threshold hits in N of the last M completed candles; the score itself is available as call_big_trend_score / put_big_trend_score and supports ordinary history/count/slope rules.
