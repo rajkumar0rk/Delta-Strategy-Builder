@@ -3,6 +3,8 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
+from collections import OrderedDict
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -51,9 +53,24 @@ class DataStore:
 
     _index_lock = threading.Lock()
     _frame_lock = threading.Lock()
-    _bars_cache: dict[tuple[Any, ...], pd.DataFrame] = {}
-    _inst_cache: dict[tuple[Any, ...], pd.DataFrame] = {}
+    _bars_cache: dict[tuple[Any, ...], pd.DataFrame] = OrderedDict()
+    _inst_cache: dict[tuple[Any, ...], pd.DataFrame] = OrderedDict()
     _metadata_cache: dict[str, dict[str, Any]] = {}
+
+    @classmethod
+    def _cache_insert(cls,cache,key,frame):
+        # Bounded per-cache memory, optionally disabled with size 0.
+        mb=max(0,int(os.getenv('STRATEGY_LAB_FRAME_CACHE_MB','64')))
+        max_bytes=mb*1024*1024
+        size=int(frame.memory_usage(index=True,deep=True).sum())
+        if not max_bytes or size>max_bytes:
+            return
+        cache[key]=frame
+        cache.move_to_end(key)
+        total=sum(int(v.memory_usage(index=True,deep=True).sum()) for v in cache.values())
+        while cache and total>max_bytes:
+            _,removed=cache.popitem(last=False)
+            total-=int(removed.memory_usage(index=True,deep=True).sum())
 
     def __init__(self):
         self._connections: dict[str, sqlite3.Connection] = {}
@@ -382,6 +399,7 @@ class DataStore:
         with self._frame_lock:
             cached = self._bars_cache.get(key)
             if cached is not None:
+                self._bars_cache.move_to_end(key)
                 return cached.copy(deep=False)
         df = pd.read_csv(p.bars, parse_dates=['timestamp'])
         df['timestamp'] = pd.to_datetime(df.timestamp, utc=True)
@@ -389,7 +407,7 @@ class DataStore:
             df[c] = pd.to_numeric(df[c], errors='coerce')
         df = df.dropna(subset=['open', 'high', 'low', 'close']).sort_values('timestamp')
         with self._frame_lock:
-            self._bars_cache[key] = df
+            self._cache_insert(self._bars_cache,key,df)
         return df.copy(deep=False)
 
     def load_bars(self, p: DatasetPaths, start: str, end: str, timeframe: str = '5m') -> pd.DataFrame:
@@ -485,6 +503,7 @@ class DataStore:
         with self._frame_lock:
             cached = self._inst_cache.get(key)
             if cached is not None:
+                self._inst_cache.move_to_end(key)
                 return cached.copy(deep=False)
         df = pd.read_csv(p.instruments)
         for c in ['activation', 'expiration']:
@@ -493,7 +512,7 @@ class DataStore:
             df[c] = pd.to_numeric(df[c], errors='coerce')
         df['option_type'] = df.option_type.astype(str).str.upper()
         with self._frame_lock:
-            self._inst_cache[key] = df
+            self._cache_insert(self._inst_cache,key,df)
         return df.copy(deep=False)
 
     def load_instruments(self, p: DatasetPaths) -> pd.DataFrame:
