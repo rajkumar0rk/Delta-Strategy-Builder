@@ -357,7 +357,7 @@ class SellMarginConfig(BaseModel):
 class PatternTradeConfig(BaseModel):
     """Opt-in BUY-option pattern strategy; BTC levels require explicit delta sizing assumption."""
     enabled: bool = False
-    confirmation_bars: Literal[6] = 6
+    confirmation_bars: int = Field(default=6, ge=1, le=48)
     pullback_patterns: list[Literal["HAMMER","BULL_ENGULFING","MORNING_STAR","SHOOTING_STAR","BEAR_ENGULFING","EVENING_STAR"]] = Field(
         default_factory=lambda:["HAMMER","BULL_ENGULFING","MORNING_STAR","SHOOTING_STAR","BEAR_ENGULFING","EVENING_STAR"])
     breakout_patterns: list[Literal["BULL_MARUBOZU","BEAR_MARUBOZU","BULL_ENGULFING","BEAR_ENGULFING"]] = Field(
