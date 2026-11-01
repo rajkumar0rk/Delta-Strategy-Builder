@@ -50,3 +50,26 @@ def test_daily_strategy_schema_and_lower_tf_rejected():
     with pytest.raises(ValidationError,match="exact multiple"):
         StrategyConfig(timeframe="1D",indicators=[
             IndicatorInstance(id="fast",kind="EMA",timeframe="1h")])
+
+
+def test_data_store_daily_candle_grid_is_fixed_across_start_ranges(monkeypatch):
+    from types import SimpleNamespace
+    source=sample(288*5).reset_index(names="timestamp")
+    store=DataStore()
+    monkeypatch.setattr(store,"_read_bars_raw",lambda part:source)
+    parts=[SimpleNamespace(id="test")]
+    left=store.load_bars_many(parts,"2026-01-02T00:00:00Z",
+        "2026-01-06T00:00:00Z","1D",warmup_candles=1)
+    right=store.load_bars_many(parts,"2026-01-03T11:00:00Z",
+        "2026-01-06T00:00:00Z","1D",warmup_candles=1)
+    same=left.index.intersection(right.index)
+    pd.testing.assert_frame_equal(left.loc[same],right.loc[same])
+    assert all(x.hour==0 and x.minute==0 for x in left.index)
+
+
+def test_daily_indicator_warmup_can_exceed_old_20000_5m_limit():
+    from app.warmup import required_warmup_candles
+    indicator=IndicatorInstance(id="rsi_daily",kind="RSI",timeframe="1D",
+                                params={"period":14})
+    count=required_warmup_candles([indicator],"5m")
+    assert count>20000
