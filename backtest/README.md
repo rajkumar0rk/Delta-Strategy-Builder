@@ -393,3 +393,30 @@ use reported Windows peak process working-set for overall observed RAM.
 Before optimizing a subsystem, inspect whether actual trades and signals
 were present. This research CLI does not place orders or validate broker
 fills. The normal `run_dataset` report remains unchanged.
+
+
+## Phase 1: positional quote CSV parser (opt-in)
+
+Profiling an actual seven-day local H6 research dataset identified historical
+option quote CSV reading as the largest stage. The legacy research runner can
+now select `run_dataset(..., quote_csv_parser="POSITIONAL")`, which resolves
+the header once and uses `csv.reader` instead of creating a dictionary for
+every quote row. The original `DICT` parser is still the default. Both
+`LEGACY` and `SWEEP` quote-capture algorithms support this independent
+parser setting.
+
+Benchmark exact trade/report parity and actual runtime before changing defaults:
+
+```powershell
+.\.venv\Scripts\python.exe -m backtest.benchmark_legacy_run `
+  --directory backtest/data/delta-history/segments/2026-08-24_09-22 `
+  --start 2026-09-01T00:00:00Z --end 2026-09-08T00:00:00Z `
+  --output backtest/reports/positional-quote-parity `
+  --include-positional-profile
+```
+
+This runs original `MEMORY`, `SQLITE` and `MEMORY_POSITIONAL`
+independently, compares their complete report content and records process
+memory/time. Matching reports do not prove the optimized code is faster;
+only repeated measurements on local historical data can establish a gain.
+No market data is downloaded.
