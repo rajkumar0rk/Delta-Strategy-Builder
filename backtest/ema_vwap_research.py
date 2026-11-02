@@ -16,6 +16,7 @@ from .calculations import calculate_quantity, ema, required_entry_volume, rsi_wi
 
 from .data import OptionSpec, timestamp_ns
 from .resource_limits import LegacyResourceLimits, DecisionEventBudget, LimitedDecisionEvents
+from .option_expiry_index import OptionExpiryIndex
 
 
 UTC = timezone.utc
@@ -1443,6 +1444,7 @@ def signal_events(
     momentum_breakout: MomentumBreakoutConfig = MomentumBreakoutConfig(),
     signal_diagnostics: dict[str, int] | None = None,
     decision_events: list[dict[str, Any]] | None = None,
+    option_index: OptionExpiryIndex | None = None,
 ) -> list[SignalEvent]:
     if require_stoch_rsi_entry and require_stoch_rsi_momentum_entry:
         raise ValueError("only one Stoch RSI entry relationship can be enabled")
@@ -1730,15 +1732,16 @@ def signal_events(
             )
             key = f"{direction}_SIGNALS"
             signal_diagnostics[key] = signal_diagnostics.get(key, 0) + 1
-        option = _select_option(
-            specs,
-            signal_ns,
-            direction,
+        option = (option_index.select(signal_ns, direction, float(row["close"]),
+            min_days_to_expiry=min_days_to_expiry,
+            min_days_to_expiry_inclusive=min_days_to_expiry_inclusive,
+            max_days_to_expiry=max_days_to_expiry) if option_index is not None else _select_option(
+            specs, signal_ns, direction,
             float(row["close"]),
             min_days_to_expiry=min_days_to_expiry,
             min_days_to_expiry_inclusive=min_days_to_expiry_inclusive,
             max_days_to_expiry=max_days_to_expiry,
-        )
+        ))
         if option is not None:
             _append_decision_event(
                 decision_events, timestamp=timestamp, stage="SIGNAL", status="QUALIFIED",
@@ -3105,6 +3108,7 @@ def run_dataset(
     resource_limits: LegacyResourceLimits | None = None,
     prune_inactive_instruments: bool = False,
     indicator_chunk_rows: int | None = None,
+    indexed_option_selection: bool = False,
 ) -> dict[str, Any]:
     limits = resource_limits or LegacyResourceLimits()
     start_ns, end_ns = timestamp_ns(start), timestamp_ns(end)
@@ -3122,6 +3126,7 @@ def run_dataset(
     # to the normal loader's early admission check while reading CSV rows.
     if limits.max_option_instruments is not None and len(specs) > limits.max_option_instruments:
         raise ValueError("LEGACY_OPTION_INSTRUMENT_LIMIT_EXCEEDED")
+    option_index = OptionExpiryIndex(specs) if indexed_option_selection else None
     selected_scenarios = scenario_set or scenarios()
     if limits.max_scenarios is not None and len(selected_scenarios) > limits.max_scenarios:
         raise ValueError("LEGACY_SCENARIO_LIMIT_EXCEEDED")
@@ -3218,6 +3223,7 @@ def run_dataset(
             momentum_breakout=momentum_breakout,
             signal_diagnostics=diagnostics,
             decision_events=configuration_decisions,
+            **({"option_index": option_index} if indexed_option_selection else {}),
         )
         signal_event_total += len(events_by_configuration[key])
         if limits.max_signal_events is not None and signal_event_total > limits.max_signal_events:
