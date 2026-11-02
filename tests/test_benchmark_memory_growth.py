@@ -56,3 +56,26 @@ def test_invalid_start_and_modes(tmp_path):
             tmp_path, "2026-09-01T00:00:00Z", tmp_path/"x",
             modes=("PACKED", "PACKED"),
         )
+
+
+def test_memory_growth_rejects_report_drift(monkeypatch, tmp_path):
+    def run(argv, check):
+        mode = argv[argv.index("--mode") + 1]
+        Path(argv[argv.index("--output") + 1]).write_text(json.dumps({
+            "result": {"trades": [{"pnl_usd": 2 if mode == "MEMORY" else 3}]},
+            "elapsed_seconds": 1,
+            "peak_process_rss_kib": 1234,
+            "phase_memory": [],
+            "retention_inventory": [],
+            "quote_spool_metrics": {} if mode == "SQLITE" else None,
+        }))
+    monkeypatch.setattr("backtest.benchmark_memory_growth.subprocess.run", run)
+    folder = tmp_path / "drift"
+    with pytest.raises(ValueError, match="RESULT_PARITY_MISMATCH"):
+        benchmark_memory_growth(
+            tmp_path, "2026-09-01T00:00:00Z", folder, days=(1,),
+        )
+    result = json.loads((folder / "benchmark.json").read_text())
+    assert result["difference_count"] == 1
+    assert (folder / "1d-memory-report.json").exists()
+    assert (folder / "1d-packed-report.json").exists()
