@@ -261,3 +261,22 @@ Use a locally available folder containing `underlying_bars.csv`,
 `option_instruments.csv`, and `option_quotes.csv`. The tool does not
 automatically resolve catalog segments. Results remain research-only and
 are **not** proof of parity on the full archive until run on your data.
+
+
+## Optional instrument window pruning
+
+`backtest.ema_vwap_research.run_dataset(..., prune_inactive_instruments=True)`
+streams `option_instruments.csv` and retains only contracts that could have
+been active at some point in the requested [start, end) signal period.
+Contracts which expired on/before `start`, or activated on/after `end`,
+cannot be selected and are omitted. This avoids repeatedly checking
+irrelevant older/future instruments during each signal's option selection.
+The default remains `False` for backward compatibility. The option
+selector itself (DTE, expiry, direction, and nearest strike) is unchanged,
+and parity tests compare both modes over synthetic time windows.
+
+`LegacyResourceLimits(max_option_instruments=...)` is now enforced while
+the instrument rows are processed, before the selected list grows past its
+configured limit. A too-large run fails rather than truncating records.
+This is not a fully streaming Pandas indicator engine, and actual speed and
+memory improvements require benchmarks against your laptop's local archive.
