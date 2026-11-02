@@ -3695,7 +3695,9 @@ def run_dataset(
 def run_dataset_to_streamed_report(
     directory: Path, *,
     start: str, end: str, output: Path,
-    spool_directory: Path | None = None, **run_kwargs: Any,
+    spool_directory: Path | None = None,
+    csv_directory: Path | None = None,
+    **run_kwargs: Any,
 ) -> dict[str, Any]:
     """Generate an original-shape report JSON while spooling large records.
 
@@ -3712,7 +3714,10 @@ def run_dataset_to_streamed_report(
             directory, start=start, end=end,
             report_record_spool=spool, **run_kwargs,
         )
-        return spool.write_report(report, output)
+        manifest = spool.write_report(report, output)
+        if csv_directory is not None:
+            manifest["csv_paths"] = spool.write_csv_exports(csv_directory)
+        return manifest
 
 
 def write_report(report: dict[str, Any], output: Path) -> None:
