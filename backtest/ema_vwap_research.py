@@ -3336,8 +3336,8 @@ def run_dataset(
         )
     if quote_capture_algorithm not in {'LEGACY','SWEEP'}:
         raise ValueError('quote_capture_algorithm must be LEGACY or SWEEP')
-    if quote_capture_storage not in {"MEMORY","SQLITE"}:
-        raise ValueError("quote_capture_storage must be MEMORY or SQLITE")
+    if quote_capture_storage not in {"MEMORY","SQLITE","PACKED_MEMORY"}:
+        raise ValueError("quote_capture_storage must be MEMORY, SQLITE or PACKED_MEMORY")
     if quote_spool_encoding not in {"JSON", "PACKED"}:
         raise ValueError("quote_spool_encoding must be JSON or PACKED")
     quote_store=None
@@ -3347,6 +3347,9 @@ def run_dataset(
                                    batch_size=quote_batch_size,
                                    max_captured=max_captured_quotes,
                                    payload_encoding=quote_spool_encoding)
+    elif quote_capture_storage=="PACKED_MEMORY":
+        from .packed_memory_quote_store import PackedMemoryQuoteStore
+        quote_store=PackedMemoryQuoteStore(max_captured=max_captured_quotes)
     try:
         if quote_csv_parser not in {'DICT', 'POSITIONAL'}:
             raise ValueError("quote_csv_parser must be DICT or POSITIONAL")

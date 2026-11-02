@@ -862,3 +862,44 @@ temporary spool is removed when export completes or raises. Allow adequate
 disk space for intermediate files and full reports; this is **not** a
 hard ceiling on total process memory because per-scenario trades, source
 indicators and signal/quote events are still in memory.
+
+
+### Phase 1 — opt-in lossless packed in-memory captured quotes
+
+The H6 runner now accepts `run_dataset(...,
+quote_capture_storage="PACKED_MEMORY")`. This stores each selected option
+quote as precisely seven little-endian IEEE-754 doubles (56 bytes) in
+per-event in-memory byte arrays rather than retaining a dictionary per
+captured quote. Quotes are decoded to the *same* seven-field dictionaries on
+indexed access, iteration or reverse iteration. The quote payload is not
+rounded or truncated. Existing `max_captured_quotes` limits fail closed;
+unknown payload schemas raise an error.
+
+The default `quote_capture_storage="MEMORY"` is unchanged, as is the
+existing `SQLITE` alternative (with JSON or PACKED disk format). Packed
+in-memory quotes do not remove the need to hold signal events, indicator
+frames or the final report. It is **not** a fully streaming quote-processing
+engine, nor an end-to-end memory cap. The mode is experimental until
+controlled archive results show complete report parity and a useful peak
+RSS/runtime tradeoff.
+
+Compare the packed in-memory quote storage with ordinary Python dictionary
+quote storage while **holding streamed report output constant**:
+
+```powershell
+.\.venv\Scripts\python.exe -m backtest.benchmark_report_streaming `
+  --directory backtest/data/delta-history/segments/2026-08-24_09-22 `
+  --start 2026-09-01T00:00:00Z `
+  --end 2026-09-15T00:00:00Z `
+  --output backtest/reports/packed-memory-quotes-ab `
+  --comparison QUOTE_STORAGE --rounds 3
+```
+
+Both variants use the same POSITIONAL quote CSV parser, LEGACY capture
+algorithm, positional bar lookup, trimmed simulation frame, and opt-in
+lossless streamed complete-report writer. The balanced 12-run benchmark
+compares every JSON field and fee/decision result at **zero** numerical
+tolerance, and reports wall time and process peak RSS independently. The
+original `REPORT_STORAGE` comparison remains available as the default.
+This is the locked H6 research path, not the configurable Strategy Lab
+JSON engine.
