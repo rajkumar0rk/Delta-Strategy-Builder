@@ -652,3 +652,37 @@ The 14-day window is preferred because it captured 31,988 quote rows and
 1,867 trades. Review median process RSS and runtime and require full-report
 parity before promoting the setting. For larger history, the materialized
 indicator DataFrame and final reports remain separate scaling problems.
+
+
+### Optional post-signal simulation frame reduction
+
+The full indicator candle frame must still be calculated before signals,
+because EMA/RSI/ATR smoothing and session VWAP depend on prior history, and
+because signal decision diagnostics are sensitive to the original timeline.
+Once all signal configurations have been evaluated, a new opt-in
+`run_dataset(..., trim_simulation_frame=True)` retains only simulation-used
+columns and the preceding candle lookback needed for early-failure structure
+levels and directional confirmation. It keeps *all* future candles for holds
+without a fixed deadline. Original full-frame behavior remains the default.
+
+This is **not** a streaming indicator loader: the full source still reaches
+its initial peak while indicators are being built. The feature targets the
+later quote capture / trade simulation peak by freeing the no-longer-needed
+historical frame blocks. Frame reduction is bypassed safely for unsupported
+index/order/column shapes.
+
+Benchmark against the existing POSITIONAL + candle lookup default, with
+12 independent order-balanced runs and full trade/fee/decision-report parity:
+
+```powershell
+.\.venv\Scripts\python.exe -m backtest.benchmark_positional_ab `
+  --directory backtest/data/delta-history/segments/2026-08-24_09-22 `
+  --start 2026-09-01T00:00:00Z `
+  --end 2026-09-15T00:00:00Z `
+  --output backtest/reports/frame-trim-ab `
+  --comparison FRAME_TRIM --rounds 3
+```
+
+The change must remain optional until your actual archive demonstrates exact
+report parity, useful peak RSS improvement and acceptable runtime. It applies
+only to locked H6 legacy research, not the configurable JSON strategy runner.
