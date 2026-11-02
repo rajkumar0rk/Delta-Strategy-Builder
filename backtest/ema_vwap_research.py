@@ -3125,6 +3125,7 @@ def run_dataset(
     quote_csv_parser: str = 'POSITIONAL',
     positional_bar_lookup: bool = True,
     stage_observer: Callable[[str, float], None] | None = None,
+    quote_spool_observer: Callable[[dict[str, int | str]], None] | None = None,
 ) -> dict[str, Any]:
     # Profiling hooks are strictly opt-in and outside the returned report.
     # No instrumentation changes execution decisions or default output.
@@ -3549,7 +3550,11 @@ def run_dataset(
 
     finally:
         if quote_store is not None:
-            quote_store.close()
+            try:
+                if quote_spool_observer is not None:
+                    quote_spool_observer(quote_store.snapshot_metrics())
+            finally:
+                quote_store.close()
 
 def write_report(report: dict[str, Any], output: Path) -> None:
     output.mkdir(parents=True, exist_ok=True)
