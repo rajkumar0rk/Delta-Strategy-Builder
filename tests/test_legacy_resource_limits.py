@@ -44,7 +44,7 @@ def test_bar_and_instrument_admission(monkeypatch, tmp_path):
     runner = research.run_dataset
     globals_for_run = runner.__globals__
     monkeypatch.setitem(globals_for_run, "indicators", lambda path: [1, 2])
-    monkeypatch.setitem(globals_for_run, "_option_specs", lambda path: [object(), object()])
+    monkeypatch.setitem(globals_for_run, "_option_specs", lambda path, **kwargs: [object(), object()])
     scenario = [research.Scenario(name="S", group=1, exit_mode="EMA")]
     common = dict(start="2026-11-01T00:00:00Z", end="2026-11-02T00:00:00Z", scenario_set=scenario)
     with pytest.raises(ValueError, match="LEGACY_UNDERLYING_BAR_LIMIT_EXCEEDED"):
