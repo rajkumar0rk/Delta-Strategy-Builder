@@ -4,10 +4,11 @@ import argparse
 import csv
 import json
 import math
+import time
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Callable
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -3109,13 +3110,26 @@ def run_dataset(
     prune_inactive_instruments: bool = False,
     indicator_chunk_rows: int | None = None,
     indexed_option_selection: bool = False,
+    stage_observer: Callable[[str, float], None] | None = None,
 ) -> dict[str, Any]:
+    # Profiling hooks are strictly opt-in and outside the returned report.
+    # No instrumentation changes execution decisions or default output.
+    stage_since = time.perf_counter() if stage_observer is not None else 0.0
+
+    def completed_stage(label: str) -> None:
+        nonlocal stage_since
+        if stage_observer is not None:
+            now = time.perf_counter()
+            stage_observer(label, now - stage_since)
+            stage_since = now
+
     limits = resource_limits or LegacyResourceLimits()
     start_ns, end_ns = timestamp_ns(start), timestamp_ns(end)
     frame = (indicators(directory / "underlying_bars.csv") if indicator_chunk_rows is None
              else indicators(directory / "underlying_bars.csv", indicator_chunk_rows=indicator_chunk_rows))
     if limits.max_underlying_bars is not None and len(frame) > limits.max_underlying_bars:
         raise ValueError("LEGACY_UNDERLYING_BAR_LIMIT_EXCEEDED")
+    completed_stage("INDICATORS_AND_CSV")
     instrument_kwargs: dict[str, Any] = {}
     if prune_inactive_instruments:
         instrument_kwargs.update(active_start_ns=start_ns, active_end_ns=end_ns)
@@ -3135,6 +3149,7 @@ def run_dataset(
         if retain_decision_events and limits.max_decision_events is not None
         else None
     )
+    completed_stage("INSTRUMENTS_AND_CONFIG")
     signal_event_total = 0
     event_keys = sorted(
         {
@@ -3232,6 +3247,7 @@ def run_dataset(
         decision_events_by_configuration[key] = (
             configuration_decisions if configuration_decisions is not None else []
         )
+    completed_stage("SIGNAL_EVALUATION")
     if quote_capture_algorithm not in {'LEGACY','SWEEP'}:
         raise ValueError('quote_capture_algorithm must be LEGACY or SWEEP')
     if quote_capture_storage not in {"MEMORY","SQLITE"}:
@@ -3270,6 +3286,7 @@ def run_dataset(
                 directory,
                 [event for events in events_by_configuration.values() for event in events],
             )
+        completed_stage("QUOTE_CAPTURE")
         results: list[dict[str, Any]] = []
         all_trades: list[dict[str, Any]] = []
         execution_attempts: list[dict[str, Any]] = []
@@ -3452,6 +3469,7 @@ def run_dataset(
                 ],
                 "signals_with_contract": len(events),
             })
+        completed_stage("TRADE_SIMULATION")
         return {
             "data_directory": str(directory.resolve()),
             "start": start,
