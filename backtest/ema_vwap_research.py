@@ -644,18 +644,43 @@ def locked_h6_fa150_utc08_scenarios() -> list[Scenario]:
     ]
 
 
-def _option_specs(path: Path) -> list[OptionSpec]:
+def _option_specs(
+    path: Path, *,
+    active_start_ns: int | None = None,
+    active_end_ns: int | None = None,
+    max_instruments: int | None = None,
+) -> list[OptionSpec]:
+    """Load only contracts that can be active during an optional research window.
+
+    This does not alter expiry/DTE/strike choice: a signal is always constrained
+    to [active_start_ns, active_end_ns) in the caller. Unset bounds preserve
+    legacy behavior. Admission is checked while scanning, before materialization.
+    """
+    if (active_start_ns is None) != (active_end_ns is None):
+        raise ValueError("active instrument window requires both bounds")
+    if active_start_ns is not None and active_end_ns <= active_start_ns:
+        raise ValueError("active instrument window end must follow start")
+    if max_instruments is not None and (type(max_instruments) is not int or max_instruments < 1):
+        raise ValueError("max_instruments must be a positive integer")
     items: list[OptionSpec] = []
     with path.open("r", encoding="utf-8", newline="") as handle:
         for row in csv.DictReader(handle):
+            activation_ns = timestamp_ns(row["activation"])
+            expiration_ns = timestamp_ns(row["expiration"])
+            if active_start_ns is not None and (
+                activation_ns >= active_end_ns or expiration_ns <= active_start_ns
+            ):
+                continue
+            if max_instruments is not None and len(items) >= max_instruments:
+                raise ValueError("LEGACY_OPTION_INSTRUMENT_LIMIT_EXCEEDED")
             items.append(OptionSpec(
                 symbol=row["symbol"],
                 source_symbol=row.get("source_symbol") or row["symbol"],
                 expiry=row["expiry"],
                 strike=float(row["strike"]),
                 option_type=row["option_type"].upper(),
-                activation_ns=timestamp_ns(row["activation"]),
-                expiration_ns=timestamp_ns(row["expiration"]),
+                activation_ns=activation_ns,
+                expiration_ns=expiration_ns,
                 price_precision=int(row["price_precision"]),
                 size_precision=int(row["size_precision"]),
                 price_increment=float(row["price_increment"]),
@@ -3061,15 +3086,21 @@ def run_dataset(
     max_active_events: int | None = None,
     retain_decision_events: bool = True,
     resource_limits: LegacyResourceLimits | None = None,
+    prune_inactive_instruments: bool = False,
 ) -> dict[str, Any]:
     limits = resource_limits or LegacyResourceLimits()
     start_ns, end_ns = timestamp_ns(start), timestamp_ns(end)
     frame = indicators(directory / "underlying_bars.csv")
     if limits.max_underlying_bars is not None and len(frame) > limits.max_underlying_bars:
         raise ValueError("LEGACY_UNDERLYING_BAR_LIMIT_EXCEEDED")
-    specs = _option_specs(directory / "option_instruments.csv")
-    if limits.max_option_instruments is not None and len(specs) > limits.max_option_instruments:
-        raise ValueError("LEGACY_OPTION_INSTRUMENT_LIMIT_EXCEEDED")
+    specs = _option_specs(
+        directory / "option_instruments.csv",
+        **(
+            {"active_start_ns": start_ns, "active_end_ns": end_ns}
+            if prune_inactive_instruments else {}
+        ),
+        max_instruments=limits.max_option_instruments,
+    )
     selected_scenarios = scenario_set or scenarios()
     if limits.max_scenarios is not None and len(selected_scenarios) > limits.max_scenarios:
         raise ValueError("LEGACY_SCENARIO_LIMIT_EXCEEDED")
