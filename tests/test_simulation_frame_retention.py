@@ -68,13 +68,14 @@ def test_duplicate_timestamps_maintain_all_preceding_rows():
     signal=SimpleNamespace(timestamp_ns=frame.index[13].value)
     result=prepare_simulation_frame(frame, {"a":[signal]},[_scenario(4,0)])
     assert result.index[-1]==frame.index[-1]
-    assert result.index[0]==frame.index[8]
+    assert result.index[0]==frame.index[9]
     assert result.index.is_monotonic_increasing
 
 
 def test_no_events_missing_columns_and_unsorted_fall_back_without_guessing():
     frame=_frame()
     assert prepare_simulation_frame(frame,{"none":[]},[_scenario(4,0)]) is frame
-    assert prepare_simulation_frame(frame[["close"]],{"a":[SimpleNamespace(timestamp_ns=frame.index[12].value)]},[_scenario(4,0)]) is not None
+    missing=frame[["close"]]
+    assert prepare_simulation_frame(missing,{"a":[SimpleNamespace(timestamp_ns=frame.index[12].value)]},[_scenario(4,0)]) is missing
     unordered=frame.iloc[::-1]
     assert prepare_simulation_frame(unordered,{"a":[SimpleNamespace(timestamp_ns=frame.index[12].value)]},[_scenario(4,0)]) is unordered
