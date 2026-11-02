@@ -36,6 +36,7 @@ def prepare_simulation_frame(frame: pd.DataFrame, events_by_configuration,
         not isinstance(frame, pd.DataFrame)
         or not isinstance(frame.index, pd.DatetimeIndex)
         or not frame.index.is_monotonic_increasing
+        or frame.index.tz is None
         or not _SIMULATION_COLUMNS.issubset(frame.columns)
     ):
         return frame
