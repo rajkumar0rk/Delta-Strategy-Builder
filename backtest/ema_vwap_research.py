@@ -3113,6 +3113,7 @@ def run_dataset(
     quote_capture_storage: str = "MEMORY",
     quote_spool_directory: Path | None = None,
     quote_batch_size: int = 4096,
+    quote_spool_encoding: str = "JSON",
     max_captured_quotes: int | None = None,
     quote_capture_algorithm: str = 'LEGACY',
     max_active_events: int | None = None,
@@ -3265,12 +3266,15 @@ def run_dataset(
         raise ValueError('quote_capture_algorithm must be LEGACY or SWEEP')
     if quote_capture_storage not in {"MEMORY","SQLITE"}:
         raise ValueError("quote_capture_storage must be MEMORY or SQLITE")
+    if quote_spool_encoding not in {"JSON", "PACKED"}:
+        raise ValueError("quote_spool_encoding must be JSON or PACKED")
     quote_store=None
     if quote_capture_storage=="SQLITE":
         from .event_quote_store import EventQuoteStore
         quote_store=EventQuoteStore(directory=quote_spool_directory,
                                    batch_size=quote_batch_size,
-                                   max_captured=max_captured_quotes)
+                                   max_captured=max_captured_quotes,
+                                   payload_encoding=quote_spool_encoding)
     try:
         if quote_csv_parser not in {'DICT', 'POSITIONAL'}:
             raise ValueError("quote_csv_parser must be DICT or POSITIONAL")
