@@ -824,3 +824,41 @@ This remains **partially bounded**: per-scenario trade metrics, source
 indicators, signal configurations, captured quotes and other report metadata
 are still in memory. It is not integrated into the general JSON Strategy
 Lab engine and is not full streaming execution.
+
+
+### File-oriented locked H6 reports with low-memory exports
+
+The 14-day 12-run ABBA/BAAB historical report benchmark verified zero
+trade/fee/decision report differences (1,867 trades; 1,903 execution attempts;
+8,190 decisions), with median peak RSS dropping from 124,442 KiB to
+88,304 KiB (**35.29 MiB / 29.0% less RAM**) and median runtime increasing
+from 25.70 seconds to 26.71 seconds (3.9%).
+
+For complete summary.json and the existing trades.csv, execution_attempts.csv
+and decision_events.csv outputs, use the new file-oriented legacy H6 command:
+
+```powershell
+.\.venv\Scripts\python.exe -m backtest.export_legacy_report `
+  --directory backtest/data/delta-history/segments/2026-08-24_09-22 `
+  --start 2026-09-01T00:00:00Z `
+  --end 2026-09-15T00:00:00Z `
+  --output backtest/reports/locked-h6-streamed `
+  --storage STREAMED
+```
+
+This new exporter defaults to STREAMED storage and retains a reversible
+`--storage MEMORY` option for original report generation. CSV records and
+headers are emitted through temporary append-only JSONL storage and
+published atomically *per file* without materializing each complete
+aggregate list, preserving the historical output field order and rows.
+JSON and each CSV are individually atomic, not a transaction spanning
+the whole output directory; readers should only consume after the command
+exits successfully. Existing in-memory `run_dataset()`, the legacy matrix
+research CLI and the configurable JSON strategy engine are unchanged.
+
+For a custom temporary scratch location add
+`--spool-directory backtest/reports/tmp-spool` (STREAMED only). The
+temporary spool is removed when export completes or raises. Allow adequate
+disk space for intermediate files and full reports; this is **not** a
+hard ceiling on total process memory because per-scenario trades, source
+indicators and signal/quote events are still in memory.
