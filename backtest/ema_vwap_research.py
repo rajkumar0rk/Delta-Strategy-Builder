@@ -3093,14 +3093,12 @@ def run_dataset(
     frame = indicators(directory / "underlying_bars.csv")
     if limits.max_underlying_bars is not None and len(frame) > limits.max_underlying_bars:
         raise ValueError("LEGACY_UNDERLYING_BAR_LIMIT_EXCEEDED")
-    specs = _option_specs(
-        directory / "option_instruments.csv",
-        **(
-            {"active_start_ns": start_ns, "active_end_ns": end_ns}
-            if prune_inactive_instruments else {}
-        ),
-        max_instruments=limits.max_option_instruments,
-    )
+    instrument_kwargs: dict[str, Any] = {}
+    if prune_inactive_instruments:
+        instrument_kwargs.update(active_start_ns=start_ns, active_end_ns=end_ns)
+    if limits.max_option_instruments is not None:
+        instrument_kwargs["max_instruments"] = limits.max_option_instruments
+    specs = _option_specs(directory / "option_instruments.csv", **instrument_kwargs)
     selected_scenarios = scenario_set or scenarios()
     if limits.max_scenarios is not None and len(selected_scenarios) > limits.max_scenarios:
         raise ValueError("LEGACY_SCENARIO_LIMIT_EXCEEDED")
