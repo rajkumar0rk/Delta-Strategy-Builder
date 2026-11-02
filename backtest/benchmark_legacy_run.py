@@ -28,7 +28,8 @@ def _child(directory: Path, start: str, end: str, mode: str, output: Path,
            quote_spool_encoding: str = "JSON",
            record_spool_metrics: bool = False,
            record_memory_inventory: bool = False,
-           release_completed_configurations: bool = False) -> None:
+           release_completed_configurations: bool = False,
+           trim_simulation_frame: bool = False) -> None:
     from .ema_vwap_research import run_dataset, locked_h6_scenarios
     begin=time.perf_counter()
     spool_metrics = {}
@@ -55,6 +56,7 @@ def _child(directory: Path, start: str, end: str, mode: str, output: Path,
                        positional_bar_lookup=positional_bar_lookup,
                        quote_spool_encoding=quote_spool_encoding,
                        release_completed_configurations=release_completed_configurations,
+                       trim_simulation_frame=trim_simulation_frame,
                        quote_spool_observer=spool_metrics.update if record_spool_metrics else None,
                        stage_observer=on_stage if record_memory_inventory else None,
                        retention_observer=on_retention if record_memory_inventory else None)
@@ -191,6 +193,7 @@ def main():
     p.add_argument("--memory-inventory",action="store_true",help=argparse.SUPPRESS)
     p.add_argument("--release-completed-configurations",action="store_true",
                    help=argparse.SUPPRESS)
+    p.add_argument("--trim-simulation-frame",action="store_true",help=argparse.SUPPRESS)
     p.add_argument("--quote-spool-encoding",choices=["JSON", "PACKED"],default="JSON",
                    help=argparse.SUPPRESS)
     p.add_argument("--positional-bar-lookup",action="store_true",help=argparse.SUPPRESS)
@@ -209,7 +212,8 @@ def main():
                a.algorithm,not a.omit_decision_events,a.prune_inactive_instruments,
                a.indicator_chunk_rows,a.indexed_option_selection,a.quote_csv_parser,
                a.positional_bar_lookup,a.quote_spool_encoding,a.quote_spool_metrics,
-               a.memory_inventory,a.release_completed_configurations)
+               a.memory_inventory,a.release_completed_configurations,
+               a.trim_simulation_frame)
     else:
         print(json.dumps(benchmark(a.directory,a.start,a.end,a.output,
                                    a.max_captured_quotes,
