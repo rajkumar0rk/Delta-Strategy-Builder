@@ -280,3 +280,29 @@ the instrument rows are processed, before the selected list grows past its
 configured limit. A too-large run fails rather than truncating records.
 This is not a fully streaming Pandas indicator engine, and actual speed and
 memory improvements require benchmarks against your laptop's local archive.
+
+
+## Three-profile laptop validation (no data downloads)
+
+After pulling `working`, use this command on any **existing local**
+normalized dataset containing `underlying_bars.csv`,
+`option_instruments.csv`, and `option_quotes.csv`:
+
+```powershell
+python -m backtest.benchmark_legacy_run `
+  --directory backtest/data/delta-history/segments/YOUR_SEGMENT `
+  --start 2026-09-01T00:00:00Z --end 2026-09-02T00:00:00Z `
+  --output backtest/reports/three-profile-benchmark `
+  --include-pruned-profile --omit-decision-events
+```
+
+The three independent runs are `MEMORY+LEGACY`, `SQLITE+SWEEP`,
+and `SQLITE+SWEEP+prune_inactive_instruments`. Results and per-mode
+differences are retained in the output directory, with per-process elapsed
+seconds and peak RSS in `benchmark.json`. A difference fails closed.
+The optional omission of detailed diagnostic events applies to **all**
+profiles equally. Omit that switch to test full diagnostic output parity.
+This benchmark executes the original frozen H6 research configuration and
+does not verify arbitrary Strategy Lab JSONs, live fills or margin.
+For reliable comparisons, run one segment at a time, ensure sufficient
+disk space, and repeat runs to account for OS caching.
