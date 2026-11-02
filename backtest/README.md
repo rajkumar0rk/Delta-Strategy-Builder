@@ -581,3 +581,37 @@ RSS from the seven-day test alone. The full indicator DataFrame, scenario
 events and final report are still materialized in memory. This does not
 run on the general configurable JSON strategy engine. JSON encoding and
 fast in-memory quote storage remain unchanged defaults.
+
+
+### Phase 1 — inspect memory growth before introducing streaming indicators
+
+The H6 research runner can now emit an opt-in retention inventory. The
+diagnostic records indicator DataFrame rows and bytes, option instrument
+counts, signal events, captured quote rows, execution attempts, trades,
+and retained decision events, plus **cumulative peak process RSS** at each
+major phase. This instrument is outside the report, so trade and fee parity
+can still be checked. Stage peaks are cumulative, not instantaneous working
+set samples.
+
+Use the independent-process multi-window benchmark on existing data:
+
+```powershell
+.\.venv\Scripts\python.exe -m backtest.benchmark_memory_growth `
+  --directory backtest/data/delta-history/segments/2026-08-24_09-22 `
+  --start 2026-09-01T00:00:00Z `
+  --days 1,7,14 `
+  --output backtest/reports/memory-growth
+```
+
+Runs each horizon separately for the fast MEMORY+POSITIONAL+bar lookup path
+and for PACKED SQLite+SWEEP+POSITIONAL+bar lookup; checks the complete
+reports at matching horizons. All quote files are read locally, without
+downloading historical data.
+
+**Important:** the legacy `indicators()` loader currently materializes the
+entire `underlying_bars.csv` file before applying signal date constraints.
+A one-day strategy window may therefore retain the same indicator frame as
+a 14-day window. Inspect `indicator_rows` and `indicator_frame_bytes`
+rather than claiming range-level memory proportionality or globally bounded
+RSS. Next step is deciding whether to change full-frame indicator ownership,
+and how much warm-up state must be preserved to maintain exact parity.
