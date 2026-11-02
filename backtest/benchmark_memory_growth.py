@@ -36,6 +36,8 @@ def benchmark_memory_growth(
         raise ValueError("days must be unique integers between 1 and 365")
     if not modes or any(mode not in ("MEMORY", "PACKED") for mode in modes) or len(set(modes)) != len(modes):
         raise ValueError("modes must be MEMORY and/or PACKED without duplicates")
+    # Check both modes against the MEMORY report regardless of caller order.
+    modes = tuple(sorted(modes, key=lambda mode: 0 if mode == "MEMORY" else 1))
     start_at = datetime.fromisoformat(start.replace("Z", "+00:00"))
     if start_at.tzinfo is None or start_at.utcoffset() is None:
         raise ValueError("start must include UTC or timezone offset")
