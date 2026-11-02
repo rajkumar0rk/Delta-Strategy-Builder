@@ -79,3 +79,14 @@ def test_no_events_missing_columns_and_unsorted_fall_back_without_guessing():
     assert prepare_simulation_frame(missing,{"a":[SimpleNamespace(timestamp_ns=frame.index[12].value)]},[_scenario(4,0)]) is missing
     unordered=frame.iloc[::-1]
     assert prepare_simulation_frame(unordered,{"a":[SimpleNamespace(timestamp_ns=frame.index[12].value)]},[_scenario(4,0)]) is unordered
+
+
+def test_default_legacy_runner_uses_frame_trim_with_explicit_rollback():
+    from inspect import signature, Parameter
+    from backtest.ema_vwap_research import run_dataset
+
+    setting = signature(run_dataset).parameters["trim_simulation_frame"]
+    assert setting.default is True
+    assert setting.kind == Parameter.KEYWORD_ONLY
+    # The opt-out remains a normal boolean keyword argument; benchmark
+    # subprocesses explicitly pin both A/B variants independent of default.
