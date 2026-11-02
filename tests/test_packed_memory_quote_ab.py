@@ -22,7 +22,7 @@ def test_packed_memory_and_original_quotes_produce_identical_reports(monkeypatch
             })
         return [
             SimpleNamespace(
-                timestamp_ns=research.timestamp_ns("2026-09-01T00:00:00Z"),
+                timestamp_ns=research.timestamp_ns("2026-09-01T00:01:00Z"),
                 option=SimpleNamespace(symbol="BTC-CE"),
                 direction="CALL", entry_type="BASELINE",
                 ema_regime_start_ns=0, quotes=[], execution_attempt=None,
