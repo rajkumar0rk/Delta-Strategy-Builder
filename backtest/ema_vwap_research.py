@@ -3110,6 +3110,7 @@ def run_dataset(
     prune_inactive_instruments: bool = False,
     indicator_chunk_rows: int | None = None,
     indexed_option_selection: bool = False,
+    quote_csv_parser: str = 'DICT',
     stage_observer: Callable[[str, float], None] | None = None,
 ) -> dict[str, Any]:
     # Profiling hooks are strictly opt-in and outside the returned report.
@@ -3259,7 +3260,20 @@ def run_dataset(
                                    batch_size=quote_batch_size,
                                    max_captured=max_captured_quotes)
     try:
-        (capture_quotes_sweep if quote_capture_algorithm == 'SWEEP' else capture_quotes)(
+        if quote_csv_parser not in {'DICT', 'POSITIONAL'}:
+            raise ValueError("quote_csv_parser must be DICT or POSITIONAL")
+        if quote_csv_parser == 'POSITIONAL':
+            from .positional_quote_capture import (
+                capture_quotes_positional, capture_quotes_sweep_positional,
+            )
+            capture = (
+                capture_quotes_sweep_positional
+                if quote_capture_algorithm == 'SWEEP'
+                else capture_quotes_positional
+            )
+        else:
+            capture = capture_quotes_sweep if quote_capture_algorithm == 'SWEEP' else capture_quotes
+        capture(
             directory / "option_quotes.csv",
             [event for events in events_by_configuration.values() for event in events],
             quote_store=quote_store,
