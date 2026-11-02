@@ -494,3 +494,20 @@ POSITIONAL+positional_bar_lookup. Each run compares its **complete** report
 against a freshly captured POSITIONAL baseline, including the actual trade
 list and fees. The original  `QUOTE_PARSER` comparison remains available
 and the default; no backtest runtime settings are changed.
+
+
+### Promoted positional candle lookup
+
+The locked H6 research runner now defaults to both `quote_csv_parser="POSITIONAL"`
+and `positional_bar_lookup=True`. In 12 alternating, independent-process local
+trials, median duration dropped from 13.03 s to 10.97 s (15.77%), with
+922 trades, 952 execution attempts and identical full reports across every
+trial. To restore original candle-window semantics explicitly, call
+`run_dataset(..., positional_bar_lookup=False)`. To restore the original
+quote parser too, set `quote_csv_parser="DICT"`.
+
+The AB comparison command continues to *explicitly* force the flags in
+its child processes and therefore still compares the original POSITIONAL
+baseline to the combined mode after this promotion. This default applies
+to legacy EMA/VWAP research only, **not** the JSON Strategy Lab engine.
+Memory gains were small; bounded-memory execution is not yet implemented.
