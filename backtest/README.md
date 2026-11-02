@@ -474,3 +474,23 @@ POSITIONAL+bar lookup, and records the **actual** parser for each profile.
 
 Do not promote bar lookup based on previous incorrectly labeled timing; compare
 `MEMORY_COMBINED` against `MEMORY_POSITIONAL` and require full report parity.
+
+
+### Compare POSITIONAL against combined candle lookup (balanced A/B)
+
+The earlier combined benchmark returned matching reports but highly variable
+runtimes. Use the same parser on both sides and vary **only** candle lookup:
+
+```powershell
+.\.venv\Scripts\python.exe -m backtest.benchmark_positional_ab `
+  --directory backtest/data/delta-history/segments/2026-08-24_09-22 `
+  --start 2026-09-01T00:00:00Z --end 2026-09-08T00:00:00Z `
+  --output backtest/reports/bar-lookup-ab `
+  --comparison BAR_LOOKUP --rounds 3
+```
+
+ABBA/BAAB runs alternate POSITIONAL alone versus
+POSITIONAL+positional_bar_lookup. Each run compares its **complete** report
+against a freshly captured POSITIONAL baseline, including the actual trade
+list and fees. The original  `QUOTE_PARSER` comparison remains available
+and the default; no backtest runtime settings are changed.
