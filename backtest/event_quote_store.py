@@ -46,7 +46,7 @@ class EventQuoteView(Sequence):
             (self._event_id,),
         )
         for row in cursor:
-            yield json.loads(row[0])
+            yield self._store._decode(row[0])
 
     def __getitem__(self, index):
         if isinstance(index, slice):
