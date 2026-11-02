@@ -324,3 +324,23 @@ core-indicator computation**, not fully bounded-memory backtesting: selected
 bars and derived signals are still retained for research. Manual full-archive
 trade/report parity and peak-RAM measurements are required before selecting
 this mode as a default.
+
+
+### Verify full report parity for stateful indicators on the laptop
+
+Run the existing offline benchmark with an additional streamed-indicator
+profile. All profiles use identical locked research scenarios; the streamed
+profile uses the same SQLITE+SWEEP quote capture and a configured CSV batch
+size, but replaces the core indicator preparation.
+
+```powershell
+python -m backtest.benchmark_legacy_run `
+  --directory backtest/data/delta-history/segments/YOUR_SEGMENT `
+  --start 2026-09-01T00:00:00Z --end 2026-09-02T00:00:00Z `
+  --output backtest/reports/indicator-parity `
+  --indicator-chunk-rows 50000
+```
+
+Any report/trade mismatch fails closed; the benchmark records elapsed
+time and per-process peak RSS. Use a valid local normalized historical
+segment, not the archive catalog root. The command does not download data.
