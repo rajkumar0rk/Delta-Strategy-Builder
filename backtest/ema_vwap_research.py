@@ -1741,7 +1741,7 @@ def signal_events(
             min_days_to_expiry=min_days_to_expiry,
             min_days_to_expiry_inclusive=min_days_to_expiry_inclusive,
             max_days_to_expiry=max_days_to_expiry,
-        )
+        ))
         if option is not None:
             _append_decision_event(
                 decision_events, timestamp=timestamp, stage="SIGNAL", status="QUALIFIED",
