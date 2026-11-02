@@ -1,5 +1,5 @@
 from __future__ import annotations
-import csv, json, math, re, hashlib, uuid
+import csv, json, math, re, hashlib, uuid, os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -63,6 +63,7 @@ class Position:
     pattern_remaining_target1: bool = True
     pattern_initial_quantity: float = 0.0
     pattern_realized_net: float = 0.0
+    pattern_stage_index: int = 0
 
 
 def _finite(v):
@@ -316,7 +317,7 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
 
 def _backtest_cache_key(req: BacktestRequest, paths) -> str:
     payload = {
-        'engine_version': 176,  # observed account risk replay alongside hypothetical strategy backtests
+        'engine_version': 177,  # observed account risk replay alongside hypothetical strategy backtests
         'warmup_candles': req.warmup_candles,
         'warmup_policy': req.warmup_policy,
         'bar_gap_policy': req.bar_gap_policy,
@@ -908,6 +909,13 @@ def _mark_to_market_value(pos: Position, q: dict[str, Any], cash_balance: float,
 
 
 def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = None) -> dict[str, Any]:
+    # Optional per-process admission guard, disabled by default. Applied before
+    # options/futures dispatch and before automatic history synchronization.
+    max_days=float(os.getenv('STRATEGY_LAB_MAX_BACKTEST_DAYS','0'))
+    if not math.isfinite(max_days) or max_days<0:
+        raise ValueError('STRATEGY_LAB_MAX_BACKTEST_DAYS must be finite and nonnegative')
+    if max_days and (parse_time(req.end)-parse_time(req.start)).total_seconds()>max_days*86400+1e-6:
+        raise ValueError(f'BACKTEST_RANGE_LIMIT_EXCEEDED: maximum configured range is {max_days:g} days')
     if req.strategy.market_type == 'FUTURES':
         from .futures_engine import run_futures_backtest
         return run_futures_backtest(req, progress)
@@ -1321,30 +1329,38 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
 
         # Quote-driven protective exits up to this completed candle.
         if pos is not None and pos.pattern_levels is not None:
-            levels=pos.pattern_levels
+            pattern_levels=pos.pattern_levels
             bullish=pos.direction=='CALL'
-            stop_hit=(float(row.low)<=levels['stop']) if bullish else (float(row.high)>=levels['stop'])
-            first_hit=(float(row.close)>=levels['target_1']) if bullish else (float(row.close)<=levels['target_1'])
-            final_hit=(float(row.close)>=levels['target_2']) if bullish else (float(row.close)<=levels['target_2'])
-            reason=('PATTERN_STOP' if stop_hit else
-                    'PATTERN_TARGET_2' if final_hit else
-                    'PATTERN_TARGET_1' if first_hit and pos.pattern_remaining_target1 else None)
-            if reason:
+            stop_hit=(float(row.low)<=pattern_levels['stop'] if bullish
+                      else float(row.high)>=pattern_levels['stop'])
+            if stop_hit:
+                # Stop wins against any same-candle target touch.
                 q=first_valid_exit_quote(pos,ts.isoformat())
                 if q is not None:
-                    part=None
-                    if reason=='PATTERN_TARGET_1':
-                        inc=float(pos.spec.get('size_increment') or 1)
-                        minq=float(pos.spec.get('min_quantity') or inc)
-                        target_qty=math.floor(pos.pattern_initial_quantity*strategy.pattern_trade.first_exit_fraction/inc)*inc
-                        if target_qty+1e-9 < minq or pos.quantity-target_qty+1e-9 < minq:
-                            # Keep protective stop and await T2 if a partial
-                            # contract execution would violate exchange lot rules.
-                            reason=None
-                        else:part=target_qty
-                    if reason:
-                        close_position(q['timestamp'],_executable_exit_price(pos,q,strategy),reason,partial_qty=part)
-                        closed_this_candle=True
+                    close_position(q['timestamp'],_executable_exit_price(pos,q,strategy),'PATTERN_STOP')
+                    closed_this_candle=True
+            else:
+                stages=pattern_levels['stages']
+                # Large close-to-close moves may cross several targets at once.
+                # Fill each eligible stage at the same *observed* executable quote,
+                # assigning proportional fees and leaving no imaginary residual.
+                while pos is not None and pos.pattern_stage_index<len(stages):
+                    stage_index=pos.pattern_stage_index
+                    stage=stages[stage_index]
+                    reached=(float(row.close)>=stage['price'] if bullish
+                             else float(row.close)<=stage['price'])
+                    if not reached:
+                        break
+                    q=first_valid_exit_quote(pos,ts.isoformat())
+                    if q is None:
+                        break
+                    last=stage_index==len(stages)-1
+                    close_position(q['timestamp'],_executable_exit_price(pos,q,strategy),
+                                   f'PATTERN_TARGET_{stage_index+1}',
+                                   partial_qty=None if last else float(stage['quantity']))
+                    closed_this_candle=True
+                    if pos is not None:
+                        pos.pattern_stage_index=stage_index+1
         if pos is not None and pos_quotes is not None:
             while q_cursor < len(pos_quotes) and pos_quotes.iloc[q_cursor].timestamp <= ts:
                 q = pos_quotes.iloc[q_cursor].to_dict()
@@ -1594,14 +1610,19 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         else:
             qty, cost, quantity_reject = _quantity(strategy, spec, entry, float(row.close), balance, action)
         if pattern_level is not None and qty>0:
-            # Both exits must satisfy exchange minimum and quantity increment.
-            # Do not silently turn a required 2R/3R split into a single target.
-            inc=float(spec.get('size_increment') or 1)
-            minq=float(spec.get('min_quantity') or inc)
-            first_qty=math.floor(qty*strategy.pattern_trade.first_exit_fraction/inc+1e-12)*inc
-            if first_qty+1e-9<minq or qty-first_qty+1e-9<minq:
+            from .pattern_trades import plan_stage_quantities,configured_exit_stages
+            allocations=plan_stage_quantities(qty,spec,strategy.pattern_trade)
+            if allocations is None:
                 quantity_reject="PATTERN_PARTIAL_EXIT_BELOW_MINIMUM"
                 qty=0.
+            else:
+                sign=1 if direction=='CALL' else -1
+                pattern_level['stages']=[
+                    {'price':float(row.close)+sign*pattern_level['risk_points']*stage['r_multiple'],
+                     'r_multiple':stage['r_multiple'],'fraction':stage['fraction'],
+                     'quantity':allocation}
+                    for stage,allocation in zip(configured_exit_stages(strategy.pattern_trade),allocations)
+                ]
         if qty <= 0:
             if quantity_reject == 'INSUFFICIENT_SELL_MARGIN_ESTIMATE':
                 estimated_margin_rejections += 1

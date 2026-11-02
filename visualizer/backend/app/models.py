@@ -354,10 +354,15 @@ class SellMarginConfig(BaseModel):
         return self
 
 
+class PatternTargetStage(BaseModel):
+    r_multiple: float = Field(gt=0, le=100)
+    quantity_fraction: float = Field(gt=0, le=1)
+
+
 class PatternTradeConfig(BaseModel):
     """Opt-in BUY-option pattern strategy; BTC levels require explicit delta sizing assumption."""
     enabled: bool = False
-    confirmation_bars: Literal[6] = 6
+    confirmation_bars: int = Field(default=6, ge=1, le=48)
     pullback_patterns: list[Literal["HAMMER","BULL_ENGULFING","MORNING_STAR","SHOOTING_STAR","BEAR_ENGULFING","EVENING_STAR"]] = Field(
         default_factory=lambda:["HAMMER","BULL_ENGULFING","MORNING_STAR","SHOOTING_STAR","BEAR_ENGULFING","EVENING_STAR"])
     breakout_patterns: list[Literal["BULL_MARUBOZU","BEAR_MARUBOZU","BULL_ENGULFING","BEAR_ENGULFING"]] = Field(
@@ -376,10 +381,19 @@ class PatternTradeConfig(BaseModel):
     target_1_r: float = Field(default=2,gt=0)
     target_2_r: float = Field(default=3,gt=0)
     first_exit_fraction: float = Field(default=.5,gt=0,lt=1)
+    take_profit_stages: list[PatternTargetStage] = Field(default_factory=list,max_length=6)
 
     @model_validator(mode="after")
     def validate_mode(self):
-        if self.target_2_r<=self.target_1_r:
+        if self.take_profit_stages:
+            stages=self.take_profit_stages
+            if len(stages)<2:
+                raise ValueError('Pattern exit stages require at least two targets')
+            if any(b.r_multiple<=a.r_multiple for a,b in zip(stages,stages[1:])):
+                raise ValueError('Pattern target R multiples must be strictly increasing')
+            if abs(sum(x.quantity_fraction for x in stages)-1)>1e-8:
+                raise ValueError('Pattern exit stage quantity fractions must total 1')
+        if not self.take_profit_stages and self.target_2_r<=self.target_1_r:
             raise ValueError("Second R target must exceed first R target")
         if self.enabled:
             if self.option_delta_assumption is None:

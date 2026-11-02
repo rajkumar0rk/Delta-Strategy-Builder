@@ -21,6 +21,16 @@ from .storage import storage_usage, save_settings, optimize_existing, cleanup_un
 
 app = FastAPI(title='BTC Strategy Lab', version='15.1.0', default_response_class=ORJSONResponse)
 
+def _enqueue(work):
+    """Surface bounded job-queue backpressure as a retryable HTTP response."""
+    try:
+        return jobs.create(work)
+    except RuntimeError as exc:
+        if str(exc).startswith('JOB_QUEUE_FULL:'):
+            raise HTTPException(429, str(exc)) from exc
+        raise
+
+
 @app.get('/api/health')
 def health():
     return {'ok': True, 'version': '15.1.0', 'project_root': str(project_root())}
@@ -45,7 +55,7 @@ def archive_plan(req: ArchiveSyncRequest):
 
 @app.post('/api/archive/sync')
 def archive_sync(req: ArchiveSyncRequest):
-    jid = jobs.create(lambda progress: ensure_archive_data(req.start, req.end, progress))
+    jid = _enqueue(lambda progress: ensure_archive_data(req.start, req.end, progress))
     return {'job_id': jid}
 
 @app.get('/api/storage')
@@ -63,7 +73,7 @@ def update_storage_settings(payload: dict[str, Any]):
 
 @app.post('/api/storage/optimize')
 def optimize_storage():
-    jid = jobs.create(lambda progress: optimize_existing(progress))
+    jid = _enqueue(lambda progress: optimize_existing(progress))
     return {'job_id': jid}
 
 
@@ -96,7 +106,7 @@ def preview(req: PreviewRequest):
 
 @app.post('/api/backtests')
 def start_backtest(req: BacktestRequest):
-    jid = jobs.create(lambda progress: run_backtest(req, progress))
+    jid = _enqueue(lambda progress: run_backtest(req, progress))
     return {'job_id': jid}
 
 @app.get('/api/backtests/{job_id}')
@@ -215,19 +225,19 @@ def analysis_package(run_id: str):
 
 @app.post('/api/research/sweep')
 def research_sweep(req: ResearchSweepRequest):
-    jid = jobs.create(lambda progress: run_sweep(req, progress))
+    jid = _enqueue(lambda progress: run_sweep(req, progress))
     return {'job_id': jid}
 
 
 @app.post('/api/research/execution-replay')
 def execution_replay(req: ExecutionReplayRequest):
-    jid = jobs.create(lambda progress: run_execution_replay(req, progress))
+    jid = _enqueue(lambda progress: run_execution_replay(req, progress))
     return {'job_id': jid}
 
 
 @app.post('/api/research/holdout')
 def research_holdout(req: HoldoutResearchRequest):
-    jid = jobs.create(lambda progress: run_holdout(req, progress))
+    jid = _enqueue(lambda progress: run_holdout(req, progress))
     return {'job_id': jid}
 
 
@@ -242,23 +252,23 @@ def futures_parity_audit(req: BacktestRequest):
         chart = futures_audit_payload(req, result)
         timeframe={'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'1D':1440}[req.strategy.timeframe]
         return audit_futures_parity(result,chart,timeframe_minutes=timeframe)
-    return {'job_id': jobs.create(work)}
+    return {'job_id': _enqueue(work)}
 
 
 @app.post('/api/research/futures-validation')
 def futures_validation(req: FuturesValidationRequest):
-    jid = jobs.create(lambda progress: run_futures_validation(req, progress))
+    jid = _enqueue(lambda progress: run_futures_validation(req, progress))
     return {'job_id': jid}
 
 
 @app.post('/api/research/ablation')
 def research_ablation(req: AblationRequest):
-    jid = jobs.create(lambda progress: run_ablation(req, progress))
+    jid = _enqueue(lambda progress: run_ablation(req, progress))
     return {'job_id': jid}
 
 @app.post('/api/research/trend-discovery')
 def research_trend_discovery(req: TrendDiscoveryRequest):
-    jid = jobs.create(lambda progress: run_trend_discovery(req, progress))
+    jid = _enqueue(lambda progress: run_trend_discovery(req, progress))
     return {'job_id': jid}
 
 

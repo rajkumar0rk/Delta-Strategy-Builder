@@ -97,3 +97,6 @@ backend/app/broker_history.py replays validated historical portfolio-margin capt
 - `ai_prompt.py`: dynamically emits schema-15 importable JSON instructions. `examples/btcusd-futures-research.template.json` provides a static importable sample.
 
 None of these confirms historical executable order-book quotes, portfolio risk, INR collateral conversions or guaranteed returns.
+
+### Backtesting process resource controls (November 2026)
+`STRATEGY_LAB_FRAME_CACHE_MB` (64 default, 0 disables) provides LRU eviction for raw bar and instrument DataFrames, and `STRATEGY_LAB_MAX_WORKERS` (2 default), `STRATEGY_LAB_MAX_PENDING_JOBS` (8 default), `STRATEGY_LAB_MAX_RETAINED_JOBS` (200 default) bound in-process jobs. These are per-process controls; they do **not** impose a hard resident-memory cap, CPU quota, or durable queue. For a 1GB VPS set workers=1 and cache=16MB and benchmark actual archive workloads. 

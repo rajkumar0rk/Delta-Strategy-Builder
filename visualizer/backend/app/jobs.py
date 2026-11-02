@@ -1,5 +1,6 @@
 from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
+import os
 from threading import Lock
 from uuid import uuid4
 from typing import Any, Callable
@@ -13,7 +14,10 @@ class JobManager:
     def __init__(self):
         self._jobs: dict[str, dict[str, Any]] = {}
         self._lock = Lock()
-        self._pool = ThreadPoolExecutor(max_workers=2)
+        self.max_workers=max(1,min(16,int(os.getenv('STRATEGY_LAB_MAX_WORKERS','2'))))
+        self.max_pending=max(1,min(1000,int(os.getenv('STRATEGY_LAB_MAX_PENDING_JOBS','8'))))
+        self.max_retained=max(10,min(10000,int(os.getenv('STRATEGY_LAB_MAX_RETAINED_JOBS','200'))))
+        self._pool = ThreadPoolExecutor(max_workers=self.max_workers)
 
     def _cancel_requested(self, jid: str) -> bool:
         with self._lock:
@@ -22,6 +26,15 @@ class JobManager:
     def create(self, fn: Callable[[Callable[..., None]], Any]) -> str:
         jid = uuid4().hex
         with self._lock:
+            # Evict only terminal job records; active progress/cancellation
+            # state is never removed. Results are still on disk.
+            finished=[key for key,record in self._jobs.items()
+                      if record['status'] in {'COMPLETE','FAILED','CANCELLED'}]
+            for key in finished[:max(0,len(self._jobs)-self.max_retained+1)]:
+                del self._jobs[key]
+            active=sum(j['status'] in {'QUEUED','RUNNING','CANCELLING'} for j in self._jobs.values())
+            if active>=self.max_workers+self.max_pending:
+                raise RuntimeError('JOB_QUEUE_FULL: adjust STRATEGY_LAB_MAX_PENDING_JOBS or retry after active work completes')
             self._jobs[jid] = {
                 'id': jid,
                 'status': 'QUEUED',
