@@ -26,9 +26,12 @@ def _child(directory: Path, start: str, end: str, output: Path,
     begin = time.perf_counter()
     options = {"start": start, "end": end,
                "scenario_set": locked_h6_scenarios()}
-    if mode == "STREAMED":
+    if mode in {"STREAMED", "STREAMED_PACKED_QUOTES"}:
         manifest = run_dataset_to_streamed_report(
-            directory, output=output, **options,
+            directory, output=output,
+            **({"quote_capture_storage": "PACKED_MEMORY"}
+               if mode == "STREAMED_PACKED_QUOTES" else {}),
+            **options,
         )
         counts = manifest["counts"]
     elif mode == "MEMORY":
@@ -42,7 +45,7 @@ def _child(directory: Path, start: str, end: str, output: Path,
             for field in ("trades", "execution_attempts", "decision_events")
         }
     else:
-        raise ValueError("mode must be MEMORY or STREAMED")
+        raise ValueError("mode must be MEMORY, STREAMED or STREAMED_PACKED_QUOTES")
     elapsed = time.perf_counter() - begin
     metadata.write_text(json.dumps({
         "mode": mode,
@@ -56,19 +59,29 @@ def _child(directory: Path, start: str, end: str, output: Path,
 def benchmark_streamed_reports(
     directory: Path, start: str, end: str, output: Path, *,
     rounds: int = 3,
+    comparison: str = "REPORT_STORAGE",
 ) -> dict:
     if type(rounds) is not int or not 1 <= rounds <= 10:
         raise ValueError("rounds must be an integer between 1 and 10")
+    if comparison not in {"REPORT_STORAGE", "QUOTE_STORAGE"}:
+        raise ValueError("comparison must be REPORT_STORAGE or QUOTE_STORAGE")
+    baseline_mode, candidate_mode = (
+        ("MEMORY", "STREAMED") if comparison == "REPORT_STORAGE"
+        else ("STREAMED", "STREAMED_PACKED_QUOTES")
+    )
     output.mkdir(parents=True, exist_ok=True)
-    baseline = output / "reference-memory-report.json"
+    baseline = output / (
+        "reference-memory-report.json" if comparison == "REPORT_STORAGE"
+        else "reference-streamed-quote-report.json"
+    )
     measurements = []
     differences = []
 
     for round_index in range(rounds):
         sequence = (
-            ("MEMORY", "STREAMED", "STREAMED", "MEMORY")
+            (baseline_mode, candidate_mode, candidate_mode, baseline_mode)
             if round_index % 2 == 0
-            else ("STREAMED", "MEMORY", "MEMORY", "STREAMED")
+            else (candidate_mode, baseline_mode, baseline_mode, candidate_mode)
         )
         for position, mode in enumerate(sequence, start=1):
             name = f"round-{round_index + 1:02d}-{position}-{mode.lower()}"
@@ -84,8 +97,8 @@ def benchmark_streamed_reports(
             result = json.loads(metadata.read_text(encoding="utf-8"))
             metadata.unlink()
             if not measurements:
-                if mode != "MEMORY":
-                    raise RuntimeError("INITIAL_REPORT_MUST_BE_MEMORY")
+                if mode != baseline_mode:
+                    raise RuntimeError("INITIAL_REPORT_MUST_BE_BASELINE")
                 # Always refresh the reference even when output is reused.
                 baseline.write_bytes(path.read_bytes())
             change = compare(baseline, path, tolerance=0.0)
@@ -100,7 +113,7 @@ def benchmark_streamed_reports(
             if not change:
                 path.unlink()
     statistics_by_mode = {}
-    for mode in ("MEMORY", "STREAMED"):
+    for mode in (baseline_mode, candidate_mode):
         rows = [row for row in measurements if row["mode"] == mode]
         elapsed = [row["elapsed_seconds"] for row in rows]
         rss = [row["peak_process_rss_kib"] for row in rows
@@ -112,11 +125,13 @@ def benchmark_streamed_reports(
             "min_seconds": min(elapsed),
             "max_seconds": max(elapsed),
         }
-    a = statistics_by_mode["MEMORY"]
-    b = statistics_by_mode["STREAMED"]
+    a = statistics_by_mode[baseline_mode]
+    b = statistics_by_mode[candidate_mode]
     summary = {
         "input": str(directory), "start": start, "end": end,
         "rounds": rounds, "order": "ABBA / BAAB",
+        "comparison": comparison, "baseline_mode": baseline_mode,
+        "candidate_mode": candidate_mode,
         "parity_passed": not differences,
         "difference_count": len(differences),
         "differences": differences[:30],
@@ -129,9 +144,10 @@ def benchmark_streamed_reports(
         "scope": "locked H6 legacy research; full report written on both sides",
         "notes": (
             "Independent processes with identical strategies and option costs. "
-            "MEMORY retains all report lists before JSON output, STREAMED spools "
-            "aggregate trades/attempts/decisions and atomically assembles JSON. "
-            "Per-scenario trades, signal/quote events, source indicators and "
+            "REPORT_STORAGE compares MEMORY vs STREAMED output. QUOTE_STORAGE "
+            "holds streamed output constant and compares Python dict quote lists "
+            "with lossless 56-byte packed in-memory quote sequences. "
+            "Per-scenario trades, signal events, source indicators and "
             "scenario metrics remain in RAM. Disk I/O and source-cache effects "
             "can influence timing; this is not end-to-end bounded memory."
         ),
@@ -154,9 +170,11 @@ def main() -> None:
     parser.add_argument("--end", required=True)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--rounds", type=int, default=3)
+    parser.add_argument("--comparison", choices=["REPORT_STORAGE", "QUOTE_STORAGE"],
+                        default="REPORT_STORAGE")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--metadata", type=Path, help=argparse.SUPPRESS)
-    parser.add_argument("--mode", choices=["MEMORY", "STREAMED"],
+    parser.add_argument("--mode", choices=["MEMORY", "STREAMED", "STREAMED_PACKED_QUOTES"],
                         help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.child:
@@ -168,7 +186,7 @@ def main() -> None:
         print(json.dumps(
             benchmark_streamed_reports(
                 args.directory, args.start, args.end, args.output,
-                rounds=args.rounds,
+                rounds=args.rounds, comparison=args.comparison,
             ), indent=2, allow_nan=False,
         ))
 
