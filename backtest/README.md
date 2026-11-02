@@ -654,16 +654,22 @@ parity before promoting the setting. For larger history, the materialized
 indicator DataFrame and final reports remain separate scaling problems.
 
 
-### Optional post-signal simulation frame reduction
+### Default post-signal simulation frame reduction (legacy H6)
 
 The full indicator candle frame must still be calculated before signals,
 because EMA/RSI/ATR smoothing and session VWAP depend on prior history, and
 because signal decision diagnostics are sensitive to the original timeline.
-Once all signal configurations have been evaluated, a new opt-in
-`run_dataset(..., trim_simulation_frame=True)` retains only simulation-used
-columns and the preceding candle lookback needed for early-failure structure
-levels and directional confirmation. It keeps *all* future candles for holds
-without a fixed deadline. Original full-frame behavior remains the default.
+After all signal configurations have been evaluated,
+`run_dataset` now defaults to `trim_simulation_frame=True`: it retains
+only simulation-used columns and preceding candle lookback needed for
+early-failure structure levels and directional confirmation. It keeps
+*all* future candles for holds without a fixed deadline. Restore original
+full-frame behavior explicitly with `trim_simulation_frame=False`.
+The new default was promoted after the user's 12-run ABBA/BAAB test
+(September 1–15, 2026): complete-report parity across 1,867 trades
+and 1,903 execution attempts; median runtime 20.61s → 17.73s
+(13.97% lower) and median peak process RSS 96.63MiB → 94.72MiB
+(approximately 1.90MiB lower).
 
 This is **not** a streaming indicator loader: the full source still reaches
 its initial peak while indicators are being built. The feature targets the
@@ -671,8 +677,10 @@ later quote capture / trade simulation peak by freeing the no-longer-needed
 historical frame blocks. Frame reduction is bypassed safely for unsupported
 index/order/column shapes.
 
-Benchmark against the existing POSITIONAL + candle lookup default, with
-12 independent order-balanced runs and full trade/fee/decision-report parity:
+Re-run the frozen A/B benchmark against the original POSITIONAL + candle
+lookup **untrimmed baseline**, with 12 independent order-balanced runs
+and full trade/fee/decision-report parity. The benchmark explicitly pins
+both variants, so changing the runner default does not invalidate it:
 
 ```powershell
 .\.venv\Scripts\python.exe -m backtest.benchmark_positional_ab `
@@ -683,6 +691,7 @@ Benchmark against the existing POSITIONAL + candle lookup default, with
   --comparison FRAME_TRIM --rounds 3
 ```
 
-The change must remain optional until your actual archive demonstrates exact
-report parity, useful peak RSS improvement and acceptable runtime. It applies
-only to locked H6 legacy research, not the configurable JSON strategy runner.
+The change applies to the legacy research runner only, not the configurable
+JSON strategy engine. The indicator loader still materializes all source
+candles before frame trimming, and final trade/decision reports still grow
+with history. Full bounded-memory execution remains unimplemented.
