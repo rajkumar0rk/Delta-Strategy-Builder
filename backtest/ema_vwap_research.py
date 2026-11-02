@@ -3122,7 +3122,7 @@ def run_dataset(
     indicator_chunk_rows: int | None = None,
     indexed_option_selection: bool = False,
     quote_csv_parser: str = 'POSITIONAL',
-    positional_bar_lookup: bool = False,
+    positional_bar_lookup: bool = True,
     stage_observer: Callable[[str, float], None] | None = None,
 ) -> dict[str, Any]:
     # Profiling hooks are strictly opt-in and outside the returned report.
