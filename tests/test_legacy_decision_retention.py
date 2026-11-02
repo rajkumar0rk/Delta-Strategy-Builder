@@ -30,12 +30,14 @@ def test_decision_retention_is_opt_in_and_preserves_execution(monkeypatch, tmp_p
     monkeypatch.setitem(globals_for_run, "simulate_trade", lambda *a, **k: (None, "TEST_REJECT"))
     baseline = runner(
         tmp_path, start="2026-11-01T00:00:00Z",
-        end="2026-11-02T00:00:00Z", scenario_set=[scenario]
+        end="2026-11-02T00:00:00Z", scenario_set=[scenario],
+        quote_csv_parser="DICT",
     )
     reduced = runner(
         tmp_path, start="2026-11-01T00:00:00Z",
         end="2026-11-02T00:00:00Z", scenario_set=[scenario],
         retain_decision_events=False,
+        quote_csv_parser="DICT",
     )
     assert baseline["decision_events"]
     assert reduced["decision_events"] == []
