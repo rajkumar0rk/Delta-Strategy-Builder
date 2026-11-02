@@ -81,3 +81,27 @@ def test_disk_backed_quotes_match_memory_and_cleanup(tmp_path):
     finally:
         on_disk.quotes.close()
     assert not list((tmp_path/'spool').iterdir())
+
+
+def test_report_parity_detects_pnl_drift_but_ignores_generated_metadata(tmp_path):
+    import json
+    from backtest.compare_legacy_reports import compare
+    a=tmp_path/'baseline.json'
+    b=tmp_path/'current.json'
+    a.write_text(json.dumps({'created_at':'old','results':[{'pnl':10.0,'fees':2}]}))
+    b.write_text(json.dumps({'created_at':'new','results':[{'pnl':10.0,'fees':2}]}))
+    assert compare(a,b)==[]
+    b.write_text(json.dumps({'created_at':'new','results':[{'pnl':9.0,'fees':2}]}))
+    assert 'pnl' in compare(a,b)[0]
+
+
+def test_discovery_input_preflight_is_opt_in(tmp_path,monkeypatch):
+    from backtest.ohlcv_discovery import _bars
+    path=tmp_path/'bars.csv'
+    path.write_text('timestamp,open,high,low,close,volume\n'+
+                    '2026-01-01T00:05:00Z,1,2,1,2,5\n')
+    monkeypatch.setenv('DELTA_DISCOVERY_MAX_INPUT_MB','-1')
+    with pytest.raises(ValueError,match='cannot be negative'):
+        _bars(path)
+    monkeypatch.delenv('DELTA_DISCOVERY_MAX_INPUT_MB')
+    assert len(_bars(path))==1
