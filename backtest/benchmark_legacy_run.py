@@ -25,9 +25,11 @@ def _child(directory: Path, start: str, end: str, mode: str, output: Path,
            indexed_option_selection: bool = False,
            quote_csv_parser: str = 'POSITIONAL',
            positional_bar_lookup: bool = False,
-           quote_spool_encoding: str = "JSON") -> None:
+           quote_spool_encoding: str = "JSON",
+           record_spool_metrics: bool = False) -> None:
     from .ema_vwap_research import run_dataset, locked_h6_scenarios
     begin=time.perf_counter()
+    spool_metrics = {}
     result=run_dataset(directory,start=start,end=end,
                        scenario_set=locked_h6_scenarios(),
                        quote_capture_storage=mode,
@@ -39,11 +41,13 @@ def _child(directory: Path, start: str, end: str, mode: str, output: Path,
                        indexed_option_selection=indexed_option_selection,
                        quote_csv_parser=quote_csv_parser,
                        positional_bar_lookup=positional_bar_lookup,
-                       quote_spool_encoding=quote_spool_encoding)
+                       quote_spool_encoding=quote_spool_encoding,
+                       quote_spool_observer=spool_metrics.update if record_spool_metrics else None)
     elapsed=time.perf_counter()-begin
     rss=peak_process_rss_kib()
     output.write_text(json.dumps({"result":result,"elapsed_seconds":elapsed,
-                                  "peak_process_rss_kib":rss},allow_nan=False))
+                                  "peak_process_rss_kib":rss,
+                                  "quote_spool_metrics":spool_metrics or None},allow_nan=False))
 
 
 def benchmark(directory: Path,start: str,end: str,output: Path,
@@ -100,6 +104,8 @@ def benchmark(directory: Path,start: str,end: str,output: Path,
                  "--quote-spool-encoding", spool_encoding]
         if bar_lookup:
             argv.append("--positional-bar-lookup")
+        if mode == "SQLITE":
+            argv.append("--quote-spool-metrics")
         if max_captured_quotes is not None:
             argv+=["--max-captured-quotes",str(max_captured_quotes)]
         if not retain_decision_events:
@@ -121,6 +127,7 @@ def benchmark(directory: Path,start: str,end: str,output: Path,
                            "positional_bar_lookup":bar_lookup,
                            "quote_csv_parser":csv_parser,
                            "quote_spool_encoding":spool_encoding,
+                           "quote_spool_metrics":artifact.get("quote_spool_metrics"),
                            "prune_inactive_instruments":prune,
                            "indicator_chunk_rows":indicator_chunk_rows if key == "SQLITE_STREAMED_INDICATORS" else None}
         target.unlink()
@@ -163,6 +170,7 @@ def main():
     p.add_argument("--include-bar-lookup-profile",action="store_true")
     p.add_argument("--include-combined-profile",action="store_true")
     p.add_argument("--include-packed-sqlite-profile",action="store_true")
+    p.add_argument("--quote-spool-metrics",action="store_true",help=argparse.SUPPRESS)
     p.add_argument("--quote-spool-encoding",choices=["JSON", "PACKED"],default="JSON",
                    help=argparse.SUPPRESS)
     p.add_argument("--positional-bar-lookup",action="store_true",help=argparse.SUPPRESS)
@@ -180,7 +188,7 @@ def main():
         _child(a.directory,a.start,a.end,a.mode,a.output,a.max_captured_quotes,
                a.algorithm,not a.omit_decision_events,a.prune_inactive_instruments,
                a.indicator_chunk_rows,a.indexed_option_selection,a.quote_csv_parser,
-               a.positional_bar_lookup,a.quote_spool_encoding)
+               a.positional_bar_lookup,a.quote_spool_encoding,a.quote_spool_metrics)
     else:
         print(json.dumps(benchmark(a.directory,a.start,a.end,a.output,
                                    a.max_captured_quotes,
