@@ -108,3 +108,29 @@ This reports traced Python allocations for the scan, not a complete backtest's
 resident memory. Frozen OHLCV/market-context hypotheses remain unchanged; the
 original scientific results must not silently drift. Full-archive CPU/RSS
 benchmarking has not been performed.
+
+## Legacy dataset memory and parity (second pass)
+
+`backtest.data.load_dataset(..., quote_storage="SQLITE")` now optionally
+writes selected option quotes into a temporary on-disk SQLite spool instead of
+keeping them as a tuple. Default remains `MEMORY` for compatibility.
+Use `quote_spool_directory=Path(...)`, `quote_batch_size=4096`, and
+`max_quote_rows=...` for resource admission. Keep the dataset alive while
+reading quotes, then call `dataset.quotes.close()` to remove temporary files.
+This is a quote loader API; legacy scenario runners do not automatically switch
+to it, and full-memory savings for end-to-end simulations are not yet measured.
+
+The frozen OHLCV and market-context discovery tools preserve their original
+thresholds. Set `DELTA_DISCOVERY_MAX_INPUT_MB=100` to reject an oversized
+input file before Pandas loads it; zero (default) means unlimited.
+This is a file-size guard, **not** streaming Pandas processing.
+
+To check a saved baseline and refactored report without re-downloading data:
+```powershell
+python -m backtest.compare_legacy_reports --baseline baseline.json --current current.json
+```
+Comparison ignores generated timestamps/paths but fails on changed trade
+records, numeric metrics and source strategy parameters. Capture baseline
+reports **before** changing historical engine behavior. No actual large
+archive benchmark or before/after report pair was available to validate this
+feature during implementation.
