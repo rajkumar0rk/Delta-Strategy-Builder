@@ -855,6 +855,16 @@ def indicators(path: Path, *, indicator_chunk_rows: int | None = None) -> pd.Dat
         frame[momentum_signal_target] = frame[momentum_target].ne("") & frame[
             momentum_target
         ].ne(frame[momentum_target].shift(1).fillna(""))
+    if indicator_chunk_rows is not None:
+        # Preserve original public schema/order for full-frame parity and
+        # downstream callers sensitive to column position.
+        core_order = [
+            "open", "high", "low", "close", "volume",
+            "ema9", "ema20", "ema50", "rsi14",
+            "stoch_rsi_k", "stoch_rsi_d", "atr14",
+            "volume_median20_prior", "macd", "macd_signal",
+        ]
+        frame = frame[core_order + [c for c in frame.columns if c not in core_order]]
     return frame
 
 
