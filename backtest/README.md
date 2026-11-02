@@ -615,3 +615,40 @@ a 14-day window. Inspect `indicator_rows` and `indicator_frame_bytes`
 rather than claiming range-level memory proportionality or globally bounded
 RSS. Next step is deciding whether to change full-frame indicator ownership,
 and how much warm-up state must be preserved to maintain exact parity.
+
+
+### Opt-in release of completed signal configurations
+
+The memory-growth inventory showed that while the source indicator frame stays
+at 8,790 rows (3.96 MiB), in-memory signal quotes grow from 2,030 to
+31,988 between 1-day and 14-day backtests. The research runner can now
+set `run_dataset(..., release_completed_configurations=True)` to release
+each configuration's captured quote lists, signal objects and original
+configuration decision list **after its last consuming scenario finishes**.
+Shared configurations are never released before all their scenario consumers
+finish. Signal counts are snapshotted so the returned report remains byte-
+and value-equivalent to the original after JSON serialization.
+
+The default remains `False` until a real-archive test shows unchanged trade,
+fee, execution-attempt and decision reports and a useful peak-RAM reduction.
+Neither trading rules nor entry/exit semantics change. This is incremental
+retention reduction, **not** globally bounded-memory execution: quotes must
+still be retained until their last consumer, and all final report records
+remain materialized.
+
+Measure the effect with a balanced 12-run A/B test comparing current
+POSITIONAL+bar lookup against the same execution with release enabled:
+
+```powershell
+.\.venv\Scripts\python.exe -m backtest.benchmark_positional_ab `
+  --directory backtest/data/delta-history/segments/2026-08-24_09-22 `
+  --start 2026-09-01T00:00:00Z `
+  --end 2026-09-15T00:00:00Z `
+  --output backtest/reports/retention-ab `
+  --comparison RETENTION --rounds 3
+```
+
+The 14-day window is preferred because it captured 31,988 quote rows and
+1,867 trades. Review median process RSS and runtime and require full-report
+parity before promoting the setting. For larger history, the materialized
+indicator DataFrame and final reports remain separate scaling problems.
