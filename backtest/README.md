@@ -306,3 +306,21 @@ This benchmark executes the original frozen H6 research configuration and
 does not verify arbitrary Strategy Lab JSONs, live fills or margin.
 For reliable comparisons, run one segment at a time, ensure sufficient
 disk space, and repeat runs to account for OS caching.
+
+
+## Opt-in stateful core indicator CSV processing
+
+The original EMA/VWAP research runner accepts
+`run_dataset(..., indicator_chunk_rows=50000)`. This processes raw source CSV
+batches in order, maintaining EMA9/20/50, Wilder RSI14, ATR14, MACD and
+MACD-signal state across chunk boundaries. Standard Pandas Stoch RSI, rolling
+volume median, session VWAP and downstream signal calculations still run on
+the resulting retained DataFrame to preserve historical semantics.
+
+Unset `indicator_chunk_rows` retains the original indicator path. The
+streamed option rejects out-of-order timestamps rather than sorting the
+source and silently changing causal indicator state. This is **incremental
+core-indicator computation**, not fully bounded-memory backtesting: selected
+bars and derived signals are still retained for research. Manual full-archive
+trade/report parity and peak-RAM measurements are required before selecting
+this mode as a default.
