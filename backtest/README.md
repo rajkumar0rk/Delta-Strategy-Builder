@@ -368,3 +368,28 @@ This adds `MEMORY_INDEXED` to the unchanged original MEMORY and SQLITE
 profiles. If the trading reports differ, the command fails. CPU/RAM benefits
 depend on instrument count and actual qualifying signal frequency. The index
 does not change historical execution assumptions or guarantee a speed gain.
+
+
+## CPU hotspot profiling on an existing laptop dataset
+
+The new offline profiler executes the original locked H6 scenario using
+the default MEMORY+LEGACY path with Python `cProfile`. It writes
+`cpu.pstats` (full function call graph) and `profile.json` (ranked
+cumulative CPU functions, stage timings, trade counts, execution attempts
+and peak process RSS). `--track-allocations` additionally records traced
+Python allocations, at a potentially substantial speed cost.
+
+```powershell
+.\.venv\Scripts\python.exe -m backtest.profile_legacy_run `
+  --directory backtest/data/delta-history/segments/2026-08-24_09-22 `
+  --start 2026-09-01T00:00:00Z --end 2026-09-08T00:00:00Z `
+  --output backtest/reports/legacy-cpu-profile
+```
+
+No market data is downloaded. Profiling overhead means these timings are
+**not** directly comparable with non-profiled benchmark durations. The
+tracemalloc optional metric excludes native allocations of NumPy/Pandas;
+use reported Windows peak process working-set for overall observed RAM.
+Before optimizing a subsystem, inspect whether actual trades and signals
+were present. This research CLI does not place orders or validate broker
+fills. The normal `run_dataset` report remains unchanged.
