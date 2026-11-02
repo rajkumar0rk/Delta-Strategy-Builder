@@ -3124,6 +3124,7 @@ def run_dataset(
     indexed_option_selection: bool = False,
     quote_csv_parser: str = 'POSITIONAL',
     positional_bar_lookup: bool = True,
+    release_completed_configurations: bool = False,
     stage_observer: Callable[[str, float], None] | None = None,
     quote_spool_observer: Callable[[dict[str, int | str]], None] | None = None,
     retention_observer: Callable[[str, dict[str, int]], None] | None = None,
@@ -3278,6 +3279,12 @@ def run_dataset(
         decision_events_by_configuration[key] = (
             configuration_decisions if configuration_decisions is not None else []
         )
+    # Snapshot counts before optional release of a configuration's event
+    # objects. These counts populate the exact historical report at return.
+    signal_counts_by_configuration = (
+        {key: len(events) for key, events in events_by_configuration.items()}
+        if release_completed_configurations else None
+    )
     completed_stage("SIGNAL_EVALUATION")
     if retention_observer is not None:
         retained(
@@ -3355,6 +3362,33 @@ def run_dataset(
         all_trades: list[dict[str, Any]] = []
         execution_attempts: list[dict[str, Any]] = []
         all_decision_events: list[dict[str, Any]] = []
+
+        # Some scenarios reuse the same entry signal configuration. Do not
+        # free its captured quote/event data until the FINAL consumer finishes.
+        # Report records and diagnostic dictionaries remain unchanged.
+        remaining_configuration_uses: dict[tuple[Any, ...], int] = {}
+        if release_completed_configurations:
+            for scenario_item in selected_scenarios:
+                config_key = (
+                    scenario_item.confirmation_candles,
+                    scenario_item.require_macd,
+                    scenario_item.require_stoch_rsi_entry,
+                    scenario_item.require_stoch_rsi_momentum_entry,
+                    scenario_item.entry_start_hour_utc,
+                    scenario_item.entry_end_hour_utc,
+                    scenario_item.entry_windows_ist_minutes,
+                    scenario_item.blocked_weekdays_ist,
+                    scenario_item.entry_min_conditions,
+                    scenario_item.min_days_to_expiry,
+                    scenario_item.min_days_to_expiry_inclusive,
+                    scenario_item.max_days_to_expiry,
+                    scenario_item.pullback_reversal,
+                    scenario_item.entry_mode,
+                    scenario_item.momentum_breakout,
+                )
+                remaining_configuration_uses[config_key] = (
+                    remaining_configuration_uses.get(config_key, 0) + 1
+                )
 
         def record_execution_decision(record: dict[str, Any]) -> None:
             if retain_decision_events:
@@ -3534,6 +3568,16 @@ def run_dataset(
                 ],
                 "signals_with_contract": len(events),
             })
+            if release_completed_configurations:
+                remaining_configuration_uses[scenario_key] -= 1
+                if remaining_configuration_uses[scenario_key] == 0:
+                    # No later scenario can consume this configuration's
+                    # signal events, in-memory quote lists or source decisions.
+                    # Keep report-bound diagnostics and signal counts separately.
+                    events_by_configuration.pop(scenario_key)
+                    decision_events_by_configuration.pop(scenario_key, None)
+                    diagnostics_by_configuration.pop(scenario_key, None)
+                    del events
         completed_stage("TRADE_SIMULATION")
         retained(
             "TRADE_SIMULATION",
@@ -3547,7 +3591,9 @@ def run_dataset(
             "start": start,
             "end": end,
             "raw_signals_with_contract": (
-                len(events_by_configuration[event_keys[0]])
+                (signal_counts_by_configuration[event_keys[0]]
+                 if release_completed_configurations
+                 else len(events_by_configuration[event_keys[0]]))
                 if len(event_keys) == 1
                 else {
                     (
@@ -3557,7 +3603,9 @@ def run_dataset(
                         f"entry_min_conditions={key[8]},dte={key[9]}-{key[11]},"
                         f"min_dte_inclusive={key[10]},pullback_reversal={key[12]},"
                         f"entry_mode={key[13]},momentum_breakout={key[14]}"
-                    ): len(events_by_configuration[key])
+                    ): (signal_counts_by_configuration[key]
+                        if release_completed_configurations
+                        else len(events_by_configuration[key]))
                     for key in event_keys
                 }
             ),
