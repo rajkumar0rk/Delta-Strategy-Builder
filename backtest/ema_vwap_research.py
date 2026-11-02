@@ -3126,6 +3126,7 @@ def run_dataset(
     positional_bar_lookup: bool = True,
     stage_observer: Callable[[str, float], None] | None = None,
     quote_spool_observer: Callable[[dict[str, int | str]], None] | None = None,
+    retention_observer: Callable[[str, dict[str, int]], None] | None = None,
 ) -> dict[str, Any]:
     # Profiling hooks are strictly opt-in and outside the returned report.
     # No instrumentation changes execution decisions or default output.
@@ -3138,6 +3139,10 @@ def run_dataset(
             stage_observer(label, now - stage_since)
             stage_since = now
 
+    def retained(stage: str, **counts: int) -> None:
+        if retention_observer is not None:
+            retention_observer(stage, counts)
+
     limits = resource_limits or LegacyResourceLimits()
     start_ns, end_ns = timestamp_ns(start), timestamp_ns(end)
     frame = (indicators(directory / "underlying_bars.csv") if indicator_chunk_rows is None
@@ -3145,6 +3150,12 @@ def run_dataset(
     if limits.max_underlying_bars is not None and len(frame) > limits.max_underlying_bars:
         raise ValueError("LEGACY_UNDERLYING_BAR_LIMIT_EXCEEDED")
     completed_stage("INDICATORS_AND_CSV")
+    if retention_observer is not None:
+        retained(
+            "INDICATORS_AND_CSV",
+            indicator_rows=len(frame),
+            indicator_frame_bytes=int(frame.memory_usage(index=True, deep=True).sum()),
+        )
     instrument_kwargs: dict[str, Any] = {}
     if prune_inactive_instruments:
         instrument_kwargs.update(active_start_ns=start_ns, active_end_ns=end_ns)
@@ -3165,6 +3176,11 @@ def run_dataset(
         else None
     )
     completed_stage("INSTRUMENTS_AND_CONFIG")
+    retained(
+        "INSTRUMENTS_AND_CONFIG",
+        option_instruments=len(specs),
+        scenario_count=len(selected_scenarios),
+    )
     signal_event_total = 0
     event_keys = sorted(
         {
@@ -3263,6 +3279,15 @@ def run_dataset(
             configuration_decisions if configuration_decisions is not None else []
         )
     completed_stage("SIGNAL_EVALUATION")
+    if retention_observer is not None:
+        retained(
+            "SIGNAL_EVALUATION",
+            signal_events=signal_event_total,
+            signal_configurations=len(event_keys),
+            configuration_decision_events=sum(
+                len(items) for items in decision_events_by_configuration.values()
+            ),
+        )
     if quote_capture_algorithm not in {'LEGACY','SWEEP'}:
         raise ValueError('quote_capture_algorithm must be LEGACY or SWEEP')
     if quote_capture_storage not in {"MEMORY","SQLITE"}:
@@ -3318,6 +3343,14 @@ def run_dataset(
                 [event for events in events_by_configuration.values() for event in events],
             )
         completed_stage("QUOTE_CAPTURE")
+        if retention_observer is not None:
+            captured_count = (
+                quote_store.total if quote_store is not None else sum(
+                    len(event.quotes)
+                    for events in events_by_configuration.values() for event in events
+                )
+            )
+            retained("QUOTE_CAPTURE", captured_quote_rows=captured_count)
         results: list[dict[str, Any]] = []
         all_trades: list[dict[str, Any]] = []
         execution_attempts: list[dict[str, Any]] = []
@@ -3502,6 +3535,13 @@ def run_dataset(
                 "signals_with_contract": len(events),
             })
         completed_stage("TRADE_SIMULATION")
+        retained(
+            "TRADE_SIMULATION",
+            trades=len(all_trades),
+            execution_attempts=len(execution_attempts),
+            retained_decision_events=len(all_decision_events),
+            scenario_results=len(results),
+        )
         return {
             "data_directory": str(directory.resolve()),
             "start": start,
