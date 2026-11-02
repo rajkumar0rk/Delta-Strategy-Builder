@@ -550,3 +550,34 @@ reference. No actual speed or RAM gain should be assumed until your local
 results confirm it. This remains the locked H6 legacy research pipeline,
 not the general Strategy Lab configurable JSON engine. It does **not**
 provide globally bounded-memory historical backtests.
+
+
+### Balanced A/B for packed SQLite and captured-quote disk footprint
+
+For a controlled comparison of the two disk-backed formats, run:
+
+```powershell
+.\.venv\Scripts\python.exe -m backtest.benchmark_positional_ab `
+  --directory backtest/data/delta-history/segments/2026-08-24_09-22 `
+  --start 2026-09-01T00:00:00Z `
+  --end 2026-09-08T00:00:00Z `
+  --output backtest/reports/packed-sqlite-ab `
+  --comparison SQLITE_ENCODING --rounds 3
+```
+
+This runs 12 independent child backtests in ABBA / BAAB order. Both variants
+use SQLite+SWEEP quote capture, the POSITIONAL quote CSV parser and positional
+candle lookup; only JSON/PACKED storage differs. All trade, fee, execution,
+decision-event and diagnostic reports are compared against the first JSON
+reference. `benchmark.json` includes per-run `quote_spool_metrics`:
+`captured_quote_rows`, `event_count`, `writer_batch_size`,
+`peak_pending_rows`, `sqlite_disk_bytes` and `sqlite_pages_bytes`.
+Disk usage includes SQLite table/index overhead and is measured before
+temporary spool cleanup, not after.
+
+To investigate scaling, repeat the test on a longer *existing* local
+history range with sufficient option coverage; do not infer bounded total
+RSS from the seven-day test alone. The full indicator DataFrame, scenario
+events and final report are still materialized in memory. This does not
+run on the general configurable JSON strategy engine. JSON encoding and
+fast in-memory quote storage remain unchanged defaults.
