@@ -100,3 +100,20 @@ None of these confirms historical executable order-book quotes, portfolio risk, 
 
 ### Backtesting process resource controls (November 2026)
 `STRATEGY_LAB_FRAME_CACHE_MB` (64 default, 0 disables) provides LRU eviction for raw bar and instrument DataFrames, and `STRATEGY_LAB_MAX_WORKERS` (2 default), `STRATEGY_LAB_MAX_PENDING_JOBS` (8 default), `STRATEGY_LAB_MAX_RETAINED_JOBS` (200 default) bound in-process jobs. These are per-process controls; they do **not** impose a hard resident-memory cap, CPU quota, or durable queue. For a 1GB VPS set workers=1 and cache=16MB and benchmark actual archive workloads. 
+
+
+### Opt-in durable research job status
+
+Set `STRATEGY_LAB_JOB_STATE_DIR` to a writable local directory to
+save atomic JSON snapshots of job status and serializable result metadata
+across API server restarts. By default the existing in-memory queue remains
+unchanged. On restart, previously QUEUED, RUNNING or CANCELLING jobs are
+marked `FAILED` with `JOB_INTERRUPTED_BY_RESTART`, and the user can launch
+a new run. Workers are **never** automatically resumed because interrupted
+backtests cannot safely be replayed mid-position. Completed jobs can still
+be queried by ID after a restart while their snapshots remain retained.
+Snapshots are JSON (not executable pickle), updated at lifecycle and stage
+boundaries (not every candle), and evicted with terminal job records.
+This is **job-status persistence**, not a multi-process distributed queue,
+cross-process lock, or worker-resume mechanism. Use one API process per state
+directory. Backtest result files retain their separate storage lifecycle.
