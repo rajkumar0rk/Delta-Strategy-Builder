@@ -511,3 +511,42 @@ its child processes and therefore still compares the original POSITIONAL
 baseline to the combined mode after this promotion. This default applies
 to legacy EMA/VWAP research only, **not** the JSON Strategy Lab engine.
 Memory gains were small; bounded-memory execution is not yet implemented.
+
+
+### Bounded captured-quote storage: optional packed SQLite spool
+
+For large legacy EMA/VWAP research runs, `quote_capture_storage="SQLITE"`
+spools captured event quotes to a temporary SQLite file instead of keeping
+all captured quote dictionaries in RAM. Writer batches are bounded by
+`quote_batch_size` (default 4096). This bounds the *quote writer batch*,
+not total process memory: underlying indicator DataFrames, signal events,
+and the returned trade/decision report remain in RAM.
+
+New: `quote_spool_encoding="PACKED"` stores the exact seven normalized
+quote floats in a 56-byte binary record (plus SQLite overhead), instead
+of a JSON string. Original `quote_spool_encoding="JSON"` remains the
+default and is the fallback. PACKED is only supported for the fixed seven
+fields emitted by the historical quote capture pipeline; unknown/missing
+fields fail closed. The spool is cleaned up on normal completion and
+exceptions. `max_captured_quotes` can still fail closed on exceeding
+the configured quota; it does not silently truncate records.
+
+Run a complete-report correctness, CPU and RSS comparison on existing
+local seven-day data, with identical POSITIONAL parser, optimized candle
+lookup and SWEEP capture for both disk-backed variants:
+
+```powershell
+.\.venv\Scripts\python.exe -m backtest.benchmark_legacy_run `
+  --directory backtest/data/delta-history/segments/2026-08-24_09-22 `
+  --start 2026-09-01T00:00:00Z --end 2026-09-08T00:00:00Z `
+  --output backtest/reports/packed-sqlite-parity `
+  --include-combined-profile `
+  --include-packed-sqlite-profile
+```
+
+Compare `SQLITE_POSITIONAL_JSON` against
+`SQLITE_POSITIONAL_PACKED`; `MEMORY_COMBINED` is the fast in-memory
+reference. No actual speed or RAM gain should be assumed until your local
+results confirm it. This remains the locked H6 legacy research pipeline,
+not the general Strategy Lab configurable JSON engine. It does **not**
+provide globally bounded-memory historical backtests.
