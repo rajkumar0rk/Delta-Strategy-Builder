@@ -118,6 +118,7 @@ class EventQuoteStore:
         self._batch_size = batch_size
         self._max_captured = max_captured
         self._total = 0
+        self._peak_pending_rows = 0
         self._closed = False
 
     def view(self, event_id: int) -> EventQuoteView:
@@ -143,6 +144,7 @@ class EventQuoteStore:
         payload = self._encode(quote)
         event_seq = self._counts.get(event_id, 0)
         self._pending.append((event_id, event_seq, self._total, payload))
+        self._peak_pending_rows = max(self._peak_pending_rows, len(self._pending))
         self._counts[event_id] = event_seq + 1
         self._total += 1
         if len(self._pending) >= self._batch_size:
@@ -164,6 +166,31 @@ class EventQuoteStore:
                 self._con.close()
             finally:
                 self._temp.cleanup()
+
+    def snapshot_metrics(self) -> dict[str, int | str]:
+        """Capture spool diagnostics before temporary database cleanup.
+
+        No SQL scans or record copies. On-disk size reflects the SQLite
+        database including indexes and free pages, not just payload bytes.
+        """
+        if self._closed:
+            raise RuntimeError("Quote spool closed")
+        path = Path(self._temp.name)
+        disk_bytes = sum(
+            item.stat().st_size
+            for item in path.iterdir() if item.is_file()
+        )
+        page_count = int(self._con.execute("PRAGMA page_count").fetchone()[0])
+        page_size = int(self._con.execute("PRAGMA page_size").fetchone()[0])
+        return {
+            "payload_encoding": self._payload_encoding,
+            "captured_quote_rows": self._total,
+            "event_count": len(self._counts),
+            "peak_pending_rows": self._peak_pending_rows,
+            "writer_batch_size": self._batch_size,
+            "sqlite_disk_bytes": disk_bytes,
+            "sqlite_pages_bytes": page_count * page_size,
+        }
 
     @property
     def total(self) -> int:
