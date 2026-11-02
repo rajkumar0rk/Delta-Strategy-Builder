@@ -344,3 +344,27 @@ python -m backtest.benchmark_legacy_run `
 Any report/trade mismatch fails closed; the benchmark records elapsed
 time and per-process peak RSS. Use a valid local normalized historical
 segment, not the archive catalog root. The command does not download data.
+
+
+## Indexed in-memory contract selection (opt-in)
+
+`run_dataset(..., indexed_option_selection=True)` constructs a reusable
+index of available option expiries grouped by CE/PE once per research run.
+Signals search relevant expiries rather than scanning every historical
+instrument. The earliest eligible expiry and stable nearest-strike
+tie-break are unchanged. The default remains the legacy linear scan.
+
+For an isolated speed and complete report-parity check on your local archive:
+
+```powershell
+.\.venv\Scripts\python.exe -m backtest.benchmark_legacy_run `
+  --directory backtest/data/delta-history/segments/YOUR_SEGMENT `
+  --start 2026-09-01T00:00:00Z --end 2026-09-08T00:00:00Z `
+  --output backtest/reports/indexed-memory-parity `
+  --include-indexed-profile
+```
+
+This adds `MEMORY_INDEXED` to the unchanged original MEMORY and SQLITE
+profiles. If the trading reports differ, the command fails. CPU/RAM benefits
+depend on instrument count and actual qualifying signal frequency. The index
+does not change historical execution assumptions or guarantee a speed gain.
