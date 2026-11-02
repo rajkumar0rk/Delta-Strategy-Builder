@@ -23,7 +23,8 @@ def _child(directory: Path, start: str, end: str, mode: str, output: Path,
            prune_inactive_instruments: bool = False,
            indicator_chunk_rows: int | None = None,
            indexed_option_selection: bool = False,
-           quote_csv_parser: str = 'POSITIONAL') -> None:
+           quote_csv_parser: str = 'POSITIONAL',
+           positional_bar_lookup: bool = False) -> None:
     from .ema_vwap_research import run_dataset, locked_h6_scenarios
     begin=time.perf_counter()
     result=run_dataset(directory,start=start,end=end,
@@ -35,7 +36,8 @@ def _child(directory: Path, start: str, end: str, mode: str, output: Path,
                        prune_inactive_instruments=prune_inactive_instruments,
                        indicator_chunk_rows=indicator_chunk_rows,
                        indexed_option_selection=indexed_option_selection,
-                       quote_csv_parser=quote_csv_parser)
+                       quote_csv_parser=quote_csv_parser,
+                       positional_bar_lookup=positional_bar_lookup)
     elapsed=time.perf_counter()-begin
     rss=peak_process_rss_kib()
     output.write_text(json.dumps({"result":result,"elapsed_seconds":elapsed,
@@ -48,7 +50,8 @@ def benchmark(directory: Path,start: str,end: str,output: Path,
               include_pruned_profile: bool = False,
               indicator_chunk_rows: int | None = None,
               include_indexed_profile: bool = False,
-              include_positional_profile: bool = False) -> dict:
+              include_positional_profile: bool = False,
+              include_bar_lookup_profile: bool = False) -> dict:
     output.mkdir(parents=True,exist_ok=True)
     paths={}
     measurements={}
@@ -64,6 +67,8 @@ def benchmark(directory: Path,start: str,end: str,output: Path,
         profiles.append(("MEMORY_INDEXED", "MEMORY", "LEGACY", False))
     if include_positional_profile:
         profiles.append(("MEMORY_POSITIONAL", "MEMORY", "LEGACY", False))
+    if include_bar_lookup_profile:
+        profiles.append(("MEMORY_BAR_LOOKUP", "MEMORY", "LEGACY", False))
     for key,mode,algorithm,prune in profiles:
         target=output/f"{key.lower()}-result.json"
         argv=[sys.executable,"-m","backtest.benchmark_legacy_run","--child",
@@ -80,6 +85,8 @@ def benchmark(directory: Path,start: str,end: str,output: Path,
             argv+=["--prune-inactive-instruments"]
         if key == "MEMORY_POSITIONAL":
             argv += ["--quote-csv-parser", "POSITIONAL"]
+        if key == "MEMORY_BAR_LOOKUP":
+            argv += ["--quote-csv-parser", "POSITIONAL", "--positional-bar-lookup"]
         if key == "MEMORY_INDEXED":
             argv.append("--indexed-option-selection")
         if key == "SQLITE_STREAMED_INDICATORS":
@@ -92,6 +99,7 @@ def benchmark(directory: Path,start: str,end: str,output: Path,
                            "peak_process_rss_kib":artifact["peak_process_rss_kib"],
                            "capture_algorithm":algorithm,
                            "indexed_option_selection":key == "MEMORY_INDEXED",
+                           "positional_bar_lookup":key == "MEMORY_BAR_LOOKUP",
                            "quote_csv_parser":"POSITIONAL" if key == "MEMORY_POSITIONAL" else "DICT",
                            "prune_inactive_instruments":prune,
                            "indicator_chunk_rows":indicator_chunk_rows if key == "SQLITE_STREAMED_INDICATORS" else None}
@@ -132,6 +140,8 @@ def main():
     p.add_argument("--include-pruned-profile",action="store_true")
     p.add_argument("--indicator-chunk-rows",type=int)
     p.add_argument("--include-indexed-profile",action="store_true")
+    p.add_argument("--include-bar-lookup-profile",action="store_true")
+    p.add_argument("--positional-bar-lookup",action="store_true",help=argparse.SUPPRESS)
     p.add_argument("--include-positional-profile",action="store_true")
     p.add_argument("--quote-csv-parser",choices=["DICT","POSITIONAL"],default="POSITIONAL",help=argparse.SUPPRESS)
     p.add_argument("--indexed-option-selection",action="store_true",help=argparse.SUPPRESS)
@@ -145,7 +155,8 @@ def main():
             p.error("--mode required for --child")
         _child(a.directory,a.start,a.end,a.mode,a.output,a.max_captured_quotes,
                a.algorithm,not a.omit_decision_events,a.prune_inactive_instruments,
-               a.indicator_chunk_rows,a.indexed_option_selection,a.quote_csv_parser)
+               a.indicator_chunk_rows,a.indexed_option_selection,a.quote_csv_parser,
+               a.positional_bar_lookup)
     else:
         print(json.dumps(benchmark(a.directory,a.start,a.end,a.output,
                                    a.max_captured_quotes,
@@ -153,7 +164,8 @@ def main():
                                    include_pruned_profile=a.include_pruned_profile,
                                    indicator_chunk_rows=a.indicator_chunk_rows,
                                    include_indexed_profile=a.include_indexed_profile,
-                                   include_positional_profile=a.include_positional_profile),indent=2))
+                                   include_positional_profile=a.include_positional_profile,
+                                   include_bar_lookup_profile=a.include_bar_lookup_profile),indent=2))
 
 
 if __name__=="__main__":
