@@ -83,7 +83,11 @@ def test_streamed_run_preserves_whole_report_and_cleans_spool(
         tmp_path, output=destination,
         spool_directory=tmp_path / "spool", **args,
     )
-    assert json.loads(destination.read_text()) == baseline
+    # Python dataclass settings can contain tuples; compare serialized
+    # report forms because JSON necessarily normalizes those into lists.
+    assert json.loads(destination.read_text()) == json.loads(
+        json.dumps(baseline, allow_nan=False)
+    )
     assert result["report_bytes"] == destination.stat().st_size
     assert result["counts"] == {
         "trades": len(baseline["trades"]),
