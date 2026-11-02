@@ -93,7 +93,9 @@ def benchmark_memory_growth(
                 "decision_events": len(report.get("decision_events", [])),
                 "difference_count": len(differences),
             }
-            if not differences:
+            # Retain the MEMORY oracle until all modes for this window are
+            # compared. For MEMORY the report and reference paths are identical.
+            if not differences and mode != "MEMORY":
                 report_file.unlink()
         # Keep baseline only if this horizon failed a parity comparison.
         if reference_file.exists() and not any(
