@@ -43,7 +43,7 @@ def test_compact_direction_parity_and_memory(tmp_path, chunks):
         assert compact[name].astype(str).tolist() == reference[name].tolist()
     pd.testing.assert_frame_equal(
         compact.astype({name: "object" for name in DIRECTIONS}),
-        reference,
+        reference.astype({name: "object" for name in DIRECTIONS}),
         check_exact=True,
     )
     assert int(compact.memory_usage(index=True, deep=True).sum()) < int(
