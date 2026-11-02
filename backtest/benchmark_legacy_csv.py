@@ -7,6 +7,7 @@ Tracemalloc excludes native/Pandas allocator overhead; not a process RSS cap.
 from __future__ import annotations
 import argparse
 import json
+import sys
 import time
 import tracemalloc
 from pathlib import Path
@@ -27,9 +28,14 @@ def benchmark(path:Path,max_rows:int=100000)->dict:
         _,peak=tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
+    peak_rss=None
+    if sys.platform.startswith("linux"):
+        import resource
+        peak_rss=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return {"path":str(path),"rows_scanned":count,
             "python_peak_memory_bytes":peak,
             "elapsed_seconds":round(time.perf_counter()-t,4),
+            "process_max_rss_kib_linux":peak_rss,
             "note":"Streaming scan only; not complete backtest peak RSS or execution benchmark"}
 
 

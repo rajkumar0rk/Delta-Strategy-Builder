@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from datetime import datetime, time, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -16,6 +17,10 @@ UTC = timezone.utc
 
 
 def _bars(path: Path) -> pd.DataFrame:
+    cap=int(os.getenv('DELTA_DISCOVERY_MAX_INPUT_MB','0'))
+    if cap<0: raise ValueError('DELTA_DISCOVERY_MAX_INPUT_MB cannot be negative')
+    if cap and path.stat().st_size>cap*1024*1024:
+        raise ValueError('DISCOVERY_INPUT_TOO_LARGE: increase DELTA_DISCOVERY_MAX_INPUT_MB or reduce input file')
     frame = pd.read_csv(path, parse_dates=["timestamp"]).set_index("timestamp").sort_index()
     for column in ("open", "high", "low", "close", "volume"):
         frame[column] = pd.to_numeric(frame[column], errors="coerce")

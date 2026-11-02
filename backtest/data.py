@@ -4,6 +4,8 @@ import csv
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
+from collections.abc import Sequence
 from .csv_stream import iter_csv_rows, selected_rows
 
 
@@ -63,7 +65,7 @@ class OptionQuoteRow:
 class HistoricalDataset:
     bars: tuple[UnderlyingBarRow, ...]
     options: tuple[OptionSpec, ...]
-    quotes: tuple[OptionQuoteRow, ...]
+    quotes: Sequence[OptionQuoteRow]
 
 
 def _optional_float(value: str | None) -> float | None:
@@ -76,7 +78,10 @@ def _rows(path: Path):
     return iter_csv_rows(path)
 
 
-def load_dataset(directory: str | Path, start_ns: int, end_ns: int, *, max_quote_rows: int | None = None) -> HistoricalDataset:
+def load_dataset(directory: str | Path, start_ns: int, end_ns: int, *, max_quote_rows: int | None = None,
+                 quote_storage: Literal['MEMORY', 'SQLITE'] = 'MEMORY',
+                 quote_spool_directory: Path | None = None,
+                 quote_batch_size: int = 4096) -> HistoricalDataset:
     root = Path(directory)
     bars = tuple(
         UnderlyingBarRow(
@@ -109,7 +114,7 @@ def load_dataset(directory: str | Path, start_ns: int, end_ns: int, *, max_quote
         )
         for row in _rows(root / "option_instruments.csv")
     )
-    quotes = tuple(
+    quote_rows = (
         OptionQuoteRow(
             timestamp_ns(row["timestamp"]),
             row["symbol"],
@@ -124,7 +129,16 @@ def load_dataset(directory: str | Path, start_ns: int, end_ns: int, *, max_quote
         for _, row in selected_rows(root / "option_quotes.csv", start_ns=start_ns, end_ns=end_ns,
                                     timestamp_ns=timestamp_ns, limit=max_quote_rows)
     )
-    dataset = HistoricalDataset(bars, options, quotes)
+    quotes = tuple(quote_rows) if quote_storage == 'MEMORY' else quote_rows
+    if quote_storage not in {"MEMORY", "SQLITE"}:
+        raise ValueError("quote_storage must be MEMORY or SQLITE")
+    if quote_storage == "SQLITE":
+        from .sqlite_quotes import SQLiteQuoteSequence
+        quote_sequence = SQLiteQuoteSequence(quotes, batch_size=quote_batch_size,
+                                             directory=quote_spool_directory)
+    else:
+        quote_sequence = quotes
+    dataset = HistoricalDataset(bars, options, quote_sequence)
     validate_dataset(dataset)
     return dataset
 

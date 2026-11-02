@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -16,6 +17,10 @@ FINAL_END = pd.Timestamp("2026-09-27T00:00:00Z")
 
 
 def _close_series(path: Path, name: str) -> pd.Series:
+    cap=int(os.getenv('DELTA_DISCOVERY_MAX_INPUT_MB','0'))
+    if cap<0: raise ValueError('DELTA_DISCOVERY_MAX_INPUT_MB cannot be negative')
+    if cap and path.stat().st_size>cap*1024*1024:
+        raise ValueError('DISCOVERY_INPUT_TOO_LARGE: increase DELTA_DISCOVERY_MAX_INPUT_MB or reduce input file')
     frame = pd.read_csv(path, parse_dates=["timestamp"])
     frame = frame.sort_values("timestamp").drop_duplicates("timestamp", keep="last")
     values = pd.to_numeric(frame["close"], errors="coerce")
