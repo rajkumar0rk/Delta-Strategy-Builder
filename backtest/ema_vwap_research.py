@@ -3058,6 +3058,7 @@ def run_dataset(
     max_captured_quotes: int | None = None,
     quote_capture_algorithm: str = 'LEGACY',
     max_active_events: int | None = None,
+    retain_decision_events: bool = True,
 ) -> dict[str, Any]:
     start_ns, end_ns = timestamp_ns(start), timestamp_ns(end)
     frame = indicators(directory / "underlying_bars.csv")
@@ -3124,7 +3125,9 @@ def run_dataset(
             momentum_breakout,
         )
         diagnostics: dict[str, int] = {}
-        configuration_decisions: list[dict[str, Any]] = []
+        configuration_decisions: list[dict[str, Any]] | None = (
+            [] if retain_decision_events else None
+        )
         events_by_configuration[key] = signal_events(
             frame,
             specs,
@@ -3149,7 +3152,9 @@ def run_dataset(
             decision_events=configuration_decisions,
         )
         diagnostics_by_configuration[key] = diagnostics
-        decision_events_by_configuration[key] = configuration_decisions
+        decision_events_by_configuration[key] = (
+            configuration_decisions if configuration_decisions is not None else []
+        )
     if quote_capture_algorithm not in {'LEGACY','SWEEP'}:
         raise ValueError('quote_capture_algorithm must be LEGACY or SWEEP')
     if quote_capture_storage not in {"MEMORY","SQLITE"}:
@@ -3192,6 +3197,10 @@ def run_dataset(
         all_trades: list[dict[str, Any]] = []
         execution_attempts: list[dict[str, Any]] = []
         all_decision_events: list[dict[str, Any]] = []
+
+        def record_execution_decision(record: dict[str, Any]) -> None:
+            if retain_decision_events:
+                all_decision_events.append(record)
         for scenario in selected_scenarios:
             scenario_key = (
                 scenario.confirmation_candles,
@@ -3239,7 +3248,7 @@ def run_dataset(
             traded_ema_regimes: set[tuple[str, int]] = set()
             for event in events:
                 if event.timestamp_ns <= available_after_ns:
-                    all_decision_events.append({
+                    record_execution_decision({
                         "scenario": scenario.name,
                         "timestamp": datetime.fromtimestamp(event.timestamp_ns / 1_000_000_000, UTC).isoformat(),
                         "stage": "EXECUTION", "status": "REJECTED",
@@ -3256,7 +3265,7 @@ def run_dataset(
                     and event.ema_regime_start_ns > 0
                     and regime_key in traded_ema_regimes
                 ):
-                    all_decision_events.append({
+                    record_execution_decision({
                         "scenario": scenario.name,
                         "timestamp": datetime.fromtimestamp(event.timestamp_ns / 1_000_000_000, UTC).isoformat(),
                         "stage": "EXECUTION", "status": "REJECTED",
@@ -3285,7 +3294,7 @@ def run_dataset(
                     data_fidelity=data_fidelity,
                 )
                 if rejection:
-                    all_decision_events.append({
+                    record_execution_decision({
                         "scenario": scenario.name,
                         "timestamp": datetime.fromtimestamp(event.timestamp_ns / 1_000_000_000, UTC).isoformat(),
                         "stage": "EXECUTION", "status": "REJECTED",
@@ -3315,7 +3324,7 @@ def run_dataset(
                     rejects[rejection] = rejects.get(rejection, 0) + 1
                     continue
                 assert trade is not None
-                all_decision_events.append({
+                record_execution_decision({
                     "scenario": scenario.name,
                     "timestamp": datetime.fromtimestamp(event.timestamp_ns / 1_000_000_000, UTC).isoformat(),
                     "stage": "EXECUTION", "status": "ACCEPTED",
