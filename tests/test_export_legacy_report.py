@@ -45,6 +45,12 @@ def _fake_dataset(directory, *, report_record_spool=None, **kwargs):
 
 def test_streamed_cli_exports_original_json_and_csv(monkeypatch, tmp_path):
     monkeypatch.setattr(legacy, "run_dataset", _fake_dataset)
+    # Some legacy tests reload the research module; patch the exact global
+    # namespace held by the already imported streamed-output helper too.
+    monkeypatch.setitem(
+        legacy.run_dataset_to_streamed_report.__globals__,
+        "run_dataset", _fake_dataset,
+    )
     monkeypatch.setattr(legacy, "locked_h6_scenarios", lambda: [])
     old_dir = tmp_path / "old"
     stream_dir = tmp_path / "stream"
