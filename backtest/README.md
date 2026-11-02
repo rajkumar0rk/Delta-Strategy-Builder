@@ -235,3 +235,29 @@ The underlying Pandas CSV is still fully materialized before its row
 limit is checked, and event and report collections may temporarily grow
 before a post-generation limit rejects them. Large datasets therefore
 still require true streaming and independent peak-RSS benchmarks.
+
+
+## Laptop-first process-memory benchmark (Windows and Linux)
+
+The offline `backtest.benchmark_legacy_run` command now reports peak process
+memory on Windows (PeakWorkingSetSize) and Linux (ru_maxrss) in KiB, under
+`measurements[...].peak_process_rss_kib`. Each capture mode runs in its own
+process, preserving the existing report-parity comparison. Other operating
+systems may report null. To benchmark without detailed decision logs, add
+`--omit-decision-events`; it applies identically to both capture modes,
+and the original default still retains diagnostics.
+
+Example on your Windows laptop (no downloads):
+
+```powershell
+python -m backtest.benchmark_legacy_run `
+  --directory backtest/data/delta-history/segments/YOUR_SEGMENT `
+  --start 2026-09-01T00:00:00Z --end 2026-09-02T00:00:00Z `
+  --output backtest/reports/laptop-legacy-benchmark `
+  --omit-decision-events
+```
+
+Use a locally available folder containing `underlying_bars.csv`,
+`option_instruments.csv`, and `option_quotes.csv`. The tool does not
+automatically resolve catalog segments. Results remain research-only and
+are **not** proof of parity on the full archive until run on your data.
