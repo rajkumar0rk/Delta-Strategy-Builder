@@ -24,7 +24,8 @@ def _child(directory: Path, start: str, end: str, mode: str, output: Path,
            indicator_chunk_rows: int | None = None,
            indexed_option_selection: bool = False,
            quote_csv_parser: str = 'POSITIONAL',
-           positional_bar_lookup: bool = False) -> None:
+           positional_bar_lookup: bool = False,
+           quote_spool_encoding: str = "JSON") -> None:
     from .ema_vwap_research import run_dataset, locked_h6_scenarios
     begin=time.perf_counter()
     result=run_dataset(directory,start=start,end=end,
@@ -37,7 +38,8 @@ def _child(directory: Path, start: str, end: str, mode: str, output: Path,
                        indicator_chunk_rows=indicator_chunk_rows,
                        indexed_option_selection=indexed_option_selection,
                        quote_csv_parser=quote_csv_parser,
-                       positional_bar_lookup=positional_bar_lookup)
+                       positional_bar_lookup=positional_bar_lookup,
+                       quote_spool_encoding=quote_spool_encoding)
     elapsed=time.perf_counter()-begin
     rss=peak_process_rss_kib()
     output.write_text(json.dumps({"result":result,"elapsed_seconds":elapsed,
@@ -52,7 +54,8 @@ def benchmark(directory: Path,start: str,end: str,output: Path,
               include_indexed_profile: bool = False,
               include_positional_profile: bool = False,
               include_bar_lookup_profile: bool = False,
-              include_combined_profile: bool = False) -> dict:
+              include_combined_profile: bool = False,
+              include_packed_sqlite_profile: bool = False) -> dict:
     output.mkdir(parents=True,exist_ok=True)
     paths={}
     measurements={}
@@ -72,6 +75,11 @@ def benchmark(directory: Path,start: str,end: str,output: Path,
         profiles.append(("MEMORY_BAR_LOOKUP", "MEMORY", "LEGACY", False))
     if include_combined_profile:
         profiles.append(("MEMORY_COMBINED", "MEMORY", "LEGACY", False))
+    if include_packed_sqlite_profile:
+        profiles += [
+            ("SQLITE_POSITIONAL_JSON", "SQLITE", "SWEEP", False),
+            ("SQLITE_POSITIONAL_PACKED", "SQLITE", "SWEEP", False),
+        ]
     for key,mode,algorithm,prune in profiles:
         target=output/f"{key.lower()}-result.json"
         argv=[sys.executable,"-m","backtest.benchmark_legacy_run","--child",
@@ -79,9 +87,17 @@ def benchmark(directory: Path,start: str,end: str,output: Path,
               "--mode",mode,"--algorithm",algorithm,"--output",str(target)]
         # Freeze historical benchmark profiles to their original DICT parser;
         # the opt-in positional profile is compared independently.
-        csv_parser = "POSITIONAL" if key in {"MEMORY_POSITIONAL", "MEMORY_COMBINED"} else "DICT"
-        bar_lookup = key in {"MEMORY_BAR_LOOKUP", "MEMORY_COMBINED"}
-        argv += ["--quote-csv-parser", csv_parser]
+        csv_parser = "POSITIONAL" if key in {
+            "MEMORY_POSITIONAL", "MEMORY_COMBINED",
+            "SQLITE_POSITIONAL_JSON", "SQLITE_POSITIONAL_PACKED",
+        } else "DICT"
+        bar_lookup = key in {
+            "MEMORY_BAR_LOOKUP", "MEMORY_COMBINED",
+            "SQLITE_POSITIONAL_JSON", "SQLITE_POSITIONAL_PACKED",
+        }
+        spool_encoding = "PACKED" if key == "SQLITE_POSITIONAL_PACKED" else "JSON"
+        argv += ["--quote-csv-parser", csv_parser,
+                 "--quote-spool-encoding", spool_encoding]
         if bar_lookup:
             argv.append("--positional-bar-lookup")
         if max_captured_quotes is not None:
@@ -104,6 +120,7 @@ def benchmark(directory: Path,start: str,end: str,output: Path,
                            "indexed_option_selection":key == "MEMORY_INDEXED",
                            "positional_bar_lookup":bar_lookup,
                            "quote_csv_parser":csv_parser,
+                           "quote_spool_encoding":spool_encoding,
                            "prune_inactive_instruments":prune,
                            "indicator_chunk_rows":indicator_chunk_rows if key == "SQLITE_STREAMED_INDICATORS" else None}
         target.unlink()
@@ -145,6 +162,9 @@ def main():
     p.add_argument("--include-indexed-profile",action="store_true")
     p.add_argument("--include-bar-lookup-profile",action="store_true")
     p.add_argument("--include-combined-profile",action="store_true")
+    p.add_argument("--include-packed-sqlite-profile",action="store_true")
+    p.add_argument("--quote-spool-encoding",choices=["JSON", "PACKED"],default="JSON",
+                   help=argparse.SUPPRESS)
     p.add_argument("--positional-bar-lookup",action="store_true",help=argparse.SUPPRESS)
     p.add_argument("--include-positional-profile",action="store_true")
     p.add_argument("--quote-csv-parser",choices=["DICT","POSITIONAL"],default="POSITIONAL",help=argparse.SUPPRESS)
@@ -160,7 +180,7 @@ def main():
         _child(a.directory,a.start,a.end,a.mode,a.output,a.max_captured_quotes,
                a.algorithm,not a.omit_decision_events,a.prune_inactive_instruments,
                a.indicator_chunk_rows,a.indexed_option_selection,a.quote_csv_parser,
-               a.positional_bar_lookup)
+               a.positional_bar_lookup,a.quote_spool_encoding)
     else:
         print(json.dumps(benchmark(a.directory,a.start,a.end,a.output,
                                    a.max_captured_quotes,
@@ -170,7 +190,8 @@ def main():
                                    include_indexed_profile=a.include_indexed_profile,
                                    include_positional_profile=a.include_positional_profile,
                                    include_bar_lookup_profile=a.include_bar_lookup_profile,
-                                   include_combined_profile=a.include_combined_profile),indent=2))
+                                   include_combined_profile=a.include_combined_profile,
+                                   include_packed_sqlite_profile=a.include_packed_sqlite_profile),indent=2))
 
 
 if __name__=="__main__":
