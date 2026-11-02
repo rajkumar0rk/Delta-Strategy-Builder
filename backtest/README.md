@@ -729,3 +729,41 @@ Check both exact report parity and peak-RSS reduction before considering a
 default change. This improves repeated categorical storage, but is **not**
 bounded-memory indicator streaming: the entire source candle file still
 materializes, and the final report remains in memory.
+
+
+### Phase 1 — identify the dominant retained Python allocations
+
+The 14-day H6 `INDICATOR_COMPACT` test preserved 1,867 trades and 1,903
+execution attempts across 12 runs, but reduced median runtime only ~1.41%
+and increased median process RSS ~222 KiB. Categorical compression therefore
+remains opt-in. The next task is to **measure actual retained allocations**
+before implementing further memory changes.
+
+The existing offline legacy profiler now supports per-stage Python allocation
+deltas, instantaneous process RSS, cumulative process peak, and estimated
+retained Python object bytes in each final-report field:
+
+```powershell
+.\.venv\Scripts\python.exe -m backtest.profile_legacy_run `
+  --directory backtest/data/delta-history/segments/2026-08-24_09-22 `
+  --start 2026-09-01T00:00:00Z `
+  --end 2026-09-15T00:00:00Z `
+  --output backtest/reports/retained-allocation-profile `
+  --track-allocations
+```
+
+Review `profile.json`: `stages[].current_process_rss_kib`,
+`stages[].cumulative_peak_process_rss_kib`,
+`stages[].python_traced_current_bytes`,
+`stages[].python_allocation_changes` (source file and line),
+`retention_inventory`, and
+`report_retained_python_bytes.total_unique_python_bytes` and `.fields`.
+
+**Limitations:** cProfile and tracemalloc introduce substantial overhead;
+do not use the profiled runtime or RSS as a normal backtest speed benchmark.
+Tracemalloc does not account for every native Pandas/NumPy buffer or allocator
+fragmentation. Per-report-field byte counts are separate estimates that may
+overlap due to shared Python objects; do not sum them. This is diagnostic only:
+no changes to indicators, trading decisions, configuration defaults, or
+strategy output. Full bounded-memory historical backtesting still remains
+unimplemented, and this is legacy H6 only, not the JSON strategy engine.
