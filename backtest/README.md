@@ -212,3 +212,26 @@ temporary and recreated for each run; no permanent database migration needed.
 This improves random-access query complexity but does not establish a
 measured end-to-end speedup or full historical streaming. Benchmark on your
 laptop's existing archive before claiming gains. No historical downloads.
+
+## Opt-in collection admission limits
+
+
+`run_dataset(..., resource_limits=LegacyResourceLimits(...))` accepts
+`max_underlying_bars`, `max_option_instruments`, `max_scenarios`,
+`max_signal_events`, `max_decision_events`,
+`max_execution_attempts`, and `max_trades`. Import
+`LegacyResourceLimits` from `backtest.resource_limits`.
+
+Each limit is an optional positive integer; `None` (default) preserves
+existing behavior. When exceeded, research raises a descriptive
+`LEGACY_*_LIMIT_EXCEEDED` error instead of dropping trades, events or
+source records. A shared decision-event budget counts underlying signal
+and execution decisions once, even when a configuration's decisions are
+replicated across scenario reports. Set `retain_decision_events=False`
+to omit those detailed diagnostics entirely.
+
+These controls bound *admitted collection counts*, not total process RSS.
+The underlying Pandas CSV is still fully materialized before its row
+limit is checked, and event and report collections may temporarily grow
+before a post-generation limit rejects them. Large datasets therefore
+still require true streaming and independent peak-RSS benchmarks.

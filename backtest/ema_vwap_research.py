@@ -15,6 +15,7 @@ import pandas as pd
 from .calculations import calculate_quantity, ema, required_entry_volume, rsi_wilder
 
 from .data import OptionSpec, timestamp_ns
+from .resource_limits import LegacyResourceLimits, DecisionEventBudget, LimitedDecisionEvents
 
 
 UTC = timezone.utc
@@ -3059,11 +3060,25 @@ def run_dataset(
     quote_capture_algorithm: str = 'LEGACY',
     max_active_events: int | None = None,
     retain_decision_events: bool = True,
+    resource_limits: LegacyResourceLimits | None = None,
 ) -> dict[str, Any]:
+    limits = resource_limits or LegacyResourceLimits()
     start_ns, end_ns = timestamp_ns(start), timestamp_ns(end)
     frame = indicators(directory / "underlying_bars.csv")
+    if limits.max_underlying_bars is not None and len(frame) > limits.max_underlying_bars:
+        raise ValueError("LEGACY_UNDERLYING_BAR_LIMIT_EXCEEDED")
     specs = _option_specs(directory / "option_instruments.csv")
+    if limits.max_option_instruments is not None and len(specs) > limits.max_option_instruments:
+        raise ValueError("LEGACY_OPTION_INSTRUMENT_LIMIT_EXCEEDED")
     selected_scenarios = scenario_set or scenarios()
+    if limits.max_scenarios is not None and len(selected_scenarios) > limits.max_scenarios:
+        raise ValueError("LEGACY_SCENARIO_LIMIT_EXCEEDED")
+    decision_budget = (
+        DecisionEventBudget(limits.max_decision_events)
+        if retain_decision_events and limits.max_decision_events is not None
+        else None
+    )
+    signal_event_total = 0
     event_keys = sorted(
         {
             (
@@ -3126,7 +3141,8 @@ def run_dataset(
         )
         diagnostics: dict[str, int] = {}
         configuration_decisions: list[dict[str, Any]] | None = (
-            [] if retain_decision_events else None
+            LimitedDecisionEvents(decision_budget) if decision_budget is not None
+            else [] if retain_decision_events else None
         )
         events_by_configuration[key] = signal_events(
             frame,
@@ -3151,6 +3167,9 @@ def run_dataset(
             signal_diagnostics=diagnostics,
             decision_events=configuration_decisions,
         )
+        signal_event_total += len(events_by_configuration[key])
+        if limits.max_signal_events is not None and signal_event_total > limits.max_signal_events:
+            raise ValueError("LEGACY_SIGNAL_EVENT_LIMIT_EXCEEDED")
         diagnostics_by_configuration[key] = diagnostics
         decision_events_by_configuration[key] = (
             configuration_decisions if configuration_decisions is not None else []
@@ -3200,6 +3219,8 @@ def run_dataset(
 
         def record_execution_decision(record: dict[str, Any]) -> None:
             if retain_decision_events:
+                if decision_budget is not None:
+                    decision_budget.charge()
                 all_decision_events.append(record)
         for scenario in selected_scenarios:
             scenario_key = (
@@ -3302,6 +3323,8 @@ def run_dataset(
                         "entry_type": event.entry_type, "symbol": event.option.symbol,
                     })
                     if event.execution_attempt is not None:
+                        if limits.max_execution_attempts is not None and len(execution_attempts) >= limits.max_execution_attempts:
+                            raise ValueError("LEGACY_EXECUTION_ATTEMPT_LIMIT_EXCEEDED")
                         execution_attempts.append({
                             **event.execution_attempt,
                             "trade_accepted": False,
@@ -3332,11 +3355,15 @@ def run_dataset(
                     "entry_type": event.entry_type, "symbol": event.option.symbol,
                 })
                 if event.execution_attempt is not None:
+                    if limits.max_execution_attempts is not None and len(execution_attempts) >= limits.max_execution_attempts:
+                        raise ValueError("LEGACY_EXECUTION_ATTEMPT_LIMIT_EXCEEDED")
                     execution_attempts.append({
                         **event.execution_attempt,
                         "trade_accepted": True,
                         "rejection_reason": "",
                     })
+                if limits.max_trades is not None and len(all_trades) >= limits.max_trades:
+                    raise ValueError("LEGACY_TRADE_LIMIT_EXCEEDED")
                 trades.append(trade)
                 all_trades.append(trade)
                 if scenario.one_trade_per_ema_regime and event.ema_regime_start_ns > 0:
