@@ -3125,6 +3125,7 @@ def run_dataset(
     quote_csv_parser: str = 'POSITIONAL',
     positional_bar_lookup: bool = True,
     release_completed_configurations: bool = False,
+    trim_simulation_frame: bool = False,
     stage_observer: Callable[[str, float], None] | None = None,
     quote_spool_observer: Callable[[dict[str, int | str]], None] | None = None,
     retention_observer: Callable[[str, dict[str, int]], None] | None = None,
@@ -3286,6 +3287,20 @@ def run_dataset(
         if release_completed_configurations else None
     )
     completed_stage("SIGNAL_EVALUATION")
+    if trim_simulation_frame:
+        from .simulation_frame_retention import prepare_simulation_frame
+        frame = prepare_simulation_frame(
+            frame, events_by_configuration, selected_scenarios,
+        )
+    if retention_observer is not None:
+        retained(
+            "SIMULATION_FRAME",
+            simulation_indicator_rows=len(frame),
+            simulation_indicator_frame_bytes=(
+                int(frame.memory_usage(index=True, deep=True).sum())
+                if isinstance(frame, pd.DataFrame) else 0
+            ),
+        )
     if retention_observer is not None:
         retained(
             "SIGNAL_EVALUATION",
