@@ -24,17 +24,19 @@ def benchmark_positional_ab(
 ) -> dict:
     if type(rounds) is not int or not 1 <= rounds <= 12:
         raise ValueError("rounds must be an integer between 1 and 12")
-    if comparison not in {"QUOTE_PARSER", "BAR_LOOKUP"}:
-        raise ValueError("comparison must be QUOTE_PARSER or BAR_LOOKUP")
-    labels = (
-        ("DICT", "POSITIONAL") if comparison == "QUOTE_PARSER"
-        else ("POSITIONAL", "POSITIONAL_BAR_LOOKUP")
-    )
+    if comparison not in {"QUOTE_PARSER", "BAR_LOOKUP", "SQLITE_ENCODING"}:
+        raise ValueError("comparison must be QUOTE_PARSER, BAR_LOOKUP or SQLITE_ENCODING")
+    labels = {
+        "QUOTE_PARSER": ("DICT", "POSITIONAL"),
+        "BAR_LOOKUP": ("POSITIONAL", "POSITIONAL_BAR_LOOKUP"),
+        "SQLITE_ENCODING": ("SQLITE_JSON", "SQLITE_PACKED"),
+    }[comparison]
     output.mkdir(parents=True, exist_ok=True)
-    baseline_path = output / (
-        "reference-dict-report.json" if comparison == "QUOTE_PARSER"
-        else "reference-positional-report.json"
-    )
+    baseline_path = output / {
+        "QUOTE_PARSER": "reference-dict-report.json",
+        "BAR_LOOKUP": "reference-positional-report.json",
+        "SQLITE_ENCODING": "reference-sqlite-json-report.json",
+    }[comparison]
     samples: list[dict] = []
     differences: list[str] = []
 
@@ -46,21 +48,29 @@ def benchmark_positional_ab(
         for position, variant in enumerate(sequence, 1):
             key = f"round-{round_index + 1:02d}-{position}-{variant.lower()}"
             parser = "DICT" if variant == "DICT" else "POSITIONAL"
-            bar_lookup = variant == "POSITIONAL_BAR_LOOKUP"
+            bar_lookup = variant in {"POSITIONAL_BAR_LOOKUP", "SQLITE_JSON", "SQLITE_PACKED"}
+            is_sqlite = comparison == "SQLITE_ENCODING"
+            spool_encoding = "PACKED" if variant == "SQLITE_PACKED" else "JSON"
             child_path = output / f"{key}-child.json"
             command = [
                 sys.executable, "-m", "backtest.benchmark_legacy_run",
                 "--child", "--directory", str(directory),
                 "--start", start, "--end", end,
-                "--mode", "MEMORY", "--algorithm", "LEGACY",
+                "--mode", "SQLITE" if is_sqlite else "MEMORY",
+                "--algorithm", "SWEEP" if is_sqlite else "LEGACY",
                 "--quote-csv-parser", parser,
                 "--output", str(child_path),
             ]
             if bar_lookup:
                 command.append("--positional-bar-lookup")
+            if is_sqlite:
+                command += ["--quote-spool-encoding", spool_encoding, "--quote-spool-metrics"]
             subprocess.run(command, check=True)
             child = json.loads(child_path.read_text(encoding="utf-8"))
             child_path.unlink()
+            metrics = child.get("quote_spool_metrics")
+            if is_sqlite and not isinstance(metrics, dict):
+                raise ValueError("SQLITE_SPOOL_METRICS_MISSING")
             report = child["result"]
             report_path = output / f"{key}-report.json"
             report_path.write_text(json.dumps(report, allow_nan=False), encoding="utf-8")
@@ -80,6 +90,8 @@ def benchmark_positional_ab(
                 "variant": variant,
                 "quote_csv_parser": parser,
                 "positional_bar_lookup": bar_lookup,
+                "quote_spool_encoding": spool_encoding if is_sqlite else None,
+                "quote_spool_metrics": metrics,
                 "elapsed_seconds": child["elapsed_seconds"],
                 "peak_process_rss_kib": child.get("peak_process_rss_kib"),
                 "trade_count": len(report.get("trades", [])),
@@ -123,7 +135,11 @@ def benchmark_positional_ab(
             if baseline_median else None
         ),
         "measurements": samples,
-        "scope": "locked H6 research; original MEMORY+LEGACY quotes",
+        "scope": (
+            "locked H6 research; SQLITE+SWEEP+POSITIONAL+bar lookup"
+            if comparison == "SQLITE_ENCODING"
+            else "locked H6 research; MEMORY+LEGACY quotes"
+        ),
         "notes": (
             "Repeated separate-process runs balance but cannot eliminate OS,"
             " disk-cache, thermal, and background-workload effects. "
@@ -141,14 +157,14 @@ def benchmark_positional_ab(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Alternating A/B benchmark for quote parser or candle lookup"
+        description="Alternating A/B benchmark for quote parser, candle lookup, or SQLite encoding"
     )
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--start", required=True)
     parser.add_argument("--end", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--rounds", type=int, default=3)
-    parser.add_argument("--comparison", choices=["QUOTE_PARSER", "BAR_LOOKUP"],
+    parser.add_argument("--comparison", choices=["QUOTE_PARSER", "BAR_LOOKUP", "SQLITE_ENCODING"],
                         default="QUOTE_PARSER")
     args = parser.parse_args()
     print(json.dumps(
