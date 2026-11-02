@@ -24,18 +24,20 @@ def benchmark_positional_ab(
 ) -> dict:
     if type(rounds) is not int or not 1 <= rounds <= 12:
         raise ValueError("rounds must be an integer between 1 and 12")
-    if comparison not in {"QUOTE_PARSER", "BAR_LOOKUP", "SQLITE_ENCODING"}:
-        raise ValueError("comparison must be QUOTE_PARSER, BAR_LOOKUP or SQLITE_ENCODING")
+    if comparison not in {"QUOTE_PARSER", "BAR_LOOKUP", "SQLITE_ENCODING", "RETENTION"}:
+        raise ValueError("comparison must be QUOTE_PARSER, BAR_LOOKUP, SQLITE_ENCODING or RETENTION")
     labels = {
         "QUOTE_PARSER": ("DICT", "POSITIONAL"),
         "BAR_LOOKUP": ("POSITIONAL", "POSITIONAL_BAR_LOOKUP"),
         "SQLITE_ENCODING": ("SQLITE_JSON", "SQLITE_PACKED"),
+        "RETENTION": ("POSITIONAL_BAR_LOOKUP", "POSITIONAL_RELEASE"),
     }[comparison]
     output.mkdir(parents=True, exist_ok=True)
     baseline_path = output / {
         "QUOTE_PARSER": "reference-dict-report.json",
         "BAR_LOOKUP": "reference-positional-report.json",
         "SQLITE_ENCODING": "reference-sqlite-json-report.json",
+        "RETENTION": "reference-retention-off-report.json",
     }[comparison]
     samples: list[dict] = []
     differences: list[str] = []
@@ -48,7 +50,11 @@ def benchmark_positional_ab(
         for position, variant in enumerate(sequence, 1):
             key = f"round-{round_index + 1:02d}-{position}-{variant.lower()}"
             parser = "DICT" if variant == "DICT" else "POSITIONAL"
-            bar_lookup = variant in {"POSITIONAL_BAR_LOOKUP", "SQLITE_JSON", "SQLITE_PACKED"}
+            bar_lookup = variant in {
+                "POSITIONAL_BAR_LOOKUP", "POSITIONAL_RELEASE",
+                "SQLITE_JSON", "SQLITE_PACKED",
+            }
+            release_after_use = variant == "POSITIONAL_RELEASE"
             is_sqlite = comparison == "SQLITE_ENCODING"
             spool_encoding = "PACKED" if variant == "SQLITE_PACKED" else "JSON"
             child_path = output / f"{key}-child.json"
@@ -63,6 +69,8 @@ def benchmark_positional_ab(
             ]
             if bar_lookup:
                 command.append("--positional-bar-lookup")
+            if release_after_use:
+                command.append("--release-completed-configurations")
             if is_sqlite:
                 command += ["--quote-spool-encoding", spool_encoding, "--quote-spool-metrics"]
             subprocess.run(command, check=True)
@@ -90,6 +98,7 @@ def benchmark_positional_ab(
                 "variant": variant,
                 "quote_csv_parser": parser,
                 "positional_bar_lookup": bar_lookup,
+                "release_completed_configurations": release_after_use,
                 "quote_spool_encoding": spool_encoding if is_sqlite else None,
                 "quote_spool_metrics": metrics,
                 "elapsed_seconds": child["elapsed_seconds"],
@@ -164,7 +173,7 @@ def main() -> None:
     parser.add_argument("--end", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--rounds", type=int, default=3)
-    parser.add_argument("--comparison", choices=["QUOTE_PARSER", "BAR_LOOKUP", "SQLITE_ENCODING"],
+    parser.add_argument("--comparison", choices=["QUOTE_PARSER", "BAR_LOOKUP", "SQLITE_ENCODING", "RETENTION"],
                         default="QUOTE_PARSER")
     args = parser.parse_args()
     print(json.dumps(
