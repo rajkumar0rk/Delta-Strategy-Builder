@@ -23,7 +23,7 @@ def _child(directory: Path, start: str, end: str, mode: str, output: Path,
            prune_inactive_instruments: bool = False,
            indicator_chunk_rows: int | None = None,
            indexed_option_selection: bool = False,
-           quote_csv_parser: str = 'DICT') -> None:
+           quote_csv_parser: str = 'POSITIONAL') -> None:
     from .ema_vwap_research import run_dataset, locked_h6_scenarios
     begin=time.perf_counter()
     result=run_dataset(directory,start=start,end=end,
@@ -69,6 +69,9 @@ def benchmark(directory: Path,start: str,end: str,output: Path,
         argv=[sys.executable,"-m","backtest.benchmark_legacy_run","--child",
               "--directory",str(directory),"--start",start,"--end",end,
               "--mode",mode,"--algorithm",algorithm,"--output",str(target)]
+        # Freeze historical benchmark profiles to their original DICT parser;
+        # the opt-in positional profile is compared independently.
+        argv += ["--quote-csv-parser", "POSITIONAL" if key == "MEMORY_POSITIONAL" else "DICT"]
         if max_captured_quotes is not None:
             argv+=["--max-captured-quotes",str(max_captured_quotes)]
         if not retain_decision_events:
@@ -130,7 +133,7 @@ def main():
     p.add_argument("--indicator-chunk-rows",type=int)
     p.add_argument("--include-indexed-profile",action="store_true")
     p.add_argument("--include-positional-profile",action="store_true")
-    p.add_argument("--quote-csv-parser",choices=["DICT","POSITIONAL"],default="DICT",help=argparse.SUPPRESS)
+    p.add_argument("--quote-csv-parser",choices=["DICT","POSITIONAL"],default="POSITIONAL",help=argparse.SUPPRESS)
     p.add_argument("--indexed-option-selection",action="store_true",help=argparse.SUPPRESS)
     p.add_argument("--prune-inactive-instruments",action="store_true",help=argparse.SUPPRESS)
     p.add_argument("--child",action="store_true",help=argparse.SUPPRESS)
