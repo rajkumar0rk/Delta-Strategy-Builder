@@ -198,3 +198,17 @@ instrument metadata, selected signal events, trade results and execution
 attempts remain resident in memory. It does not establish bounded total RSS,
 nor does it guarantee operation on a 1 GB VPS. Verify any resource benefit
 against an actual local archive, without downloading new market data.
+
+
+## Indexed SQLite event-quote replay (opt-in SQLite capture)
+
+SQLite-backed `EventQuoteView` now uses a per-event quote-position index for
+direct integer access, rather than skipping rows using `OFFSET`. Slices,
+including reversed and stepped slices, use one ordered indexed query rather
+than one query per element. Event quote values, ordering and the default
+`MEMORY` capture mode are unchanged. Existing event-local SQLite spools are
+temporary and recreated for each run; no permanent database migration needed.
+
+This improves random-access query complexity but does not establish a
+measured end-to-end speedup or full historical streaming. Benchmark on your
+laptop's existing archive before claiming gains. No historical downloads.
