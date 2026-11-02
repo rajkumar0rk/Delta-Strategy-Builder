@@ -198,3 +198,26 @@ instrument metadata, selected signal events, trade results and execution
 attempts remain resident in memory. It does not establish bounded total RSS,
 nor does it guarantee operation on a 1 GB VPS. Verify any resource benefit
 against an actual local archive, without downloading new market data.
+
+
+## Opt-in collection admission limits (PR #23)
+
+`run_dataset(..., resource_limits=LegacyResourceLimits(...))` accepts
+`max_underlying_bars`, `max_option_instruments`, `max_scenarios`,
+`max_signal_events`, `max_decision_events`,
+`max_execution_attempts`, and `max_trades`. Import
+`LegacyResourceLimits` from `backtest.resource_limits`.
+
+Each limit is an optional positive integer; `None` (default) preserves
+existing behavior. When exceeded, research raises a descriptive
+`LEGACY_*_LIMIT_EXCEEDED` error instead of dropping trades, events or
+source records. A shared decision-event budget counts underlying signal
+and execution decisions once, even when a configuration's decisions are
+replicated across scenario reports. Set `retain_decision_events=False`
+to omit those detailed diagnostics entirely.
+
+These controls bound *admitted collection counts*, not total process RSS.
+The underlying Pandas CSV is still fully materialized before its row
+limit is checked, and event and report collections may temporarily grow
+before a post-generation limit rejects them. Large datasets therefore
+still require true streaming and independent peak-RSS benchmarks.
