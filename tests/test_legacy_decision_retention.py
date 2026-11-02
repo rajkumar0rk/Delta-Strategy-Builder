@@ -15,20 +15,24 @@ def test_decision_retention_is_opt_in_and_preserves_execution(monkeypatch, tmp_p
         execution_attempt=None,
     )
 
-    monkeypatch.setattr(research, "indicators", lambda path: object())
-    monkeypatch.setattr(research, "_option_specs", lambda path: [])
+    # Other tests can reload this module; patch the runner's actual globals
+    # rather than a potentially stale module binding from test collection.
+    runner = research.run_dataset
+    globals_for_run = runner.__globals__
+    monkeypatch.setitem(globals_for_run, "indicators", lambda path: object())
+    monkeypatch.setitem(globals_for_run, "_option_specs", lambda path: [])
     def signals(*args, **kwargs):
         if kwargs["decision_events"] is not None:
             kwargs["decision_events"].append({"stage": "SIGNAL", "status": "REJECTED"})
         return [event]
-    monkeypatch.setattr(research, "signal_events", signals)
-    monkeypatch.setattr(research, "capture_quotes", lambda *a, **k: None)
-    monkeypatch.setattr(research, "simulate_trade", lambda *a, **k: (None, "TEST_REJECT"))
-    baseline = research.run_dataset(
+    monkeypatch.setitem(globals_for_run, "signal_events", signals)
+    monkeypatch.setitem(globals_for_run, "capture_quotes", lambda *a, **k: None)
+    monkeypatch.setitem(globals_for_run, "simulate_trade", lambda *a, **k: (None, "TEST_REJECT"))
+    baseline = runner(
         tmp_path, start="2026-11-01T00:00:00Z",
         end="2026-11-02T00:00:00Z", scenario_set=[scenario]
     )
-    reduced = research.run_dataset(
+    reduced = runner(
         tmp_path, start="2026-11-01T00:00:00Z",
         end="2026-11-02T00:00:00Z", scenario_set=[scenario],
         retain_decision_events=False,
