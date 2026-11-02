@@ -467,27 +467,28 @@ def sync_historical_dataset(
                 (f"OI:{source_symbol}", True),
             )
         ]
+        # Submit bounded batches rather than creating every Future in memory.
+        # Results are sorted by timestamp below, so completion ordering is not
+        # part of the historical pricing or reproducibility contract.
         with ThreadPoolExecutor(max_workers=min(max_download_workers, len(requests))) as executor:
-            futures = {
-                executor.submit(
-                    _cached_candles,
-                    client,
-                    cache,
-                    requested_symbol,
-                    option_resolution,
-                    day,
-                    refresh,
-                ): (requested_symbol, day, is_oi)
-                for requested_symbol, day, is_oi in requests
-            }
-            for future in as_completed(futures):
-                requested_symbol, day, is_oi = futures[future]
-                rows, downloaded = future.result()
-                account_request(
-                    f"{requested_symbol} {option_resolution} {day.isoformat()}",
-                    downloaded,
-                )
-                (oi_rows if is_oi else option_rows).extend(rows)
+            batch_size=max_download_workers * 4
+            for batch_start in range(0,len(requests),batch_size):
+                batch=requests[batch_start:batch_start+batch_size]
+                futures={
+                    executor.submit(
+                        _cached_candles,client,cache,requested_symbol,
+                        option_resolution,day,refresh,
+                    ):(requested_symbol,day,is_oi)
+                    for requested_symbol,day,is_oi in batch
+                }
+                for future in as_completed(futures):
+                    requested_symbol,day,is_oi=futures[future]
+                    rows,downloaded=future.result()
+                    account_request(
+                        f"{requested_symbol} {option_resolution} {day.isoformat()}",
+                        downloaded,
+                    )
+                    (oi_rows if is_oi else option_rows).extend(rows)
         option_rows.sort(key=lambda row: int(row["time"]))
         oi_by_time = sorted(
             (int(row["time"]), float(row["close"]))
