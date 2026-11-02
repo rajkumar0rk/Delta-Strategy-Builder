@@ -225,6 +225,9 @@ def sync_segment(
     refresh: bool = False,
     attempts: int = 20,
     wait_seconds: float = 15.0,
+    max_download_workers: int = 4,
+    api_max_attempts: int = 4,
+    api_retry_base_seconds: float = 0.5,
 ) -> ArchiveSegment:
     if end_date_exclusive <= start_date:
         raise ValueError("end date must be later than start date")
@@ -255,7 +258,8 @@ def sync_segment(
             )
         if not contained and item.name != name:
             retained.append(item)
-    client = DeltaPublicClient("https://api.india.delta.exchange")
+    client = DeltaPublicClient("https://api.india.delta.exchange", max_attempts=api_max_attempts,
+                               retry_base_seconds=api_retry_base_seconds)
     counts = _retry(
         lambda: sync_historical_dataset(
             client,
@@ -271,6 +275,7 @@ def sync_segment(
             min_days_to_expiry=1,
             allow_same_day_expiry=False,
             refresh=refresh,
+            max_download_workers=max_download_workers,
             progress=lambda message: print(message, flush=True),
         ),
         attempts,
@@ -328,6 +333,9 @@ def main() -> None:
     sync_parser.add_argument("--refresh", action="store_true")
     sync_parser.add_argument("--attempts", type=int, default=20)
     sync_parser.add_argument("--retry-wait-seconds", type=float, default=15.0)
+    sync_parser.add_argument("--download-workers", type=int, default=4)
+    sync_parser.add_argument("--api-max-attempts", type=int, default=4)
+    sync_parser.add_argument("--api-retry-base-seconds", type=float, default=0.5)
     args = parser.parse_args()
 
     if args.command == "migrate":
@@ -368,6 +376,9 @@ def main() -> None:
         refresh=args.refresh,
         attempts=args.attempts,
         wait_seconds=args.retry_wait_seconds,
+        max_download_workers=args.download_workers,
+        api_max_attempts=args.api_max_attempts,
+        api_retry_base_seconds=args.api_retry_base_seconds,
     )
     print(f"Dataset ready: {segment.directory}")
 
