@@ -767,3 +767,60 @@ overlap due to shared Python objects; do not sum them. This is diagnostic only:
 no changes to indicators, trading decisions, configuration defaults, or
 strategy output. Full bounded-memory historical backtesting still remains
 unimplemented, and this is legacy H6 only, not the JSON strategy engine.
+
+
+### Opt-in lossless incremental H6 report records
+
+The 14-day allocation profile shows approximately 12.02 MiB of retained
+Python report objects (8,190 decisions, 1,867 trades and 1,903 execution
+attempts) while the indicator frame after trimming is approximately 0.68 MiB.
+To avoid accumulating **all scenarios' aggregate** report records in RAM,
+the legacy runner now has a separate API:
+
+```python
+from pathlib import Path
+from backtest.ema_vwap_research import (
+    run_dataset_to_streamed_report, locked_h6_scenarios,
+)
+
+manifest = run_dataset_to_streamed_report(
+    Path("backtest/data/delta-history/segments/2026-08-24_09-22"),
+    start="2026-09-01T00:00:00Z",
+    end="2026-09-15T00:00:00Z",
+    output=Path("backtest/reports/streamed-report.json"),
+    scenario_set=locked_h6_scenarios(),
+)
+```
+
+It writes trades, execution attempts, and decision records to bounded-writer
+append-only temporary JSONL files as they are produced. At successful
+completion it assembles the **complete original-shape JSON report** without
+loading all those records back into Python lists, and atomically replaces
+the destination only after successful serialization. A failed write
+preserves any existing report; temporary files are cleaned up. The API
+returns a small manifest with file path, bytes and record counts. Ordinary
+`run_dataset()` still returns its exact original Python dictionary and lists;
+this new API is explicitly opt-in. Normal defaults, safety checks and
+trading logic are unchanged. Report fields are never silently truncated.
+
+Benchmark the default in-memory report versus streamed report output,
+including writing the complete JSON file **on both sides**, in independent
+order-balanced subprocesses:
+
+```powershell
+.\.venv\Scripts\python.exe -m backtest.benchmark_report_streaming `
+  --directory backtest/data/delta-history/segments/2026-08-24_09-22 `
+  --start 2026-09-01T00:00:00Z `
+  --end 2026-09-15T00:00:00Z `
+  --output backtest/reports/report-streaming-ab `
+  --rounds 3
+```
+
+Benchmark comparison uses zero numeric tolerance and checks the complete
+report, including fees/GST and all decision records. Peak process RSS
+includes report output on both sides; the timing includes the disk I/O.
+Do not assume reduced RAM or improved speed until local results are known.
+This remains **partially bounded**: per-scenario trade metrics, source
+indicators, signal configurations, captured quotes and other report metadata
+are still in memory. It is not integrated into the general JSON Strategy
+Lab engine and is not full streaming execution.

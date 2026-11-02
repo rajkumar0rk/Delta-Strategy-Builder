@@ -19,6 +19,7 @@ from .data import OptionSpec, timestamp_ns
 from .resource_limits import LegacyResourceLimits, DecisionEventBudget, LimitedDecisionEvents
 from .option_expiry_index import OptionExpiryIndex
 from . import positional_bar_windows as bar_windows
+from .streamed_report_records import StreamedReportRecords
 
 
 UTC = timezone.utc
@@ -3147,6 +3148,7 @@ def run_dataset(
     stage_observer: Callable[[str, float], None] | None = None,
     quote_spool_observer: Callable[[dict[str, int | str]], None] | None = None,
     retention_observer: Callable[[str, dict[str, int]], None] | None = None,
+    report_record_spool: StreamedReportRecords | None = None,
 ) -> dict[str, Any]:
     # Profiling hooks are strictly opt-in and outside the returned report.
     # No instrumentation changes execution decisions or default output.
@@ -3396,9 +3398,18 @@ def run_dataset(
             )
             retained("QUOTE_CAPTURE", captured_quote_rows=captured_count)
         results: list[dict[str, Any]] = []
-        all_trades: list[dict[str, Any]] = []
-        execution_attempts: list[dict[str, Any]] = []
-        all_decision_events: list[dict[str, Any]] = []
+        all_trades = (
+            report_record_spool.sink("trades")
+            if report_record_spool is not None else []
+        )
+        execution_attempts = (
+            report_record_spool.sink("execution_attempts")
+            if report_record_spool is not None else []
+        )
+        all_decision_events = (
+            report_record_spool.sink("decision_events")
+            if report_record_spool is not None else []
+        )
 
         # Some scenarios reuse the same entry signal configuration. Do not
         # free its captured quote/event data until the FINAL consumer finishes.
@@ -3680,6 +3691,29 @@ def run_dataset(
                     quote_spool_observer(quote_store.snapshot_metrics())
             finally:
                 quote_store.close()
+
+def run_dataset_to_streamed_report(
+    directory: Path, *,
+    start: str, end: str, output: Path,
+    spool_directory: Path | None = None, **run_kwargs: Any,
+) -> dict[str, Any]:
+    """Generate an original-shape report JSON while spooling large records.
+
+    The ordinary run_dataset() still returns in-memory Python lists. This
+    separate API returns only the output manifest. It keeps scenario-local
+    trades for accurate metrics but does not accumulate every scenario's
+    trades, execution attempts or decision events in aggregate lists.
+    The output is published atomically after successful completion.
+    """
+    if "report_record_spool" in run_kwargs:
+        raise ValueError("report_record_spool is managed internally")
+    with StreamedReportRecords(spool_directory=spool_directory) as spool:
+        report = run_dataset(
+            directory, start=start, end=end,
+            report_record_spool=spool, **run_kwargs,
+        )
+        return spool.write_report(report, output)
+
 
 def write_report(report: dict[str, Any], output: Path) -> None:
     output.mkdir(parents=True, exist_ok=True)
