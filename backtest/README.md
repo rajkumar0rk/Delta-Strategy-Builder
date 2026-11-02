@@ -420,3 +420,24 @@ independently, compares their complete report content and records process
 memory/time. Matching reports do not prove the optimized code is faster;
 only repeated measurements on local historical data can establish a gain.
 No market data is downloaded.
+
+
+### Alternating parser A/B benchmark
+
+For an order-balanced test instead of fixed-order repeats, use the standalone
+offline A/B benchmark. It runs four independent MEMORY+LEGACY child processes
+per round using the alternating sequences DICT/POSITIONAL/POSITIONAL/DICT and
+POSITIONAL/DICT/DICT/POSITIONAL. All complete reports are checked against
+the first DICT report before timings are summarized.
+
+```powershell
+.\.venv\Scripts\python.exe -m backtest.benchmark_positional_ab `
+  --directory backtest/data/delta-history/segments/2026-08-24_09-22 `
+  --start 2026-09-01T00:00:00Z --end 2026-09-08T00:00:00Z `
+  --output backtest/reports/positional-ab `
+  --rounds 3
+```
+
+The saved benchmark.json includes individual runs, medians, mean times,
+trade counts, peak memory, and parity differences. The original DICT parser
+remains the default until this and longer-period tests justify promotion.
