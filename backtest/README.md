@@ -80,3 +80,31 @@ Public option bid/ask values are reconstructed estimates. A positive result can
 also be dominated by a single exceptional option move. Always report execution
 fidelity and rerun summaries without the largest winner before drawing a
 conclusion.
+
+## Legacy scalability controls (November 2026)
+
+The original historical CSV reader is streaming at the file level and no longer
+constructs a second full list before date filtering. The legacy simulator still
+materializes the selected bars, option specifications and quotes as typed tuples.
+A caller can pass `max_quote_rows` to `backtest.data.load_dataset` for explicit
+admission control; omitted means unrestricted (backward compatible).
+
+For free Delta public archive sync:
+```powershell
+python -m backtest.history_archive sync --through-yesterday `
+  --download-workers 1 --api-max-attempts 4 --api-retry-base-seconds 0.5
+```
+Existing defaults are unchanged (4 workers, 4 HTTP attempts). Lower worker
+count is preferable on a small VPS. Downloader quote data from public candles
+remains **synthetic**, not observed historical bid/ask liquidity.
+
+Check streaming CSV overhead without downloading any data:
+```powershell
+python -m backtest.benchmark_legacy_csv `
+  --path backtest/data/delta-history/segments/YOUR_SEGMENT/option_quotes.csv `
+  --max-rows 100000
+```
+This reports traced Python allocations for the scan, not a complete backtest's
+resident memory. Frozen OHLCV/market-context hypotheses remain unchanged; the
+original scientific results must not silently drift. Full-archive CPU/RSS
+benchmarking has not been performed.
