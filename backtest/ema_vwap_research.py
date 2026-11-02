@@ -1796,6 +1796,84 @@ def capture_quotes(
         quote_store.flush()
 
 
+
+def capture_quotes_sweep(
+    path: Path,
+    events: list[SignalEvent],
+    horizon_minutes: float | None = 65,
+    *,
+    quote_store=None,
+    max_active_events: int | None = None,
+) -> None:
+    """Bound active-event scanning by expiring time windows.
+
+    Requires nondecreasing CSV timestamps, verified as the file is streamed.
+    Unlike the legacy routine, does not revisit every old signal for every
+    matching symbol quote. Defaults remain on the legacy path.
+    """
+    import heapq
+    from collections import defaultdict
+    if max_active_events is not None and max_active_events < 1:
+        raise ValueError("max_active_events must be positive")
+    horizon_ns = int(horizon_minutes * NS_MINUTE) if horizon_minutes is not None else None
+    scheduled = defaultdict(list)
+    for event in events:
+        if quote_store is not None:
+            event.quotes = quote_store.view(id(event))
+        scheduled[event.option.symbol].append(event)
+    for group in scheduled.values():
+        group.sort(key=lambda e: e.timestamp_ns)
+    next_index = defaultdict(int)
+    active = defaultdict(dict)
+    expiry_heap = defaultdict(list)
+    previous_ns = None
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        for row in csv.DictReader(handle):
+            current_ns = timestamp_ns(row["timestamp"])
+            if previous_ns is not None and current_ns < previous_ns:
+                raise ValueError("QUOTE_TIMESTAMP_OUT_OF_ORDER")
+            previous_ns = current_ns
+            symbol = row["symbol"]
+            group = scheduled.get(symbol)
+            if not group:
+                continue
+            index = next_index[symbol]
+            while index < len(group) and group[index].timestamp_ns < current_ns:
+                event = group[index]
+                end_ns = min(
+                    event.timestamp_ns + horizon_ns if horizon_ns is not None else event.option.expiration_ns,
+                    event.option.expiration_ns,
+                )
+                if end_ns >= current_ns:
+                    identity = id(event)
+                    active[symbol][identity] = event
+                    heapq.heappush(expiry_heap[symbol], (end_ns, identity))
+                    if max_active_events is not None and len(active[symbol]) > max_active_events:
+                        raise ValueError("ACTIVE_EVENT_LIMIT_EXCEEDED")
+                index += 1
+            next_index[symbol] = index
+            while expiry_heap[symbol] and expiry_heap[symbol][0][0] < current_ns:
+                _, identity = heapq.heappop(expiry_heap[symbol])
+                active[symbol].pop(identity, None)
+            if not active[symbol]:
+                continue
+            quote = {
+                "timestamp_ns": float(current_ns), "bid": float(row["bid"]),
+                "ask": float(row["ask"]),
+                "bid_size": float(row.get("bid_size") or 0.0),
+                "ask_size": float(row.get("ask_size") or 0.0),
+                "volume": float(row.get("volume") or 0.0),
+                "open_interest": float(row.get("open_interest") or 0.0),
+            }
+            for event in active[symbol].values():
+                if quote_store is not None:
+                    quote_store.append(id(event), quote)
+                else:
+                    event.quotes.append(quote)
+    if quote_store is not None:
+        quote_store.flush()
+
+
 def option_true_range_observations(
     rows: Iterable[dict[str, Any]],
     candle_seconds: int = 300,
@@ -2978,6 +3056,8 @@ def run_dataset(
     quote_spool_directory: Path | None = None,
     quote_batch_size: int = 4096,
     max_captured_quotes: int | None = None,
+    quote_capture_algorithm: str = 'LEGACY',
+    max_active_events: int | None = None,
 ) -> dict[str, Any]:
     start_ns, end_ns = timestamp_ns(start), timestamp_ns(end)
     frame = indicators(directory / "underlying_bars.csv")
@@ -3070,6 +3150,8 @@ def run_dataset(
         )
         diagnostics_by_configuration[key] = diagnostics
         decision_events_by_configuration[key] = configuration_decisions
+    if quote_capture_algorithm not in {'LEGACY','SWEEP'}:
+        raise ValueError('quote_capture_algorithm must be LEGACY or SWEEP')
     if quote_capture_storage not in {"MEMORY","SQLITE"}:
         raise ValueError("quote_capture_storage must be MEMORY or SQLITE")
     quote_store=None
@@ -3079,10 +3161,11 @@ def run_dataset(
                                    batch_size=quote_batch_size,
                                    max_captured=max_captured_quotes)
     try:
-        capture_quotes(
+        (capture_quotes_sweep if quote_capture_algorithm == 'SWEEP' else capture_quotes)(
             directory / "option_quotes.csv",
             [event for events in events_by_configuration.values() for event in events],
             quote_store=quote_store,
+            **({'max_active_events':max_active_events} if quote_capture_algorithm=='SWEEP' else {}),
             horizon_minutes=(
                 None
                 if max_hold_minutes is None
