@@ -1,6 +1,6 @@
 """SQLite-backed quote snapshots for the original EMA/VWAP research runners.
 
-The CSV source is still processed in one streaming pass. The same event/quote
+The CSV source is still processed in one streaming pass. Event-local indexed\npositions permit fast arbitrary quote access and a single SQL query per slice. The same event/quote
 associations and order as the in-memory implementation are preserved; only
 the *storage* of per-event captured quotes changes. Use context cleanup after
 the research run. This is not an exchange bid/ask history generator.
@@ -24,7 +24,7 @@ class EventQuoteView(Sequence):
 
     def __iter__(self) -> Iterator[dict[str, float]]:
         cursor = self._store._con.execute(
-            "SELECT payload FROM quotes WHERE event_id=? ORDER BY seq",
+            "SELECT payload FROM quotes WHERE event_id=? ORDER BY event_seq",
             (self._event_id,),
         )
         for row in cursor:
@@ -32,7 +32,7 @@ class EventQuoteView(Sequence):
 
     def __reversed__(self) -> Iterator[dict[str, float]]:
         cursor = self._store._con.execute(
-            "SELECT payload FROM quotes WHERE event_id=? ORDER BY seq DESC",
+            "SELECT payload FROM quotes WHERE event_id=? ORDER BY event_seq DESC",
             (self._event_id,),
         )
         for row in cursor:
@@ -40,7 +40,28 @@ class EventQuoteView(Sequence):
 
     def __getitem__(self, index):
         if isinstance(index, slice):
-            return tuple(self[i] for i in range(*index.indices(len(self))))
+            positions = range(*index.indices(len(self)))
+            if not positions:
+                return ()
+            low = min(positions[0], positions[-1])
+            high = max(positions[0], positions[-1])
+            order = "ASC" if positions.step > 0 else "DESC"
+            if abs(positions.step) == 1:
+                cursor = self._store._con.execute(
+                    "SELECT payload FROM quotes "
+                    "WHERE event_id=? AND event_seq BETWEEN ? AND ? "
+                    f"ORDER BY event_seq {order}",
+                    (self._event_id, low, high),
+                )
+            else:
+                cursor = self._store._con.execute(
+                    "SELECT payload FROM quotes "
+                    "WHERE event_id=? AND event_seq BETWEEN ? AND ? "
+                    "AND (event_seq - ?) % ? = 0 "
+                    f"ORDER BY event_seq {order}",
+                    (self._event_id, low, high, low, abs(positions.step)),
+                )
+            return tuple(json.loads(row[0]) for row in cursor)
         if not isinstance(index, int):
             raise TypeError("Quote indexes must be integers or slices")
         if index < 0:
@@ -48,7 +69,7 @@ class EventQuoteView(Sequence):
         if not 0 <= index < len(self):
             raise IndexError(index)
         found = self._store._con.execute(
-            "SELECT payload FROM quotes WHERE event_id=? ORDER BY seq LIMIT 1 OFFSET ?",
+            "SELECT payload FROM quotes WHERE event_id=? AND event_seq=?",
             (self._event_id, index),
         ).fetchone()
         if found is None:
@@ -72,9 +93,12 @@ class EventQuoteStore:
         )
         self._con = sqlite3.connect(Path(self._temp.name) / "captured.sqlite3")
         self._con.execute(
-            "CREATE TABLE quotes(event_id INTEGER, seq INTEGER PRIMARY KEY, payload TEXT)"
+            "CREATE TABLE quotes(event_id INTEGER NOT NULL, "
+            "event_seq INTEGER NOT NULL, seq INTEGER PRIMARY KEY, payload TEXT)"
         )
-        self._con.execute("CREATE INDEX quote_by_event ON quotes(event_id,seq)")
+        self._con.execute(
+            "CREATE UNIQUE INDEX quote_by_event ON quotes(event_id,event_seq)"
+        )
         self._counts: dict[int, int] = {}
         self._pending = []
         self._batch_size = batch_size
@@ -90,8 +114,11 @@ class EventQuoteStore:
             raise RuntimeError("Quote spool closed")
         if self._max_captured is not None and self._total >= self._max_captured:
             raise ValueError("CAPTURED_QUOTE_LIMIT_EXCEEDED")
-        self._pending.append((event_id, self._total, json.dumps(quote,allow_nan=True)))
-        self._counts[event_id] = self._counts.get(event_id, 0) + 1
+        event_seq = self._counts.get(event_id, 0)
+        self._pending.append(
+            (event_id, event_seq, self._total, json.dumps(quote, allow_nan=True))
+        )
+        self._counts[event_id] = event_seq + 1
         self._total += 1
         if len(self._pending) >= self._batch_size:
             self.flush()
@@ -99,7 +126,7 @@ class EventQuoteStore:
     def flush(self):
         if self._pending:
             self._con.executemany(
-                "INSERT INTO quotes(event_id,seq,payload) VALUES(?,?,?)",
+                "INSERT INTO quotes(event_id,event_seq,seq,payload) VALUES(?,?,?,?)",
                 self._pending,
             )
             self._con.commit()
