@@ -2974,6 +2974,10 @@ def run_dataset(
     fee_gst_rate: float = 0.18,
     scenario_set: list[Scenario] | None = None,
     data_fidelity: str = "LOW_FIDELITY_SYNTHETIC_BBO",
+    quote_capture_storage: str = "MEMORY",
+    quote_spool_directory: Path | None = None,
+    quote_batch_size: int = 4096,
+    max_captured_quotes: int | None = None,
 ) -> dict[str, Any]:
     start_ns, end_ns = timestamp_ns(start), timestamp_ns(end)
     frame = indicators(directory / "underlying_bars.csv")
@@ -3066,59 +3070,47 @@ def run_dataset(
         )
         diagnostics_by_configuration[key] = diagnostics
         decision_events_by_configuration[key] = configuration_decisions
-    capture_quotes(
-        directory / "option_quotes.csv",
-        [event for events in events_by_configuration.values() for event in events],
-        horizon_minutes=(
-            None
-            if max_hold_minutes is None
-            or (
-                execution.mode == "SIZE_AWARE"
-                and execution.exit_fill_timeout_seconds is None
-            )
-            else
-            max_hold_minutes
-            + 5.0
-            + (
-                execution.exit_fill_timeout_seconds / 60.0
-                if execution.exit_fill_timeout_seconds is not None
-                else 0.0
-            )
-        ),
-    )
-    if any(item.min_option_true_ranges > 0 for item in selected_scenarios):
-        capture_option_true_ranges(
-            directory,
+    if quote_capture_storage not in {"MEMORY","SQLITE"}:
+        raise ValueError("quote_capture_storage must be MEMORY or SQLITE")
+    quote_store=None
+    if quote_capture_storage=="SQLITE":
+        from .event_quote_store import EventQuoteStore
+        quote_store=EventQuoteStore(directory=quote_spool_directory,
+                                   batch_size=quote_batch_size,
+                                   max_captured=max_captured_quotes)
+    try:
+        capture_quotes(
+            directory / "option_quotes.csv",
             [event for events in events_by_configuration.values() for event in events],
+            quote_store=quote_store,
+            horizon_minutes=(
+                None
+                if max_hold_minutes is None
+                or (
+                    execution.mode == "SIZE_AWARE"
+                    and execution.exit_fill_timeout_seconds is None
+                )
+                else
+                max_hold_minutes
+                + 5.0
+                + (
+                    execution.exit_fill_timeout_seconds / 60.0
+                    if execution.exit_fill_timeout_seconds is not None
+                    else 0.0
+                )
+            ),
         )
-    results: list[dict[str, Any]] = []
-    all_trades: list[dict[str, Any]] = []
-    execution_attempts: list[dict[str, Any]] = []
-    all_decision_events: list[dict[str, Any]] = []
-    for scenario in selected_scenarios:
-        scenario_key = (
-            scenario.confirmation_candles,
-            scenario.require_macd,
-            scenario.require_stoch_rsi_entry,
-            scenario.require_stoch_rsi_momentum_entry,
-            scenario.entry_start_hour_utc,
-            scenario.entry_end_hour_utc,
-            scenario.entry_windows_ist_minutes,
-            scenario.blocked_weekdays_ist,
-            scenario.entry_min_conditions,
-            scenario.min_days_to_expiry,
-            scenario.min_days_to_expiry_inclusive,
-            scenario.max_days_to_expiry,
-            scenario.pullback_reversal,
-            scenario.entry_mode,
-            scenario.momentum_breakout,
-        )
-        all_decision_events.extend(
-            {**item, "scenario": scenario.name}
-            for item in decision_events_by_configuration.get(scenario_key, [])
-        )
-        events = events_by_configuration[
-            (
+        if any(item.min_option_true_ranges > 0 for item in selected_scenarios):
+            capture_option_true_ranges(
+                directory,
+                [event for events in events_by_configuration.values() for event in events],
+            )
+        results: list[dict[str, Any]] = []
+        all_trades: list[dict[str, Any]] = []
+        execution_attempts: list[dict[str, Any]] = []
+        all_decision_events: list[dict[str, Any]] = []
+        for scenario in selected_scenarios:
+            scenario_key = (
                 scenario.confirmation_candles,
                 scenario.require_macd,
                 scenario.require_stoch_rsi_entry,
@@ -3135,112 +3127,11 @@ def run_dataset(
                 scenario.entry_mode,
                 scenario.momentum_breakout,
             )
-        ]
-        trades: list[dict[str, Any]] = []
-        rejects: dict[str, int] = {}
-        available_after_ns = start_ns
-        traded_ema_regimes: set[tuple[str, int]] = set()
-        for event in events:
-            if event.timestamp_ns <= available_after_ns:
-                all_decision_events.append({
-                    "scenario": scenario.name,
-                    "timestamp": datetime.fromtimestamp(event.timestamp_ns / 1_000_000_000, UTC).isoformat(),
-                    "stage": "EXECUTION", "status": "REJECTED",
-                    "reason": "SIGNAL_DURING_OPEN_TRADE", "direction": event.direction,
-                    "entry_type": event.entry_type, "symbol": event.option.symbol,
-                })
-                rejects["SIGNAL_DURING_OPEN_TRADE"] = (
-                    rejects.get("SIGNAL_DURING_OPEN_TRADE", 0) + 1
-                )
-                continue
-            regime_key = (event.direction, event.ema_regime_start_ns)
-            if (
-                scenario.one_trade_per_ema_regime
-                and event.ema_regime_start_ns > 0
-                and regime_key in traded_ema_regimes
-            ):
-                all_decision_events.append({
-                    "scenario": scenario.name,
-                    "timestamp": datetime.fromtimestamp(event.timestamp_ns / 1_000_000_000, UTC).isoformat(),
-                    "stage": "EXECUTION", "status": "REJECTED",
-                    "reason": "EMA_REGIME_ALREADY_TRADED", "direction": event.direction,
-                    "entry_type": event.entry_type, "symbol": event.option.symbol,
-                })
-                rejects["EMA_REGIME_ALREADY_TRADED"] = (
-                    rejects.get("EMA_REGIME_ALREADY_TRADED", 0) + 1
-                )
-                continue
-            trade, rejection = simulate_trade(
-                event,
-                frame,
-                scenario,
-                premium_budget_usd=premium_budget_usd,
-                hard_stop_percent=hard_stop_percent,
-                max_hold_minutes=max_hold_minutes,
-                exit_days_to_expiry=exit_days_to_expiry,
-                max_spread_percent=max_spread_percent,
-                min_volume=min_volume,
-                volume_quantity_multiplier=volume_quantity_multiplier,
-                execution=execution,
-                option_fee_notional_rate=option_fee_notional_rate,
-                option_fee_premium_cap_rate=option_fee_premium_cap_rate,
-                fee_gst_rate=fee_gst_rate,
-                data_fidelity=data_fidelity,
+            all_decision_events.extend(
+                {**item, "scenario": scenario.name}
+                for item in decision_events_by_configuration.get(scenario_key, [])
             )
-            if rejection:
-                all_decision_events.append({
-                    "scenario": scenario.name,
-                    "timestamp": datetime.fromtimestamp(event.timestamp_ns / 1_000_000_000, UTC).isoformat(),
-                    "stage": "EXECUTION", "status": "REJECTED",
-                    "reason": rejection, "direction": event.direction,
-                    "entry_type": event.entry_type, "symbol": event.option.symbol,
-                })
-                if event.execution_attempt is not None:
-                    execution_attempts.append({
-                        **event.execution_attempt,
-                        "trade_accepted": False,
-                        "rejection_reason": rejection,
-                    })
-                if rejection in {
-                    "EXIT_QUOTE_TOO_LATE",
-                    "INCOMPLETE_R2_COVERAGE",
-                }:
-                    resume_ns = (
-                        event.execution_attempt.get("coverage_resume_ns")
-                        if event.execution_attempt is not None
-                        else None
-                    )
-                    available_after_ns = (
-                        max(available_after_ns, int(resume_ns))
-                        if resume_ns is not None
-                        else end_ns
-                    )
-                rejects[rejection] = rejects.get(rejection, 0) + 1
-                continue
-            assert trade is not None
-            all_decision_events.append({
-                "scenario": scenario.name,
-                "timestamp": datetime.fromtimestamp(event.timestamp_ns / 1_000_000_000, UTC).isoformat(),
-                "stage": "EXECUTION", "status": "ACCEPTED",
-                "reason": "TRADE_ACCEPTED", "direction": event.direction,
-                "entry_type": event.entry_type, "symbol": event.option.symbol,
-            })
-            if event.execution_attempt is not None:
-                execution_attempts.append({
-                    **event.execution_attempt,
-                    "trade_accepted": True,
-                    "rejection_reason": "",
-                })
-            trades.append(trade)
-            all_trades.append(trade)
-            if scenario.one_trade_per_ema_regime and event.ema_regime_start_ns > 0:
-                traded_ema_regimes.add(regime_key)
-            available_after_ns = timestamp_ns(str(trade["exit_time"]))
-        results.append({
-            "scenario": asdict(scenario),
-            "metrics": _metrics(trades, starting_balance),
-            "rejects": rejects,
-            "signal_diagnostics": diagnostics_by_configuration[
+            events = events_by_configuration[
                 (
                     scenario.confirmation_candles,
                     scenario.require_macd,
@@ -3258,55 +3149,181 @@ def run_dataset(
                     scenario.entry_mode,
                     scenario.momentum_breakout,
                 )
-            ],
-            "signals_with_contract": len(events),
-        })
-    return {
-        "data_directory": str(directory.resolve()),
-        "start": start,
-        "end": end,
-        "raw_signals_with_contract": (
-            len(events_by_configuration[event_keys[0]])
-            if len(event_keys) == 1
-            else {
-                (
-                    f"confirmation={key[0]},macd={key[1]},stoch={key[2]},"
-                    f"stoch_momentum={key[3]},utc={key[4]:02d}-{key[5]:02d},"
-                    f"ist_windows={key[6]},blocked_weekdays_ist={key[7]},"
-                    f"entry_min_conditions={key[8]},dte={key[9]}-{key[11]},"
-                    f"min_dte_inclusive={key[10]},pullback_reversal={key[12]},"
-                    f"entry_mode={key[13]},momentum_breakout={key[14]}"
-                ): len(events_by_configuration[key])
-                for key in event_keys
-            }
-        ),
-        "settings": {
-            "starting_balance": starting_balance,
-            "premium_budget_usd": premium_budget_usd,
-            "hard_stop_percent": hard_stop_percent,
-            "max_hold_minutes": max_hold_minutes,
-            "exit_days_to_expiry": exit_days_to_expiry,
-            "max_spread_percent": max_spread_percent,
-            "min_volume": min_volume,
-            "volume_quantity_multiplier": volume_quantity_multiplier,
-            "execution": asdict(execution),
-            "fill_mode": "NEXT_QUOTE",
-            "fees": {
-                "option_notional_rate": option_fee_notional_rate,
-                "option_premium_cap_rate": option_fee_premium_cap_rate,
-                "gst_rate": fee_gst_rate,
-                "charged_on": "ENTRY_AND_EXIT",
-                "spot_proxy": "latest completed 5-minute BTC close",
+            ]
+            trades: list[dict[str, Any]] = []
+            rejects: dict[str, int] = {}
+            available_after_ns = start_ns
+            traded_ema_regimes: set[tuple[str, int]] = set()
+            for event in events:
+                if event.timestamp_ns <= available_after_ns:
+                    all_decision_events.append({
+                        "scenario": scenario.name,
+                        "timestamp": datetime.fromtimestamp(event.timestamp_ns / 1_000_000_000, UTC).isoformat(),
+                        "stage": "EXECUTION", "status": "REJECTED",
+                        "reason": "SIGNAL_DURING_OPEN_TRADE", "direction": event.direction,
+                        "entry_type": event.entry_type, "symbol": event.option.symbol,
+                    })
+                    rejects["SIGNAL_DURING_OPEN_TRADE"] = (
+                        rejects.get("SIGNAL_DURING_OPEN_TRADE", 0) + 1
+                    )
+                    continue
+                regime_key = (event.direction, event.ema_regime_start_ns)
+                if (
+                    scenario.one_trade_per_ema_regime
+                    and event.ema_regime_start_ns > 0
+                    and regime_key in traded_ema_regimes
+                ):
+                    all_decision_events.append({
+                        "scenario": scenario.name,
+                        "timestamp": datetime.fromtimestamp(event.timestamp_ns / 1_000_000_000, UTC).isoformat(),
+                        "stage": "EXECUTION", "status": "REJECTED",
+                        "reason": "EMA_REGIME_ALREADY_TRADED", "direction": event.direction,
+                        "entry_type": event.entry_type, "symbol": event.option.symbol,
+                    })
+                    rejects["EMA_REGIME_ALREADY_TRADED"] = (
+                        rejects.get("EMA_REGIME_ALREADY_TRADED", 0) + 1
+                    )
+                    continue
+                trade, rejection = simulate_trade(
+                    event,
+                    frame,
+                    scenario,
+                    premium_budget_usd=premium_budget_usd,
+                    hard_stop_percent=hard_stop_percent,
+                    max_hold_minutes=max_hold_minutes,
+                    exit_days_to_expiry=exit_days_to_expiry,
+                    max_spread_percent=max_spread_percent,
+                    min_volume=min_volume,
+                    volume_quantity_multiplier=volume_quantity_multiplier,
+                    execution=execution,
+                    option_fee_notional_rate=option_fee_notional_rate,
+                    option_fee_premium_cap_rate=option_fee_premium_cap_rate,
+                    fee_gst_rate=fee_gst_rate,
+                    data_fidelity=data_fidelity,
+                )
+                if rejection:
+                    all_decision_events.append({
+                        "scenario": scenario.name,
+                        "timestamp": datetime.fromtimestamp(event.timestamp_ns / 1_000_000_000, UTC).isoformat(),
+                        "stage": "EXECUTION", "status": "REJECTED",
+                        "reason": rejection, "direction": event.direction,
+                        "entry_type": event.entry_type, "symbol": event.option.symbol,
+                    })
+                    if event.execution_attempt is not None:
+                        execution_attempts.append({
+                            **event.execution_attempt,
+                            "trade_accepted": False,
+                            "rejection_reason": rejection,
+                        })
+                    if rejection in {
+                        "EXIT_QUOTE_TOO_LATE",
+                        "INCOMPLETE_R2_COVERAGE",
+                    }:
+                        resume_ns = (
+                            event.execution_attempt.get("coverage_resume_ns")
+                            if event.execution_attempt is not None
+                            else None
+                        )
+                        available_after_ns = (
+                            max(available_after_ns, int(resume_ns))
+                            if resume_ns is not None
+                            else end_ns
+                        )
+                    rejects[rejection] = rejects.get(rejection, 0) + 1
+                    continue
+                assert trade is not None
+                all_decision_events.append({
+                    "scenario": scenario.name,
+                    "timestamp": datetime.fromtimestamp(event.timestamp_ns / 1_000_000_000, UTC).isoformat(),
+                    "stage": "EXECUTION", "status": "ACCEPTED",
+                    "reason": "TRADE_ACCEPTED", "direction": event.direction,
+                    "entry_type": event.entry_type, "symbol": event.option.symbol,
+                })
+                if event.execution_attempt is not None:
+                    execution_attempts.append({
+                        **event.execution_attempt,
+                        "trade_accepted": True,
+                        "rejection_reason": "",
+                    })
+                trades.append(trade)
+                all_trades.append(trade)
+                if scenario.one_trade_per_ema_regime and event.ema_regime_start_ns > 0:
+                    traded_ema_regimes.add(regime_key)
+                available_after_ns = timestamp_ns(str(trade["exit_time"]))
+            results.append({
+                "scenario": asdict(scenario),
+                "metrics": _metrics(trades, starting_balance),
+                "rejects": rejects,
+                "signal_diagnostics": diagnostics_by_configuration[
+                    (
+                        scenario.confirmation_candles,
+                        scenario.require_macd,
+                        scenario.require_stoch_rsi_entry,
+                        scenario.require_stoch_rsi_momentum_entry,
+                        scenario.entry_start_hour_utc,
+                        scenario.entry_end_hour_utc,
+                        scenario.entry_windows_ist_minutes,
+                        scenario.blocked_weekdays_ist,
+                        scenario.entry_min_conditions,
+                        scenario.min_days_to_expiry,
+                        scenario.min_days_to_expiry_inclusive,
+                        scenario.max_days_to_expiry,
+                        scenario.pullback_reversal,
+                        scenario.entry_mode,
+                        scenario.momentum_breakout,
+                    )
+                ],
+                "signals_with_contract": len(events),
+            })
+        return {
+            "data_directory": str(directory.resolve()),
+            "start": start,
+            "end": end,
+            "raw_signals_with_contract": (
+                len(events_by_configuration[event_keys[0]])
+                if len(event_keys) == 1
+                else {
+                    (
+                        f"confirmation={key[0]},macd={key[1]},stoch={key[2]},"
+                        f"stoch_momentum={key[3]},utc={key[4]:02d}-{key[5]:02d},"
+                        f"ist_windows={key[6]},blocked_weekdays_ist={key[7]},"
+                        f"entry_min_conditions={key[8]},dte={key[9]}-{key[11]},"
+                        f"min_dte_inclusive={key[10]},pullback_reversal={key[12]},"
+                        f"entry_mode={key[13]},momentum_breakout={key[14]}"
+                    ): len(events_by_configuration[key])
+                    for key in event_keys
+                }
+            ),
+            "settings": {
+                "starting_balance": starting_balance,
+                "premium_budget_usd": premium_budget_usd,
+                "hard_stop_percent": hard_stop_percent,
+                "max_hold_minutes": max_hold_minutes,
+                "exit_days_to_expiry": exit_days_to_expiry,
+                "max_spread_percent": max_spread_percent,
+                "min_volume": min_volume,
+                "volume_quantity_multiplier": volume_quantity_multiplier,
+                "execution": asdict(execution),
+                "fill_mode": "NEXT_QUOTE",
+                "fees": {
+                    "option_notional_rate": option_fee_notional_rate,
+                    "option_premium_cap_rate": option_fee_premium_cap_rate,
+                    "gst_rate": fee_gst_rate,
+                    "charged_on": "ENTRY_AND_EXIT",
+                    "spot_proxy": "latest completed 5-minute BTC close",
+                },
+                "fidelity": data_fidelity,
+                "vwap": "HLC3 volume-weighted, reset 00:00 Asia/Kolkata",
             },
-            "fidelity": data_fidelity,
-            "vwap": "HLC3 volume-weighted, reset 00:00 Asia/Kolkata",
-        },
-        "results": results,
-        "trades": all_trades,
-        "execution_attempts": execution_attempts,
-        "decision_events": all_decision_events,
-    }
+            "results": results,
+            "trades": all_trades,
+            "execution_attempts": execution_attempts,
+            "decision_events": all_decision_events,
+        }
 
+    finally:
+        if quote_store is not None:
+            quote_store.close()
 
 def write_report(report: dict[str, Any], output: Path) -> None:
     output.mkdir(parents=True, exist_ok=True)
