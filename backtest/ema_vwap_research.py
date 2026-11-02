@@ -3125,7 +3125,7 @@ def run_dataset(
     quote_csv_parser: str = 'POSITIONAL',
     positional_bar_lookup: bool = True,
     release_completed_configurations: bool = False,
-    trim_simulation_frame: bool = False,
+    trim_simulation_frame: bool = True,
     stage_observer: Callable[[str, float], None] | None = None,
     quote_spool_observer: Callable[[dict[str, int | str]], None] | None = None,
     retention_observer: Callable[[str, dict[str, int]], None] | None = None,
