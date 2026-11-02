@@ -134,3 +134,32 @@ records, numeric metrics and source strategy parameters. Capture baseline
 reports **before** changing historical engine behavior. No actual large
 archive benchmark or before/after report pair was available to validate this
 feature during implementation.
+
+## Legacy research captured-quote spool
+
+The maintained `backtest.ema_vwap_research.run_dataset` now accepts
+`quote_capture_storage="SQLITE"`, `quote_spool_directory=Path(...)`,
+`quote_batch_size=4096`, and `max_captured_quotes=...`.
+This stores the captured per-event option quotes on disk while retaining ordering,
+indexing, and reverse iteration for the original execution logic. The historical
+CSV is scanned once; no fabricated market quotes are introduced. The default
+`MEMORY` remains unchanged. SQLite spools are removed after the run, including
+on execution errors. Be aware the event dictionary, indicator DataFrame, and
+output trade list still occupy RAM; this does not guarantee 1 GB VPS capacity.
+
+For an actual **local historical archive** comparison (without downloads):
+
+```powershell
+python -m backtest.benchmark_legacy_run `
+  --directory backtest/data/delta-history/segments/YOUR_SEGMENT `
+  --start 2026-09-01T00:00:00Z --end 2026-09-02T00:00:00Z `
+  --output backtest/reports/legacy-quote-benchmark
+```
+
+This uses the original fixed H6 research scenario in independent processes with
+`MEMORY` and `SQLITE` quote-capture modes. It writes trade-result parity,
+execution times and Linux peak process RSS to `benchmark.json`. It fails if
+trades or metrics differ. No live order placement or market data download.
+Results depend on the local dataset and do not establish universal VPS memory
+limits. SQLite reduces event-quote residency but creates disk I/O and can be
+slower than RAM for smaller tests.
