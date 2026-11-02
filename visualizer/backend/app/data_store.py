@@ -410,6 +410,42 @@ class DataStore:
             self._cache_insert(self._bars_cache,key,df)
         return df.copy(deep=False)
 
+    def _read_bars_window(
+        self, p: DatasetPaths, start: pd.Timestamp, end: pd.Timestamp,
+        chunk_rows: int,
+    ) -> pd.DataFrame:
+        """Read only the requested 5m window from large source CSVs.
+
+        The default unchunked reader/cache is untouched. In chunked mode,
+        each CSV batch is normalized with the same rules as _read_bars_raw
+        before source rows outside [start, end) are discarded. This does
+        not cap the final *selected* DataFrame; indicator calculations still
+        require the selected warmup and research range in memory.
+        """
+        if chunk_rows == 0:
+            raw = self._read_bars_raw(p)
+            return raw[(raw.timestamp >= start) & (raw.timestamp < end)]
+        if not p.bars.exists():
+            raise ValueError(
+                f'Archive segment {p.id} is missing underlying_bars.csv: {p.bars}'
+            )
+        selected: list[pd.DataFrame] = []
+        for batch in pd.read_csv(
+            p.bars, parse_dates=['timestamp'], chunksize=chunk_rows,
+        ):
+            batch['timestamp'] = pd.to_datetime(batch.timestamp, utc=True)
+            for column in ('open', 'high', 'low', 'close', 'volume'):
+                batch[column] = pd.to_numeric(batch[column], errors='coerce')
+            batch = batch.dropna(subset=['open', 'high', 'low', 'close'])
+            batch = batch[(batch.timestamp >= start) & (batch.timestamp < end)]
+            if not batch.empty:
+                selected.append(batch)
+        if not selected:
+            return pd.DataFrame(
+                columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+            )
+        return pd.concat(selected, ignore_index=True).sort_values('timestamp')
+
     def load_bars(self, p: DatasetPaths, start: str, end: str, timeframe: str = '5m') -> pd.DataFrame:
         return self.load_bars_many([p], start, end, timeframe)
 
@@ -431,11 +467,16 @@ class DataStore:
         if warmup_candles < 0:
             raise ValueError('warmup_candles cannot be negative')
         warmup = pd.Timedelta(minutes=max(0, target_minutes - 5) + warmup_candles * target_minutes)
+        # Optional laptop-oriented streaming read. Zero (default) preserves
+        # the existing mtime-keyed in-process DataFrame cache and behavior.
+        try:
+            chunk_rows = int(os.getenv('STRATEGY_LAB_BAR_READ_CHUNK_ROWS', '0'))
+        except ValueError as exc:
+            raise ValueError('STRATEGY_LAB_BAR_READ_CHUNK_ROWS must be an integer') from exc
+        if chunk_rows < 0:
+            raise ValueError('STRATEGY_LAB_BAR_READ_CHUNK_ROWS cannot be negative')
         for p in parts:
-            raw = self._read_bars_raw(p)
-            if raw.empty:
-                continue
-            chunk = raw[(raw.timestamp >= s - warmup) & (raw.timestamp < e)]
+            chunk = self._read_bars_window(p, s - warmup, e, chunk_rows)
             if len(chunk):
                 raw_parts.append(chunk)
         if not raw_parts:
@@ -456,29 +497,35 @@ class DataStore:
             # 00:05 -> 00:10 and keeps 00:10 -> 00:10, therefore those two rows
             # form the UTC 10m candle ending 00:10.
             df['_bucket_end'] = df['timestamp'].dt.ceil(f'{target_minutes}min')
-            aggregated: list[dict[str, Any]] = []
-            for bucket_end, group in df.groupby('_bucket_end', sort=True):
-                group = group.sort_values('timestamp').reset_index(drop=True)
-                if len(group) != required:
-                    continue
-                expected_times = pd.date_range(
-                    end=pd.Timestamp(bucket_end),
-                    periods=required,
-                    freq='5min',
-                    tz='UTC',
+            # Vectorized aggregation avoids allocating one DataFrame and one
+            # Python dictionary per HTF candle. Exactly N globally distinct,
+            # on-grid closes spanning the first expected time through the
+            # bucket close prove no interior 5m close is missing.
+            df['_on_grid'] = df['timestamp'].eq(
+                df['timestamp'].dt.floor('5min')
+            )
+            grouped = df.groupby('_bucket_end', sort=True).agg(
+                open=('open', 'first'),
+                high=('high', 'max'),
+                low=('low', 'min'),
+                close=('close', 'last'),
+                volume=('volume', 'sum'),
+                _count=('timestamp', 'size'),
+                _first=('timestamp', 'min'),
+                _last=('timestamp', 'max'),
+                _on_grid=('_on_grid', 'all'),
+            )
+            complete = (
+                grouped['_count'].eq(required)
+                & grouped['_on_grid']
+                & grouped['_first'].eq(
+                    grouped.index - pd.Timedelta(minutes=5 * (required - 1))
                 )
-                actual = pd.DatetimeIndex(group['timestamp'])
-                if not actual.equals(expected_times):
-                    continue
-                aggregated.append({
-                    'timestamp': pd.Timestamp(bucket_end),
-                    'open': float(group['open'].iloc[0]),
-                    'high': float(group['high'].max()),
-                    'low': float(group['low'].min()),
-                    'close': float(group['close'].iloc[-1]),
-                    'volume': float(group['volume'].sum()),
-                })
-            df = pd.DataFrame(aggregated, columns=['timestamp','open','high','low','close','volume'])
+                & grouped['_last'].eq(grouped.index)
+            )
+            df = grouped.loc[
+                complete, ['open', 'high', 'low', 'close', 'volume']
+            ].reset_index().rename(columns={'_bucket_end': 'timestamp'})
 
         # Range semantics are based on the completed target-timeframe candle timestamp.
         earliest = s - pd.Timedelta(minutes=warmup_candles * target_minutes)
