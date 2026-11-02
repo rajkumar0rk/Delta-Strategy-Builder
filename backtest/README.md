@@ -454,3 +454,23 @@ continues to use **DICT** for its original MEMORY and SQLITE baseline
 profiles, and POSITIONAL for the comparison profile, even after the
 production default changes. This change does not apply to the general
 Strategy Lab JSON backtest engine.
+
+
+### Four-way parser + candle lookup validation
+
+A previous `MEMORY_BAR_LOOKUP` benchmark accidentally passed both POSITIONAL
+and candle lookup while labeling its CSV parser DICT. The corrected benchmark
+now separates DICT, POSITIONAL-only, DICT+bar lookup, and combined
+POSITIONAL+bar lookup, and records the **actual** parser for each profile.
+
+```powershell
+.\\.venv\\Scripts\\python.exe -m backtest.benchmark_legacy_run \`
+  --directory backtest/data/delta-history/segments/2026-08-24_09-22 \`
+  --start 2026-09-01T00:00:00Z --end 2026-09-08T00:00:00Z \`
+  --output backtest/reports/combined-bar-parity \`
+  --include-positional-profile --include-bar-lookup-profile \`
+  --include-combined-profile
+```
+
+Do not promote bar lookup based on previous incorrectly labeled timing; compare
+`MEMORY_COMBINED` against `MEMORY_POSITIONAL` and require full report parity.

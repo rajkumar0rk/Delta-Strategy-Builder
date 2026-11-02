@@ -51,7 +51,8 @@ def benchmark(directory: Path,start: str,end: str,output: Path,
               indicator_chunk_rows: int | None = None,
               include_indexed_profile: bool = False,
               include_positional_profile: bool = False,
-              include_bar_lookup_profile: bool = False) -> dict:
+              include_bar_lookup_profile: bool = False,
+              include_combined_profile: bool = False) -> dict:
     output.mkdir(parents=True,exist_ok=True)
     paths={}
     measurements={}
@@ -69,6 +70,8 @@ def benchmark(directory: Path,start: str,end: str,output: Path,
         profiles.append(("MEMORY_POSITIONAL", "MEMORY", "LEGACY", False))
     if include_bar_lookup_profile:
         profiles.append(("MEMORY_BAR_LOOKUP", "MEMORY", "LEGACY", False))
+    if include_combined_profile:
+        profiles.append(("MEMORY_COMBINED", "MEMORY", "LEGACY", False))
     for key,mode,algorithm,prune in profiles:
         target=output/f"{key.lower()}-result.json"
         argv=[sys.executable,"-m","backtest.benchmark_legacy_run","--child",
@@ -76,17 +79,17 @@ def benchmark(directory: Path,start: str,end: str,output: Path,
               "--mode",mode,"--algorithm",algorithm,"--output",str(target)]
         # Freeze historical benchmark profiles to their original DICT parser;
         # the opt-in positional profile is compared independently.
-        argv += ["--quote-csv-parser", "POSITIONAL" if key == "MEMORY_POSITIONAL" else "DICT"]
+        csv_parser = "POSITIONAL" if key in {"MEMORY_POSITIONAL", "MEMORY_COMBINED"} else "DICT"
+        bar_lookup = key in {"MEMORY_BAR_LOOKUP", "MEMORY_COMBINED"}
+        argv += ["--quote-csv-parser", csv_parser]
+        if bar_lookup:
+            argv.append("--positional-bar-lookup")
         if max_captured_quotes is not None:
             argv+=["--max-captured-quotes",str(max_captured_quotes)]
         if not retain_decision_events:
             argv+=["--omit-decision-events"]
         if prune:
             argv+=["--prune-inactive-instruments"]
-        if key == "MEMORY_POSITIONAL":
-            argv += ["--quote-csv-parser", "POSITIONAL"]
-        if key == "MEMORY_BAR_LOOKUP":
-            argv += ["--quote-csv-parser", "POSITIONAL", "--positional-bar-lookup"]
         if key == "MEMORY_INDEXED":
             argv.append("--indexed-option-selection")
         if key == "SQLITE_STREAMED_INDICATORS":
@@ -99,8 +102,8 @@ def benchmark(directory: Path,start: str,end: str,output: Path,
                            "peak_process_rss_kib":artifact["peak_process_rss_kib"],
                            "capture_algorithm":algorithm,
                            "indexed_option_selection":key == "MEMORY_INDEXED",
-                           "positional_bar_lookup":key == "MEMORY_BAR_LOOKUP",
-                           "quote_csv_parser":"POSITIONAL" if key == "MEMORY_POSITIONAL" else "DICT",
+                           "positional_bar_lookup":bar_lookup,
+                           "quote_csv_parser":csv_parser,
                            "prune_inactive_instruments":prune,
                            "indicator_chunk_rows":indicator_chunk_rows if key == "SQLITE_STREAMED_INDICATORS" else None}
         target.unlink()
@@ -141,6 +144,7 @@ def main():
     p.add_argument("--indicator-chunk-rows",type=int)
     p.add_argument("--include-indexed-profile",action="store_true")
     p.add_argument("--include-bar-lookup-profile",action="store_true")
+    p.add_argument("--include-combined-profile",action="store_true")
     p.add_argument("--positional-bar-lookup",action="store_true",help=argparse.SUPPRESS)
     p.add_argument("--include-positional-profile",action="store_true")
     p.add_argument("--quote-csv-parser",choices=["DICT","POSITIONAL"],default="POSITIONAL",help=argparse.SUPPRESS)
@@ -165,7 +169,8 @@ def main():
                                    indicator_chunk_rows=a.indicator_chunk_rows,
                                    include_indexed_profile=a.include_indexed_profile,
                                    include_positional_profile=a.include_positional_profile,
-                                   include_bar_lookup_profile=a.include_bar_lookup_profile),indent=2))
+                                   include_bar_lookup_profile=a.include_bar_lookup_profile,
+                                   include_combined_profile=a.include_combined_profile),indent=2))
 
 
 if __name__=="__main__":
