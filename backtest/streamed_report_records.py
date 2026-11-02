@@ -8,6 +8,7 @@ streaming raw JSONL rows rather than loading them into another Python list.
 """
 from __future__ import annotations
 
+import csv
 import json
 import os
 from pathlib import Path
@@ -132,6 +133,52 @@ class StreamedReportRecords:
             "report_bytes": output.stat().st_size,
             "counts": {name: len(self.sink(name)) for name in _FIELDS},
         }
+
+    def write_csv_exports(self, directory: Path) -> dict[str, str]:
+        """Write legacy CSV exports from JSONL without materializing rows.
+
+        Match the historical writer's header semantics: trade keys follow
+        the first trade, whereas attempts/decisions use first-seen key order
+        across all records. Each CSV is published atomically. Existing files
+        are preserved if a specific CSV fails to serialize.
+        """
+        if self._closed:
+            raise RuntimeError("REPORT_SPOOL_CLOSED")
+        directory = Path(directory)
+        directory.mkdir(parents=True, exist_ok=True)
+        output_paths: dict[str, str] = {}
+        for field in _FIELDS:
+            sink = self.sink(field)
+            if not len(sink):
+                continue
+            if field == "trades":
+                first = next(iter(sink))
+                fieldnames = list(first)
+            else:
+                fieldnames = list(dict.fromkeys(
+                    key for record in sink for key in record
+                ))
+            output = directory / f"{field}.csv"
+            temporary: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", newline="",
+                    dir=directory, prefix=f".{field}.",
+                    suffix=".partial", delete=False,
+                ) as handle:
+                    temporary = Path(handle.name)
+                    writer = csv.DictWriter(handle, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(iter(sink))
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, output)
+                temporary = None
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+            output_paths[field] = str(output)
+        return output_paths
 
     def close(self) -> None:
         if self._closed:
