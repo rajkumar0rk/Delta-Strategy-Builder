@@ -163,3 +163,22 @@ trades or metrics differ. No live order placement or market data download.
 Results depend on the local dataset and do not establish universal VPS memory
 limits. SQLite reduces event-quote residency but creates disk I/O and can be
 slower than RAM for smaller tests.
+
+## Efficient quote/event scanning (optional)
+
+The original `run_dataset` quote capture implementation is still the default
+(`quote_capture_algorithm="LEGACY"`). The new `"SWEEP"` algorithm maintains
+a time-ordered set of active event windows per option symbol, avoiding repeated
+checks against already-expired events. It requires input CSV rows to be globally
+nondecreasing by timestamp, and **fails closed** on out-of-order input rather
+than silently sorting or changing fill order. Select
+`quote_capture_storage="SQLITE"`, `quote_capture_algorithm="SWEEP"`,
+and optionally `max_active_events=...` to combine disk-backed captured
+quotes with bounded active-signal lookup. This is still a research-only data
+model with synthetic bid/ask for public history.
+
+`python -m backtest.benchmark_legacy_run` now compares the existing
+`MEMORY+LEGACY` behavior with `SQLITE+SWEEP` using independent processes;
+it rejects trade/metric differences. No real full-archive memory benchmark was
+executed during this change, and retained indicator DataFrames/results remain
+unbounded unless their existing admission limits are configured.
