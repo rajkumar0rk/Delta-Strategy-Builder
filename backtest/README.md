@@ -182,3 +182,19 @@ model with synthetic bid/ask for public history.
 it rejects trade/metric differences. No real full-archive memory benchmark was
 executed during this change, and retained indicator DataFrames/results remain
 unbounded unless their existing admission limits are configured.
+
+
+## Optional reduced decision-log retention
+
+`backtest.ema_vwap_research.run_dataset(..., retain_decision_events=False)`
+omits detailed signal/execution decision events from the returned report and
+avoids retaining those diagnostic event dictionaries during the run. The
+default remains `True`, preserving existing reports and all rejection counts,
+trades, metrics, and entry/exit decisions. Use this opt-in mode only where
+individual decision-event audit trails are not required.
+
+This is a **partial** memory optimization: indicator DataFrames, option
+instrument metadata, selected signal events, trade results and execution
+attempts remain resident in memory. It does not establish bounded total RSS,
+nor does it guarantee operation on a 1 GB VPS. Verify any resource benefit
+against an actual local archive, without downloading new market data.
