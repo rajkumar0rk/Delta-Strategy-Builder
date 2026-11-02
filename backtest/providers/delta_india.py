@@ -19,7 +19,11 @@ UTC = timezone.utc
 
 
 class DeltaPublicClient:
-    def __init__(self, base_url: str, timeout_seconds: float = 30.0):
+    def __init__(self, base_url: str, timeout_seconds: float = 30.0, *, max_attempts: int = 4, retry_base_seconds: float = 0.5):
+        if max_attempts < 1 or retry_base_seconds < 0:
+            raise ValueError('Invalid Delta API retry settings')
+        self.max_attempts = max_attempts
+        self.retry_base_seconds = retry_base_seconds
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
 
@@ -29,20 +33,20 @@ class DeltaPublicClient:
             f"{self.base_url}{path}?{query}",
             headers={"Accept": "application/json", "User-Agent": "delta-strategy-backtest/0.1"},
         )
-        for attempt in range(4):
+        for attempt in range(self.max_attempts):
             try:
                 with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
                     payload = json.load(response)
                 break
             except urllib.error.HTTPError as exc:
                 detail = exc.read(500).decode("utf-8", errors="replace")
-                if exc.code not in {429, 500, 502, 503, 504} or attempt == 3:
+                if exc.code not in {429, 500, 502, 503, 504} or attempt == self.max_attempts - 1:
                     raise RuntimeError(f"Delta API returned HTTP {exc.code}: {detail}") from exc
             except (urllib.error.URLError, OSError) as exc:
                 if attempt == 3:
                     reason = getattr(exc, "reason", str(exc))
                     raise RuntimeError(f"Delta API request failed: {reason}") from exc
-            time.sleep(0.5 * (2 ** attempt))
+            time.sleep(min(60.0, self.retry_base_seconds * (2 ** attempt)))
         if not isinstance(payload, dict) or payload.get("success") is not True:
             raise RuntimeError(f"Delta API returned an unsuccessful response for {path}")
         return payload
@@ -335,10 +339,13 @@ def sync_historical_dataset(
     allow_same_day_expiry: bool,
     refresh: bool = False,
     progress: Callable[[str], None] | None = None,
+    max_download_workers: int = 4,
 ) -> dict[str, Any]:
     """Build an offline Delta dataset, caching each public daily response."""
     if end <= start:
         raise ValueError("end must be later than start")
+    if not 1 <= max_download_workers <= 32:
+        raise ValueError("max_download_workers must be 1..32")
     if option_resolution != "1m":
         raise ValueError("only 1m option history is currently supported")
 
@@ -460,7 +467,7 @@ def sync_historical_dataset(
                 (f"OI:{source_symbol}", True),
             )
         ]
-        with ThreadPoolExecutor(max_workers=min(4, len(requests))) as executor:
+        with ThreadPoolExecutor(max_workers=min(max_download_workers, len(requests))) as executor:
             futures = {
                 executor.submit(
                     _cached_candles,
