@@ -3099,6 +3099,10 @@ def run_dataset(
     if limits.max_option_instruments is not None:
         instrument_kwargs["max_instruments"] = limits.max_option_instruments
     specs = _option_specs(directory / "option_instruments.csv", **instrument_kwargs)
+    # Retain the final boundary guard for alternate/test loaders, in addition
+    # to the normal loader's early admission check while reading CSV rows.
+    if limits.max_option_instruments is not None and len(specs) > limits.max_option_instruments:
+        raise ValueError("LEGACY_OPTION_INSTRUMENT_LIMIT_EXCEEDED")
     selected_scenarios = scenario_set or scenarios()
     if limits.max_scenarios is not None and len(selected_scenarios) > limits.max_scenarios:
         raise ValueError("LEGACY_SCENARIO_LIMIT_EXCEEDED")
