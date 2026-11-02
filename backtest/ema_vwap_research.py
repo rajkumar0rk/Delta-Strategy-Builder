@@ -745,7 +745,24 @@ def _stoch_rsi_momentum_entry_direction(
     return ""
 
 
-def indicators(path: Path, *, indicator_chunk_rows: int | None = None) -> pd.DataFrame:
+def indicators(
+    path: Path, *,
+    indicator_chunk_rows: int | None = None,
+    compact_directions: bool = False,
+) -> pd.DataFrame:
+    # Encode categorical CALL/PUT/flat direction columns at creation time.
+    # Numeric indicators and signal booleans remain in their original dtype.
+    # This is opt-in until actual report parity and peak RSS are verified.
+    def direction_series(values: list[str], *, index: pd.Index) -> pd.Series:
+        if compact_directions:
+            categories = ("", "CALL", "PUT")
+            if any(value not in categories for value in values):
+                raise ValueError("COMPACT_DIRECTION_UNKNOWN_VALUE")
+            return pd.Series(
+                pd.Categorical(values, categories=list(categories)),
+                index=index,
+            )
+        return pd.Series(values, index=index)
     if indicator_chunk_rows is not None:
         from .legacy_indicator_stream import streamed_core_frame
         frame = streamed_core_frame(path, indicator_chunk_rows)
@@ -800,7 +817,7 @@ def indicators(path: Path, *, indicator_chunk_rows: int | None = None) -> pd.Dat
         & frame["ema20"].lt(frame["ema50"])
         & frame["rsi14"].between(30.0, 50.0, inclusive="both")
     )
-    frame["direction"] = pd.Series(
+    frame["direction"] = direction_series(
         ["CALL" if up else "PUT" if down else "" for up, down in zip(bull, bear)],
         index=frame.index,
     )
@@ -809,7 +826,7 @@ def indicators(path: Path, *, indicator_chunk_rows: int | None = None) -> pd.Dat
     )
     macd_bull = frame["macd"].gt(frame["macd_signal"])
     macd_bear = frame["macd"].lt(frame["macd_signal"])
-    frame["direction_macd"] = pd.Series(
+    frame["direction_macd"] = direction_series(
         [
             direction
             if (direction == "CALL" and up) or (direction == "PUT" and down)
@@ -823,7 +840,7 @@ def indicators(path: Path, *, indicator_chunk_rows: int | None = None) -> pd.Dat
     ].ne(frame["direction_macd"].shift(1).fillna(""))
     for source in ("direction", "direction_macd"):
         target = f"{source}_stoch"
-        frame[target] = pd.Series(
+        frame[target] = direction_series(
             [
                 _stoch_rsi_entry_direction(direction, k_value, d_value)
                 for direction, k_value, d_value in zip(
@@ -841,7 +858,7 @@ def indicators(path: Path, *, indicator_chunk_rows: int | None = None) -> pd.Dat
             frame[target].shift(1).fillna("")
         )
         momentum_target = f"{source}_stoch_momentum"
-        frame[momentum_target] = pd.Series(
+        frame[momentum_target] = direction_series(
             [
                 _stoch_rsi_momentum_entry_direction(direction, k_value, d_value)
                 for direction, k_value, d_value in zip(
@@ -3124,6 +3141,7 @@ def run_dataset(
     indexed_option_selection: bool = False,
     quote_csv_parser: str = 'POSITIONAL',
     positional_bar_lookup: bool = True,
+    compact_indicator_directions: bool = False,
     release_completed_configurations: bool = False,
     trim_simulation_frame: bool = True,
     stage_observer: Callable[[str, float], None] | None = None,
@@ -3147,8 +3165,12 @@ def run_dataset(
 
     limits = resource_limits or LegacyResourceLimits()
     start_ns, end_ns = timestamp_ns(start), timestamp_ns(end)
-    frame = (indicators(directory / "underlying_bars.csv") if indicator_chunk_rows is None
-             else indicators(directory / "underlying_bars.csv", indicator_chunk_rows=indicator_chunk_rows))
+    indicator_kwargs: dict[str, Any] = {}
+    if indicator_chunk_rows is not None:
+        indicator_kwargs["indicator_chunk_rows"] = indicator_chunk_rows
+    if compact_indicator_directions:
+        indicator_kwargs["compact_directions"] = True
+    frame = indicators(directory / "underlying_bars.csv", **indicator_kwargs)
     if limits.max_underlying_bars is not None and len(frame) > limits.max_underlying_bars:
         raise ValueError("LEGACY_UNDERLYING_BAR_LIMIT_EXCEEDED")
     completed_stage("INDICATORS_AND_CSV")

@@ -695,3 +695,37 @@ The change applies to the legacy research runner only, not the configurable
 JSON strategy engine. The indicator loader still materializes all source
 candles before frame trimming, and final trade/decision reports still grow
 with history. Full bounded-memory execution remains unimplemented.
+
+
+### Compact categorical direction columns (opt-in legacy indicator memory)
+
+The legacy `indicators()` implementation creates six direction columns with
+only three possible values: `""` (flat), `CALL`, or `PUT`. The opt-in
+`compact_directions=True` represents these fields as Pandas categoricals
+instead of storing a repeated Python string per row. CALL/PUT calculations,
+numerical EMA/RSI/ATR/MACD/Stoch RSI/VWAP values, all entry signal booleans,
+and the underlying input columns remain unchanged.
+
+For the legacy `run_dataset` pipeline, enable
+`compact_indicator_directions=True` to create compact columns during
+indicator construction. The default is **False** pending historical-report
+parity and peak-RSS measurements. This option also works with the existing
+`indicator_chunk_rows` mode, which persists EMA/RSI/ATR/MACD state across
+input batches, but still concatenates the complete frame.
+
+To compare the current POSITIONAL + candle lookup + simulation trim default
+against *only* categorical direction storage (12 order-balanced runs):
+
+```powershell
+.\.venv\Scripts\python.exe -m backtest.benchmark_positional_ab `
+  --directory backtest/data/delta-history/segments/2026-08-24_09-22 `
+  --start 2026-09-01T00:00:00Z `
+  --end 2026-09-15T00:00:00Z `
+  --output backtest/reports/indicator-compact-ab `
+  --comparison INDICATOR_COMPACT --rounds 3
+```
+
+Check both exact report parity and peak-RSS reduction before considering a
+default change. This improves repeated categorical storage, but is **not**
+bounded-memory indicator streaming: the entire source candle file still
+materializes, and the final report remains in memory.
