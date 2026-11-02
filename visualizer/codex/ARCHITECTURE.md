@@ -117,3 +117,17 @@ boundaries (not every candle), and evicted with terminal job records.
 This is **job-status persistence**, not a multi-process distributed queue,
 cross-process lock, or worker-resume mechanism. Use one API process per state
 directory. Backtest result files retain their separate storage lifecycle.
+
+
+### Phase 1 laptop historical candle loading
+
+Set `STRATEGY_LAB_BAR_READ_CHUNK_ROWS=50000` to parse archive source
+5m CSVs in bounded input chunks, retaining only the requested period and
+required warmup. Unset/zero retains the existing mtime-keyed frame cache
+and whole-file loading behavior. Higher timeframe aggregation now uses
+vectorized Pandas group-by operations while retaining complete UTC candle
+rules, duplicate removal and off-grid validation. Selected candles and
+indicator calculations still materialize in memory, so this change alone
+is not a bounded-RSS or full stateful streaming indicator engine. Test
+accuracy and performance on your laptop's historical archive before
+choosing a production default.
