@@ -4,6 +4,7 @@ import csv
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from .csv_stream import iter_csv_rows, selected_rows
 
 
 UTC = timezone.utc
@@ -71,14 +72,11 @@ def _optional_float(value: str | None) -> float | None:
     return float(value)
 
 
-def _rows(path: Path) -> list[dict[str, str]]:
-    if not path.is_file():
-        raise FileNotFoundError(f"required historical data file not found: {path}")
-    with path.open("r", encoding="utf-8", newline="") as handle:
-        return list(csv.DictReader(handle))
+def _rows(path: Path):
+    return iter_csv_rows(path)
 
 
-def load_dataset(directory: str | Path, start_ns: int, end_ns: int) -> HistoricalDataset:
+def load_dataset(directory: str | Path, start_ns: int, end_ns: int, *, max_quote_rows: int | None = None) -> HistoricalDataset:
     root = Path(directory)
     bars = tuple(
         UnderlyingBarRow(
@@ -123,8 +121,8 @@ def load_dataset(directory: str | Path, start_ns: int, end_ns: int) -> Historica
             _optional_float(row.get("open_interest")),
             row.get("source_event", ""),
         )
-        for row in _rows(root / "option_quotes.csv")
-        if start_ns <= timestamp_ns(row["timestamp"]) < end_ns
+        for _, row in selected_rows(root / "option_quotes.csv", start_ns=start_ns, end_ns=end_ns,
+                                    timestamp_ns=timestamp_ns, limit=max_quote_rows)
     )
     dataset = HistoricalDataset(bars, options, quotes)
     validate_dataset(dataset)
