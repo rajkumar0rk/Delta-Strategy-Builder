@@ -441,3 +441,16 @@ the first DICT report before timings are summarized.
 The saved benchmark.json includes individual runs, medians, mean times,
 trade counts, peak memory, and parity differences. The original DICT parser
 remains the default until this and longer-period tests justify promotion.
+
+
+### Default parser after historical A/B validation
+
+The original EMA/VWAP legacy research `run_dataset` now defaults to
+`quote_csv_parser="POSITIONAL"` for faster normalized option-quote CSV
+processing. Set `quote_csv_parser="DICT"` explicitly to restore the original
+per-record dictionary reader. Existing trading rules, fees, quote capture
+algorithms and storage modes are unchanged. The independent benchmark
+continues to use **DICT** for its original MEMORY and SQLITE baseline
+profiles, and POSITIONAL for the comparison profile, even after the
+production default changes. This change does not apply to the general
+Strategy Lab JSON backtest engine.
