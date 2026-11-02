@@ -1753,9 +1753,13 @@ def capture_quotes(
     path: Path,
     events: list[SignalEvent],
     horizon_minutes: float | None = 65,
+    *,
+    quote_store=None,
 ) -> None:
     by_symbol: dict[str, list[SignalEvent]] = {}
     for event in events:
+        if quote_store is not None:
+            event.quotes=quote_store.view(id(event))
         by_symbol.setdefault(event.option.symbol, []).append(event)
     for selected in by_symbol.values():
         selected.sort(key=lambda item: item.timestamp_ns)
@@ -1787,7 +1791,9 @@ def capture_quotes(
                 )
                 capture_end_ns = min(capture_end_ns, event.option.expiration_ns)
                 if event.timestamp_ns < current_ns <= capture_end_ns:
-                    event.quotes.append(quote)
+                    (quote_store.append(id(event),quote) if quote_store is not None else event.quotes.append(quote))
+    if quote_store is not None:
+        quote_store.flush()
 
 
 def option_true_range_observations(
