@@ -18,6 +18,7 @@ from .calculations import calculate_quantity, ema, required_entry_volume, rsi_wi
 from .data import OptionSpec, timestamp_ns
 from .resource_limits import LegacyResourceLimits, DecisionEventBudget, LimitedDecisionEvents
 from .option_expiry_index import OptionExpiryIndex
+from . import positional_bar_windows as bar_windows
 
 
 UTC = timezone.utc
@@ -2436,6 +2437,7 @@ def simulate_trade(
     option_fee_premium_cap_rate: float = 0.035,
     fee_gst_rate: float = 0.18,
     data_fidelity: str = "LOW_FIDELITY_SYNTHETIC_BBO",
+    positional_bar_lookup: bool = False,
 ) -> tuple[dict[str, Any] | None, str | None]:
     event.execution_attempt = None
     if scenario.hard_stop_fill_mode not in {"SAME_QUOTE", "NEXT_QUOTE"}:
@@ -2692,7 +2694,8 @@ def simulate_trade(
     highest_underlying = event.underlying
     lowest_underlying = event.underlying
     entry_timestamp = pd.Timestamp(entry_ns, unit="ns", tz="UTC")
-    completed_at_entry = frame.loc[:entry_timestamp]
+    completed_at_entry = (bar_windows.completed_window(frame, entry_timestamp)
+                          if positional_bar_lookup else frame.loc[:entry_timestamp])
     macd_exit_policy = scenario.macd_exit_policy
     if scenario.macd_reversal_exit and macd_exit_policy == "NONE":
         macd_exit_policy = "OR_ALL_FAIL"
@@ -2703,7 +2706,12 @@ def simulate_trade(
         if track_macd_exit and not completed_at_entry.empty else math.nan
     )
     macd_confirmation_pending = False
-    early_failure_structure = _early_failure_structure(frame, event, early_failure)
+    early_failure_structure = (
+        bar_windows.previous_structure_level(
+            frame, pd.Timestamp(event.timestamp_ns, unit="ns", tz="UTC"),
+            early_failure.structure_lookback_candles, event.direction,
+        ) if positional_bar_lookup else _early_failure_structure(frame, event, early_failure)
+    )
     post_entry_candles = 0
     consecutive_vwap_failure_candles = 0
     pending_reason = ""
@@ -2724,10 +2732,11 @@ def simulate_trade(
     if frame.empty:
         bars = frame
     else:
-        bars = frame.loc[
-            (frame.index > entry_timestamp)
-            & (frame.index <= deadline_timestamp)
-        ]
+        bars = (bar_windows.post_entry_window(frame, entry_timestamp, deadline_timestamp)
+                if positional_bar_lookup else frame.loc[
+                    (frame.index > entry_timestamp)
+                    & (frame.index <= deadline_timestamp)
+                ])
     bar_rows = [
         (int(timestamp.timestamp() * 1_000_000_000), row)
         for timestamp, row in bars.iterrows()
@@ -2945,7 +2954,9 @@ def simulate_trade(
     exit_filled_quantity = float(exit_execution["filled_quantity"])
     exit_average_fill_price = float(exit_execution["average_fill_price"])
     entry_spot = event.underlying
-    exit_spot = _latest_underlying_close(frame, exit_ns, entry_spot)
+    exit_spot = (bar_windows.latest_completed_close(
+        frame, pd.Timestamp(exit_ns, unit="ns", tz="UTC"), entry_spot,
+    ) if positional_bar_lookup else _latest_underlying_close(frame, exit_ns, entry_spot))
     entry_fee_base, entry_fee_gst, entry_fee = option_fee_components(
         spot=entry_spot,
         premium=entry,
@@ -3111,6 +3122,7 @@ def run_dataset(
     indicator_chunk_rows: int | None = None,
     indexed_option_selection: bool = False,
     quote_csv_parser: str = 'POSITIONAL',
+    positional_bar_lookup: bool = False,
     stage_observer: Callable[[str, float], None] | None = None,
 ) -> dict[str, Any]:
     # Profiling hooks are strictly opt-in and outside the returned report.
@@ -3402,6 +3414,7 @@ def run_dataset(
                     option_fee_premium_cap_rate=option_fee_premium_cap_rate,
                     fee_gst_rate=fee_gst_rate,
                     data_fidelity=data_fidelity,
+                    **({'positional_bar_lookup': True} if positional_bar_lookup else {}),
                 )
                 if rejection:
                     record_execution_decision({
