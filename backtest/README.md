@@ -990,3 +990,31 @@ retaining exact decision diagnostics, shared-scenario event ordering and
 unlimited-hold exit semantics. Until then, the full legacy backtest is
 still not end-to-end memory-bounded. No changes to the general JSON
 Strategy Lab engine or live trading.
+
+
+### Fix: Stochastic RSI strict-comparison drift in bounded chunks
+
+The first 12-run archive benchmark of the bounded H6 indicator iterator
+failed parity: 180 *reported/capped* discrepancies, concentrated in
+`direction_stoch`, `direction_macd_stoch`, and dependent entry flags
+(e.g., source CSV rows 5389, 5705, 5980, 6226). Other near-identical
+floating-point Stoch RSI K and D values can still flip a strict `K < D`
+or `D < K` comparison if their rolling means restart accumulation at
+batch boundaries. A 10,000-candle synthetic reproduction reproduced this
+effect even when numeric values passed a tight tolerance.
+
+The experimental `iter_complete_indicator_chunks()` path now keeps
+Pandas-compatible compensated rolling-mean state **continuously across
+all chunks** for both 3-bar Stoch RSI smoothers. Only the 14-bar RSI
+normalization and rolling minimum/maximum use bounded overlap, while
+the exact prior K/D values are carried for previous-row entry signals.
+The original full-frame indicator calculation remains untouched.
+Regression tests check the running mean against Pandas at exact
+floating-point equality, plus long multi-day, strict Stoch entry parity.
+
+Re-run the same `benchmark_indicator_chunks --chunk-rows 512`
+historical archive comparison to validate **all rows and entry flags**
+before connecting this generator to live signals or H6 trade execution.
+No backtest results, exchange orders or general JSON strategy engine
+settings have been changed by this fix. This is still an opt-in,
+indicator-only iterator rather than full bounded-memory trading.
