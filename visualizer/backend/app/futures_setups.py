@@ -37,6 +37,10 @@ class PullbackBreakoutPlanner:
     def step(self, index, timestamp, candle):
         cfg = self.config
         # Aggregation is completed/UTC-aligned. Never inspect a future HTF row.
+        # Expire first; a fresh HTF confirmation can then establish a new setup.
+        for side, snapshot in tuple(self.setups.items()):
+            if index - snapshot['setup_index'] > cfg.max_wait_bars:
+                del self.setups[side]
         if timestamp in self.completed.index:
             bar = self.completed.loc[timestamp]
             high, low = _finite(bar.high), _finite(bar.low)
@@ -51,12 +55,12 @@ class PullbackBreakoutPlanner:
                     if cfg.require_confirmation_color:
                         bullish = bullish and closed > opened
                         bearish = bearish and closed < opened
-                    if bullish:
+                    if bullish and 'LONG' not in self.setups:
                         stop = min(x[0] for x in self.history) - cfg.stop_buffer_atr * atr
                         if stop > 0 and stop < closed:
                             self.setups['LONG'] = {'setup_index': index, 'stop_price': stop,
                                 'level': high, 'setup_time': timestamp.isoformat()}
-                    if bearish:
+                    if bearish and 'SHORT' not in self.setups:
                         stop = max(x[1] for x in self.history) + cfg.stop_buffer_atr * atr
                         if stop > closed:
                             self.setups['SHORT'] = {'setup_index': index, 'stop_price': stop,
