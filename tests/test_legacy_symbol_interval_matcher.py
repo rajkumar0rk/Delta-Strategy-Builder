@@ -208,10 +208,9 @@ def test_invalid_symbol_index_configuration_does_not_start_capture(
     option = _spec("BTC-CE")
     with StreamingSignalQuoteJournal([option]) as journal:
         with pytest.raises(ValueError):
+            arguments = {"matching_mode": "SYMBOL_INDEX", **invalid}
             journal.capture_quotes(
-                tmp_path / "nonexistent.csv",
-                matching_mode="SYMBOL_INDEX",
-                **invalid if "matching_mode" not in invalid else invalid,
+                tmp_path / "nonexistent.csv", **arguments,
             )
         journal.add_signal("A", _event(option, 0))
 
