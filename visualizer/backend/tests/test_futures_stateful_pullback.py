@@ -152,7 +152,8 @@ def test_end_to_end_frozen_setup_risk_sized_entry_and_close(tmp_path,monkeypatch
     assert trade['entry_lifecycle_id']=='PULLBACK_SETUP'
     assert trade['quantity']>0
     assert trade['stop_price']<trade['entry_price']<trade['target_price']
-    assert trade['entry_time']>trade['entry_lifecycle_signal_time']
+    # Next 5m OPEN equals previous signal candle CLOSE in timestamp convention.
+    assert trade['entry_time']==trade['entry_lifecycle_signal_time']
     assert trade['net_pnl_usd']==pytest.approx(
         trade['gross_pnl_usd']-trade['fees_usd']+trade['funding_usd'])
     assert response['metrics']['cash_reconciliation_residual_usd']==pytest.approx(0)
