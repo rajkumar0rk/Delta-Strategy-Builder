@@ -1074,3 +1074,58 @@ trade/fee/GST/execution/report parity, nor full end-to-end bounded memory.
 The configurable JSON Strategy Lab is likewise unchanged. Full signal
 benchmark parity must pass before incrementally connecting quote and
 trade execution.
+
+
+### Phase 1 — experimental streaming signal-to-quote journal
+
+The user's 14-day locked-H6 A/B benchmark of incremental BASELINE signals
+passed all 12 runs with **zero event/decision differences** (242 non-MACD
+signals, 215 MACD signals, 908 signal decisions). Median peak RSS fell
+from 86,092 KiB to 83,182 KiB (**2.84 MiB / 3.38%**), while median
+runtime increased from 1.591s to 2.056s (**29% slower**). These figures
+cover signal evaluation, not the entire backtest.
+
+The next experimental building block,
+`backtest.legacy_signal_quote_journal.StreamingSignalQuoteJournal`,
+bridges the incremental `SignalEvent` generator to historical option
+quote capture. Signal metadata is spooled to an indexed temporary SQLite
+database with stable event IDs. A single pass of the original normalized
+`option_quotes.csv` populates the existing packed-quote SQLite adapter;
+later replay yields `SignalEvent` objects with order-preserving,
+indexable, reversible quote sequences. The bridge supports shared signal
+configurations, overlapping quote windows, duplicate quote rows and
+unsorted quote timestamps (matching the original LEGACY positional capture
+algorithm, not requiring the SWEEP monotonic assumption). Configurable
+`max_signals` and `max_captured_quotes` limits fail closed; a partial
+failed capture cannot be retried or replayed; temporary SQLite storage is
+cleaned up after exit.
+
+The existing `run_dataset` and `export_legacy_report` execution paths
+are **not** switched to this journal. It does NOT yet populate option
+true-range histories, change margin/funding assumptions, or execute any
+trades. No fee/GST/exit/P&L parity is claimed.
+
+Compare every quote for both locked-H6 BASELINE signal configurations
+against original full-frame `signal_events()` plus
+`capture_quotes_positional()`, using independent processes and a balanced
+ABBA/BAAB design:
+
+```powershell
+.\.venv\Scripts\python.exe -m backtest.benchmark_signal_quote_journal `
+  --directory backtest/data/delta-history/segments/2026-08-24_09-22 `
+  --start 2026-09-01T00:00:00Z `
+  --end 2026-09-15T00:00:00Z `
+  --output backtest/reports/signal-quote-journal-ab `
+  --chunk-rows 512 --max-session-rows 4096 --rounds 3
+```
+
+This writes `benchmark.json`, all reference event/quote JSONL records,
+and the first 30 exact mismatch descriptions if any. It checks every
+signal timestamp, option contract, direction, EMA regime and seven-field
+ordered quote record with **zero numeric tolerance**, and compares captured
+quote counts, elapsed time and peak RSS. This can be slower than the
+original in-memory capture because it prioritizes stable disk-backed
+identity and lossless parity; assess measurements before opting into any
+real backtest. The following integration milestone must preserve
+`min_option_true_ranges`, all execution decisions, costs and final reports
+before enabling quote-journal replay inside the H6 simulation runner.
