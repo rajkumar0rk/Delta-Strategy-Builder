@@ -74,7 +74,7 @@ def _compare_fields(original, replayed):
 
 def test_streamed_journal_replays_legacy_quote_capture_exactly(tmp_path):
     first, second = _spec("BTC-CE"), _spec("OTHER-CE")
-    original_a = [_event(first, 2), _event(first, 5), _event(second, 3)]
+    original_a = [_event(first, 2), _event(second, 3), _event(first, 5)]
     original_b = [_event(first, 2), _event(second, 4)]
     file = tmp_path / "quotes.csv"
     _csv(file)
@@ -165,6 +165,6 @@ def test_journal_closed_guards(tmp_path):
     with StreamingSignalQuoteJournal([]) as journal:
         pass
     with pytest.raises(RuntimeError, match="CLOSED"):
-        journal.count("x") if False else journal.snapshot_metrics()
+        journal.snapshot_metrics()
     with pytest.raises(RuntimeError, match="CLOSED"):
         list(journal.iter_events("A"))
