@@ -53,6 +53,8 @@ def _child(
     directory: Path, start: str, end: str,
     output: Path, metadata: Path, mode: str, *,
     chunk_rows: int, max_session_rows: int,
+    journal_matching: str = "SQL", bucket_minutes: int = 5,
+    max_cache_buckets: int = 256, max_cached_candidates: int = 4096,
 ):
     from .data import timestamp_ns
     from .ema_vwap_research import indicators, signal_events, _option_specs
@@ -66,6 +68,7 @@ def _child(
     specs = _option_specs(directory / "option_instruments.csv")
     start_ns, end_ns = timestamp_ns(start), timestamp_ns(end)
     counts = {}
+    lookup_metrics = None
     if mode == "FULL":
         frame = indicators(directory / "underlying_bars.csv")
         groups = {}
@@ -104,7 +107,13 @@ def _child(
                     scenario=scenario,
                 )
                 journal.add_signals(config, events, horizon_minutes=65.0)
-            journal.capture_quotes(directory / "option_quotes.csv")
+            journal.capture_quotes(
+                directory / "option_quotes.csv",
+                matching_mode=journal_matching,
+                bucket_minutes=bucket_minutes,
+                max_cache_buckets=max_cache_buckets,
+                max_cached_candidates=max_cached_candidates,
+            )
             for config, _ in _scenarios():
                 with (output / f"config-{config}-events.jsonl").open(
                     "w", encoding="utf-8"
@@ -114,7 +123,8 @@ def _child(
                             _record(event), separators=(",", ":"),
                         ) + "\n")
                 counts[config] = journal.count(config)
-            quote_rows = journal.snapshot_metrics()["captured_quote_rows"]
+            lookup_metrics = journal.snapshot_metrics()
+            quote_rows = lookup_metrics["captured_quote_rows"]
     else:
         raise ValueError("mode must be FULL or JOURNAL")
     elapsed = time.perf_counter() - start_clock
@@ -122,6 +132,7 @@ def _child(
         "mode": mode, "elapsed_seconds": elapsed,
         "peak_process_rss_kib": peak_process_rss_kib(),
         "counts": counts, "captured_quote_rows": quote_rows,
+        "lookup_metrics": lookup_metrics,
     }, allow_nan=False), encoding="utf-8")
 
 
@@ -154,6 +165,8 @@ def benchmark_signal_quote_journal(
     directory: Path, start: str, end: str, output: Path, *,
     rounds: int = 3, chunk_rows: int = 512,
     max_session_rows: int = 4096,
+    journal_matching: str = "SQL", bucket_minutes: int = 5,
+    max_cache_buckets: int = 256, max_cached_candidates: int = 4096,
 ):
     if type(rounds) is not int or not 1 <= rounds <= 10:
         raise ValueError("rounds must be an integer between 1 and 10")
@@ -161,6 +174,15 @@ def benchmark_signal_quote_journal(
         raise ValueError("chunk_rows must be a positive integer")
     if type(max_session_rows) is not int or max_session_rows < 1:
         raise ValueError("max_session_rows must be a positive integer")
+    if journal_matching not in {"SQL", "BUCKET_CACHE"}:
+        raise ValueError("journal_matching must be SQL or BUCKET_CACHE")
+    for name, value in (
+        ("bucket_minutes", bucket_minutes),
+        ("max_cache_buckets", max_cache_buckets),
+        ("max_cached_candidates", max_cached_candidates),
+    ):
+        if type(value) is not int or value < 1:
+            raise ValueError(f"{name} must be a positive integer")
     output.mkdir(parents=True, exist_ok=True)
     reference_dir = output / "reference-full"
     results = []
@@ -183,6 +205,10 @@ def benchmark_signal_quote_journal(
                 "--output", str(run_dir), "--metadata", str(metrics_file),
                 "--mode", mode, "--chunk-rows", str(chunk_rows),
                 "--max-session-rows", str(max_session_rows),
+                "--journal-matching", journal_matching,
+                "--bucket-minutes", str(bucket_minutes),
+                "--max-cache-buckets", str(max_cache_buckets),
+                "--max-cached-candidates", str(max_cached_candidates),
             ], check=True)
             metrics = json.loads(metrics_file.read_text(encoding="utf-8"))
             metrics_file.unlink()
@@ -234,6 +260,10 @@ def benchmark_signal_quote_journal(
     manifest = {
         "input": str(directory), "start": start, "end": end,
         "rounds": rounds, "comparison": "H6_SIGNAL_QUOTE_JOURNAL",
+        "journal_matching": journal_matching,
+        "bucket_minutes": bucket_minutes,
+        "max_cache_buckets": max_cache_buckets,
+        "max_cached_candidates": max_cached_candidates,
         "chunk_rows": chunk_rows,
         "max_session_rows": max_session_rows,
         "parity_passed": total == 0, "difference_count": total,
@@ -243,7 +273,10 @@ def benchmark_signal_quote_journal(
             "All H6 BASELINE signal events and their ordered normalized option "
             "bid/ask, sizes, volume and OI quote records are compared exactly, "
             "including event metadata and counts. This is an opt-in quote "
-            "replay experiment, NOT end-to-end trade, exit, fee or GST parity."
+            "replay experiment, NOT end-to-end trade, exit, fee or GST parity. "
+            "SQL preserves original per-quote database matching; BUCKET_CACHE "
+            "uses bounded cached candidate windows with original SQL fallback "
+            "for dense time buckets. Original run_dataset remains unchanged."
         ),
     }
     (output / "benchmark.json").write_text(json.dumps(
@@ -263,6 +296,11 @@ def main():
     parser.add_argument("--rounds", type=int, default=3)
     parser.add_argument("--chunk-rows", type=int, default=512)
     parser.add_argument("--max-session-rows", type=int, default=4096)
+    parser.add_argument("--journal-matching", choices=["SQL", "BUCKET_CACHE"],
+                        default="SQL")
+    parser.add_argument("--bucket-minutes", type=int, default=5)
+    parser.add_argument("--max-cache-buckets", type=int, default=256)
+    parser.add_argument("--max-cached-candidates", type=int, default=4096)
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--mode", choices=["FULL", "JOURNAL"], help=argparse.SUPPRESS)
     parser.add_argument("--metadata", type=Path, help=argparse.SUPPRESS)
@@ -275,12 +313,20 @@ def main():
             args.output, args.metadata, args.mode,
             chunk_rows=args.chunk_rows,
             max_session_rows=args.max_session_rows,
+            journal_matching=args.journal_matching,
+            bucket_minutes=args.bucket_minutes,
+            max_cache_buckets=args.max_cache_buckets,
+            max_cached_candidates=args.max_cached_candidates,
         )
     else:
         print(json.dumps(benchmark_signal_quote_journal(
             args.directory, args.start, args.end, args.output,
             rounds=args.rounds, chunk_rows=args.chunk_rows,
             max_session_rows=args.max_session_rows,
+            journal_matching=args.journal_matching,
+            bucket_minutes=args.bucket_minutes,
+            max_cache_buckets=args.max_cache_buckets,
+            max_cached_candidates=args.max_cached_candidates,
         ), indent=2, allow_nan=False))
 
 
