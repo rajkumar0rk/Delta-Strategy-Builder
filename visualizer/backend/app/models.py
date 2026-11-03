@@ -497,8 +497,31 @@ def find_condition_for_validation(group: RuleGroup, condition_id: str) -> Condit
     return None
 
 
+class FuturesPullbackConfig(BaseModel):
+    """Opt-in, closed-candle 15m confirmation -> 5m breakout research mode."""
+    enabled: bool = False
+    setup_timeframe: Literal["15m", "30m", "1h"] = "15m"
+    ema_indicator_id: str = "ema20_15m"
+    atr_indicator_id: str = "atr14_15m"
+    volume_indicator_id: str = "volumeSMA20_5m"
+    require_touch: bool = True
+    require_confirmation_color: bool = True
+    require_volume: bool = True
+    volume_multiplier: float = Field(default=1.0, ge=0, le=100)
+    max_wait_bars: int = Field(default=6, ge=1, le=288)
+    swing_lookback_bars: int = Field(default=3, ge=1, le=200)
+    stop_buffer_atr: float = Field(default=0.1, ge=0, le=20)
+    breakout_buffer_points: float = Field(default=0, ge=0)
+    reward_r_multiple: float = Field(default=2.0, gt=0, le=100)
+    size_mode: Literal["RISK_EQUITY", "FIXED"] = "RISK_EQUITY"
+    equity_risk_percent: float = Field(default=0.5, gt=0, le=100)
+    max_lots: int = Field(default=100000, ge=1, le=100000)
+    max_estimated_risk_multiple: float = Field(default=1.0, ge=1, le=10)
+
+
 class FuturesConfig(BaseModel):
     """BTCUSD perpetual research assumptions, never an exchange-margin oracle."""
+    pullback: FuturesPullbackConfig = Field(default_factory=FuturesPullbackConfig)
     symbol: Literal["BTCUSD"] = "BTCUSD"
     contract_btc: float = Field(default=0.001, gt=0)
     quantity_lots: int = Field(default=1, ge=1, le=100000)
@@ -632,6 +655,25 @@ class StrategyConfig(BaseModel):
                     f"Indicator '{indicator.id}' timeframe {indicator.timeframe} must be an exact multiple "
                     f"of strategy timeframe {self.timeframe}"
                 )
+        if self.market_type == "FUTURES" and self.futures.pullback.enabled:
+            cfg = self.futures.pullback
+            if self.timeframe != "5m":
+                raise ValueError("Futures pullback execution requires 5m strategy timeframe")
+            if self.pattern_trade.enabled:
+                raise ValueError("Futures pullback and options pattern modes are mutually exclusive")
+            available = {item.id: item for item in self.indicators}
+            for name, kinds, expected_tf in (
+                (cfg.ema_indicator_id, {"EMA"}, cfg.setup_timeframe),
+                (cfg.atr_indicator_id, {"ATR"}, cfg.setup_timeframe),
+                (cfg.volume_indicator_id, {"VOLUME_SMA"}, self.timeframe),
+            ):
+                indicator = available.get(name)
+                if indicator is None or indicator.kind not in kinds or indicator.timeframe not in (expected_tf, "strategy" if expected_tf == self.timeframe else "") or indicator.chart_only:
+                    raise ValueError(f"Futures pullback operand {name!r} must be non-chart-only {sorted(kinds)} at {expected_tf}")
+            if cfg.max_wait_bars * tf_minutes[self.timeframe] > tf_minutes[cfg.setup_timeframe] * 2:
+                raise ValueError("Futures pullback max_wait_bars cannot exceed two setup candles")
+            if self.futures.stop_loss_percent is not None or self.futures.take_profit_percent is not None:
+                raise ValueError("Disable legacy fixed-percent futures stop/target when futures.pullback.enabled")
         if self.pattern_trade.enabled:
             if self.timeframe != "5m":
                 raise ValueError("Pattern trade execution requires strategy timeframe 5m")
