@@ -88,6 +88,7 @@ class StreamingSignalQuoteJournal:
         self._max_signals = max_signals
         self._total_signals = 0
         self._captured = False
+        self._capture_started = False
         self._closed = False
 
     def __enter__(self) -> "StreamingSignalQuoteJournal":
@@ -102,7 +103,7 @@ class StreamingSignalQuoteJournal:
     ) -> None:
         if self._closed:
             raise RuntimeError("SIGNAL_QUOTE_JOURNAL_CLOSED")
-        if self._captured:
+        if self._capture_started:
             raise RuntimeError("SIGNAL_QUOTE_JOURNAL_ALREADY_CAPTURED")
         if not isinstance(config, str) or not config:
             raise ValueError("config must be nonempty")
@@ -160,8 +161,10 @@ class StreamingSignalQuoteJournal:
         """
         if self._closed:
             raise RuntimeError("SIGNAL_QUOTE_JOURNAL_CLOSED")
-        if self._captured:
+        if self._capture_started:
             raise RuntimeError("SIGNAL_QUOTE_JOURNAL_ALREADY_CAPTURED")
+        # A partial failed capture cannot safely be replayed or retried.
+        self._capture_started = True
         self._database.commit()
         for symbol, row, columns in _quote_rows(path):
             if symbol not in self._symbols:
