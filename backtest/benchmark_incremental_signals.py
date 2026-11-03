@@ -171,7 +171,10 @@ def compare_jsonl(reference: Path, candidate: Path, *, max_examples=30):
     ) as right:
         for index, (old, new) in enumerate(zip_longest(left, right), start=1):
             if old is None or new is None:
-                differences.append(f"row {index}: row count differs")
+                message = f"row {index}: row count differs"
+                differences.append(message)
+                if len(samples) < max_examples:
+                    samples.append(message)
                 break
             original = json.loads(old)
             updated = json.loads(new)
@@ -234,7 +237,7 @@ def benchmark_incremental_signals(
                     )
                     count_diff += delta_count
                     differences.extend(f"{label}/{filename}: {msg}" for msg in sample)
-            if reading["counts"] != runs[0]["counts"]:
+            if runs and reading["counts"] != runs[0]["counts"]:
                 count_diff += 1
                 differences.append(f"{label}: event/decision/diagnostic counts changed")
             runs.append({
