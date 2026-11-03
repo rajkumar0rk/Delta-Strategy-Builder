@@ -903,3 +903,35 @@ tolerance, and reports wall time and process peak RSS independently. The
 original `REPORT_STORAGE` comparison remains available as the default.
 This is the locked H6 research path, not the configurable Strategy Lab
 JSON engine.
+
+
+### Promoted packed quote storage for the file-oriented locked H6 exporter
+
+On the 14-day local archive, 12 independent `QUOTE_STORAGE` benchmark
+executions verified **zero complete-report differences**, including 1,867
+trades, 1,903 execution attempts, 8,190 decision events and identical
+9,380,701-byte report files. Median peak RSS fell from 88,294 KiB to
+84,774 KiB (**3,520 KiB / 3.44 MiB / 3.99% less**). Median execution time
+fell from 24.765s to 23.731s (4.17%), but per-run timing varied widely;
+do not assume a dependable speed improvement.
+
+Accordingly, the *new* `python -m backtest.export_legacy_report`
+file-oriented locked H6 exporter now defaults to both
+`--storage STREAMED` and `--quote-storage PACKED_MEMORY`. The JSON and
+legacy CSV outputs retain the original content and fields. To keep streamed
+reports but restore original in-memory quote dictionaries, add:
+
+```powershell
+--quote-storage MEMORY
+```
+
+To restore the complete original report-and-quote memory mode, use
+`--storage MEMORY` (which automatically uses dictionary quotes).
+The export command prints the selected `quote_storage` in its manifest
+for auditing. Unlike this *specific* export command,
+`run_dataset()` continues to default to
+`quote_capture_storage="MEMORY"` and returns a complete Python report
+dictionary. The existing matrix research CLI and general JSON Strategy
+Lab engine have **not** changed. This optimization alone is not
+fully bounded-memory streaming: indicators, signals, and scenario trade
+metrics remain retained.
