@@ -100,3 +100,59 @@ def test_disabled_feature_preserves_legacy_futures_defaults():
     assert not config.futures.pullback.enabled
     assert config.futures.stop_loss_percent==1
     assert config.futures.take_profit_percent==2
+
+
+def test_end_to_end_frozen_setup_risk_sized_entry_and_close(tmp_path,monkeypatch):
+    import csv
+    from app.models import BacktestRequest
+    from app.engine import run_backtest
+    root=tmp_path/'data'
+    root.mkdir()
+    monkeypatch.setenv('STRATEGY_LAB_DATA_ROOT',str(root))
+    monkeypatch.setenv('STRATEGY_LAB_RESULT_ROOT',str(tmp_path/'results'))
+    monkeypatch.setenv('STRATEGY_LAB_CACHE_ROOT',str(tmp_path/'cache'))
+    times=pd.date_range('2026-01-01T00:05:00Z',periods=90,freq='5min')
+    values=[]
+    for i,t in enumerate(times):
+        candle={'timestamp':t.isoformat(),'open':100,'high':102,'low':99,'close':101,'volume':100}
+        if i in (60,61,62):
+            candle.update(high=103,low=99,close=102)
+        elif i==63:
+            candle.update(high=105,low=99,close=104,volume=300)
+        elif i==64:
+            candle.update(open=104,high=120,low=104,close=115)
+        values.append(candle)
+    source=root/'sample'
+    source.mkdir()
+    with (source/'underlying_bars.csv').open('w',newline='') as fh:
+        writer=csv.DictWriter(fh,fieldnames=list(values[0]))
+        writer.writeheader()
+        writer.writerows(values)
+    spec={
+        'market_type':'FUTURES','direction_mode':'CALL','timeframe':'5m',
+        'indicators':[
+            {'id':'ema20_15m','kind':'EMA','timeframe':'15m','params':{'period':20}},
+            {'id':'atr14_15m','kind':'ATR','timeframe':'15m','params':{'period':14}},
+            {'id':'volumeSMA20_5m','kind':'VOLUME_SMA','timeframe':'5m','params':{'period':20}},
+        ],
+        'call_entry':{'conditions':[{'id':'trend','left':'close','operator':'GT','value':0}]},
+        'futures':{
+            'funding_mode':'EXCLUDE_WITH_WARNING','stop_loss_percent':None,
+            'take_profit_percent':None,'pullback':{'enabled':True,'swing_lookback_bars':3,
+               'equity_risk_percent':0.5}},
+        'risk':{'starting_balance_usd':100,'max_hold_minutes':120}
+    }
+    strategy=StrategyConfig.model_validate(spec)
+    response=run_backtest(BacktestRequest(
+        dataset_id='sample',start=times[0].isoformat(),
+        end=(times[-1]+pd.Timedelta(minutes=5)).isoformat(),
+        strategy=strategy))
+    assert response['metrics']['trades']>=1, response['metrics']
+    trade=response['trades'][0]
+    assert trade['entry_lifecycle_id']=='PULLBACK_SETUP'
+    assert trade['quantity']>0
+    assert trade['stop_price']<trade['entry_price']<trade['target_price']
+    assert trade['entry_time']>trade['entry_lifecycle_signal_time']
+    assert trade['net_pnl_usd']==pytest.approx(
+        trade['gross_pnl_usd']-trade['fees_usd']+trade['funding_usd'])
+    assert response['metrics']['cash_reconciliation_residual_usd']==pytest.approx(0)
