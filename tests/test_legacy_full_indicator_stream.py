@@ -18,7 +18,8 @@ def _dataset(path, *, rows=675):
     )
     volumes = rng.uniform(0.5, 500.0, rows)
     # A missing complete candle must be dropped identically by both paths.
-    volumes[78] = np.nan
+    if rows > 78:
+        volumes[78] = np.nan
     pd.DataFrame({
         "timestamp": timestamps, "open": closes - 3,
         "high": closes + 7, "low": closes - 11, "close": closes,
