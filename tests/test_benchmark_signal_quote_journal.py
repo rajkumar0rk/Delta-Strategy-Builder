@@ -83,3 +83,60 @@ def test_journal_benchmark_rejects_bad_settings(tmp_path, parameter, value):
             tmp_path, "a", "b", tmp_path / "out",
             **{parameter:value},
         )
+
+
+def test_bucket_matching_benchmark_passes_config_into_child_process(
+    monkeypatch, tmp_path,
+):
+    from backtest import benchmark_signal_quote_journal as benchmark
+    modes_and_flags = []
+
+    def fake_run(argv, check):
+        assert check
+        mode = argv[argv.index("--mode") + 1]
+        flag = argv[argv.index("--journal-matching") + 1]
+        assert flag == "BUCKET_CACHE"
+        assert argv[argv.index("--bucket-minutes") + 1] == "10"
+        assert argv[argv.index("--max-cache-buckets") + 1] == "2"
+        assert argv[argv.index("--max-cached-candidates") + 1] == "3"
+        modes_and_flags.append((mode, flag))
+        root = Path(argv[argv.index("--output") + 1])
+        for name in ("0", "1"):
+            _write(root / f"config-{name}-events.jsonl")
+        metadata = Path(argv[argv.index("--metadata") + 1])
+        metadata.write_text(json.dumps({
+            "mode": mode, "elapsed_seconds": 5.0,
+            "peak_process_rss_kib": 81000,
+            "counts": {"0": 1, "1": 1},
+            "captured_quote_rows": 2,
+            "lookup_metrics": {
+                "matching_mode": flag, "db_queries": 1,
+            } if mode == "JOURNAL" else None,
+        }), encoding="utf-8")
+
+    monkeypatch.setattr(benchmark.subprocess, "run", fake_run)
+    result = benchmark_signal_quote_journal(
+        tmp_path, "2026-09-01", "2026-09-15", tmp_path / "out",
+        rounds=1, journal_matching="BUCKET_CACHE",
+        bucket_minutes=10, max_cache_buckets=2,
+        max_cached_candidates=3,
+    )
+    assert result["parity_passed"]
+    assert result["journal_matching"] == "BUCKET_CACHE"
+    assert [item[0] for item in modes_and_flags] == [
+        "FULL", "JOURNAL", "JOURNAL", "FULL",
+    ]
+    assert result["measurements"][1]["lookup_metrics"]["db_queries"] == 1
+
+
+@pytest.mark.parametrize("settings", [
+    {"journal_matching": "BAD"},
+    {"bucket_minutes": 0}, {"bucket_minutes": 1.5},
+    {"max_cache_buckets": 0}, {"max_cache_buckets": True},
+    {"max_cached_candidates": -1}, {"max_cached_candidates": False},
+])
+def test_journal_benchmark_rejects_invalid_match_settings(tmp_path, settings):
+    with pytest.raises(ValueError):
+        benchmark_signal_quote_journal(
+            tmp_path, "a", "b", tmp_path / "out", **settings,
+        )
