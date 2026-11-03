@@ -1018,3 +1018,59 @@ before connecting this generator to live signals or H6 trade execution.
 No backtest results, exchange orders or general JSON strategy engine
 settings have been changed by this fix. This is still an opt-in,
 indicator-only iterator rather than full bounded-memory trading.
+
+
+### Phase 1 — experimental incremental H6 BASELINE signals
+
+The bounded full-indicator iterator passed a user-run 8,790-candle,
+12-execution historical benchmark with zero indicator differences (including
+strict Stochastic RSI entry signals), but was slower and used more *peak
+process RSS* than full-frame indicators on that small data sample.
+Do **not** replace the ordinary H6 execution path solely because an
+indicator iterator retains fewer bars.
+
+`backtest.legacy_incremental_signals.iter_incremental_baseline_signals`
+is a new **opt-in signal-only generator**. It consumes completed indicator
+chunks and tracks the previous direction, EMA-regime start, and a bounded
+queue of pending confirmation candles. It yields one qualified signal at
+a time, retaining no complete historical frame or signal list. The
+`decision_events` argument accepts an append-only sink to preserve the
+legacy signal decision/rejection reasons and their original order.
+
+Only `entry_mode=BASELINE` with pullback and momentum-breakout modes
+disabled is supported; `ZIGZAG`, `MOMENTUM` and `BOTH` explicitly
+raise rather than silently using a different strategy. The generator
+supports original MACD confirmation, 1/2/3 entry conditions, Stoch RSI
+entry/momentum filtering, confirmation candles, UTC and IST entry
+sessions, blocked weekdays, option expiry selection, and EMA regimes.
+It does **not** change any existing runner entry point.
+
+Benchmark the independent original full-frame
+`signal_events()` reference against streamed indicator chunks and
+incremental signal evaluation for both shared locked-H6 signal
+configurations (MACD off/on) over the same archive:
+
+```powershell
+.\.venv\Scripts\python.exe -m backtest.benchmark_incremental_signals `
+  --directory backtest/data/delta-history/segments/2026-08-24_09-22 `
+  --start 2026-09-01T00:00:00Z `
+  --end 2026-09-15T00:00:00Z `
+  --output backtest/reports/incremental-h6-signals-ab `
+  --chunk-rows 512 --max-session-rows 4096 --rounds 3
+```
+
+The 12 independent ABBA/BAAB runs write complete candidate and reference
+signal/decision JSONL files, compare every signal timestamp (nanoseconds
+exact), option selection, EMA regime start, event ordering, rejections and
+decision diagnostics. Floating-point measurements compare with tight
+`rtol=1e-10, atol=1e-9`; boolean and textual fields are exact.
+They record median wall-clock time and peak process RSS. No live data
+download, exchange trading or order placement occurs.
+
+**Important limitations:** The general H6 `run_dataset()` still uses
+its original full-frame signal path. This milestone is not integrated
+into option quote capture/trade simulation; it does **not** establish
+trade/fee/GST/execution/report parity, nor full end-to-end bounded memory.
+The configurable JSON Strategy Lab is likewise unchanged. Full signal
+benchmark parity must pass before incrementally connecting quote and
+trade execution.
