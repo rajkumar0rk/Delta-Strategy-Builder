@@ -935,3 +935,58 @@ dictionary. The existing matrix research CLI and general JSON Strategy
 Lab engine have **not** changed. This optimization alone is not
 fully bounded-memory streaming: indicators, signals, and scenario trade
 metrics remain retained.
+
+
+### Phase 1 — bounded indicator-only chunk iterator (experimental)
+
+The initial legacy indicator engine still builds a full historical DataFrame.
+The new `backtest.legacy_full_indicator_stream.iter_complete_indicator_chunks`
+is an **opt-in** bounded-memory iterator that generates the complete H6
+indicator schema from sequential CSV chunks without concatenating them.
+It preserves recursive EMA9/20/50, Wilder RSI14, ATR14, MACD/signal, and
+calculates Stochastic RSI K/D, prior-20-volume median, IST session VWAP,
+six CALL/PUT direction fields and all six entry/crossover flags.
+
+It carries the current IST VWAP session plus 20 preceding source bars to
+preserve rolling calculations and entry-state continuity. The maximum
+working context is explicitly bounded by `chunk_rows + max_session_rows +
+20` rows (with a configurable fail-closed per-session limit, default 4096).
+Timestamps must be timezone-aware, in chronological order. No candles or
+decision records are silently dropped, reordered or rounded. Numeric
+parity is checked using the same tight tolerance as the existing streamed
+core indicators, and direction/entry flags are compared exactly.
+
+```python
+from pathlib import Path
+from backtest.legacy_full_indicator_stream import iter_complete_indicator_chunks
+
+for frame in iter_complete_indicator_chunks(
+    Path("backtest/data/delta-history/segments/2026-08-24_09-22/underlying_bars.csv"),
+    chunk_rows=512, max_session_rows=4096,
+):
+    # Consume each complete, indicator-enriched chunk and release it before
+    # requesting the next. Do not concatenate chunks to retain the saving.
+    print(frame.index[0], frame.index[-1], len(frame))
+```
+
+Benchmark complete indicator rows, all entry flags, process peak RSS and
+execution time against the original full-frame baseline (12 independent
+ABBA/BAAB runs, both modes write CSV outputs to account for I/O):
+
+```powershell
+.\.venv\Scripts\python.exe -m backtest.benchmark_indicator_chunks `
+  --directory backtest/data/delta-history/segments/2026-08-24_09-22 `
+  --output backtest/reports/full-indicator-chunks-ab `
+  --chunk-rows 512 --max-session-rows 4096 --rounds 3
+```
+
+The validator checks every output row, numerical fields with
+`rtol=1e-10, atol=1e-9` and timestamps/directions/booleans exactly.
+The benchmark is **indicator-only**. It does **not** claim final trade/fee
+report parity, and the normal `indicators()` or `run_dataset()` APIs
+have not switched to this generator. The next milestone is connecting
+these complete chunks to genuinely incremental signal evaluation while
+retaining exact decision diagnostics, shared-scenario event ordering and
+unlimited-hold exit semantics. Until then, the full legacy backtest is
+still not end-to-end memory-bounded. No changes to the general JSON
+Strategy Lab engine or live trading.
