@@ -95,11 +95,11 @@ class CoreIndicatorState:
         return ema9, ema20, ema50, rsi, atr, macd, self.macd_signal
 
 
-def streamed_core_frame(path: Path, chunk_rows: int) -> pd.DataFrame:
+def iter_streamed_core_chunks(path: Path, chunk_rows: int):
+    """Yield core-indicator CSV batches without accumulating them."""
     if type(chunk_rows) is not int or chunk_rows < 1:
         raise ValueError("indicator_chunk_rows must be a positive integer")
     state = CoreIndicatorState()
-    parts: list[pd.DataFrame] = []
     last_timestamp: pd.Timestamp | None = None
     for chunk in pd.read_csv(path, parse_dates=["timestamp"], chunksize=chunk_rows):
         chunk = chunk.set_index("timestamp")
@@ -129,7 +129,12 @@ def streamed_core_frame(path: Path, chunk_rows: int) -> pd.DataFrame:
             ("ema9", "ema20", "ema50", "rsi14", "atr14", "macd", "macd_signal")
         ):
             chunk[name] = [row[pos] for row in outputs]
-        parts.append(chunk)
+        yield chunk
+
+
+def streamed_core_frame(path: Path, chunk_rows: int) -> pd.DataFrame:
+    """Compatibility adapter: intentionally materializes all yielded chunks."""
+    parts = list(iter_streamed_core_chunks(path, chunk_rows))
     if not parts:
         # Keep the familiar schema so a downstream no-data error is descriptive.
         empty = pd.read_csv(path, nrows=0, parse_dates=["timestamp"]).set_index("timestamp")
