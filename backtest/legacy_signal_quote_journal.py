@@ -90,6 +90,10 @@ class StreamingSignalQuoteJournal:
         self._captured = False
         self._capture_started = False
         self._closed = False
+        self._matching_metrics: dict[str, int | str] = {
+            "matching_mode": "SQL", "db_queries": 0,
+            "eligible_quote_rows": 0,
+        }
 
     def __enter__(self) -> "StreamingSignalQuoteJournal":
         return self
@@ -152,7 +156,13 @@ class StreamingSignalQuoteJournal:
         for event in events:
             self.add_signal(config, event, horizon_minutes=horizon_minutes)
 
-    def capture_quotes(self, path: Path) -> None:
+    def capture_quotes(
+        self, path: Path, *,
+        matching_mode: str = "SQL",
+        bucket_minutes: int = 5,
+        max_cache_buckets: int = 256,
+        max_cached_candidates: int = 4096,
+    ) -> None:
         """Capture event-local quote rows in source CSV order, including duplicates.
 
         Like LEGACY positional capture, this does not require globally sorted
@@ -163,28 +173,58 @@ class StreamingSignalQuoteJournal:
             raise RuntimeError("SIGNAL_QUOTE_JOURNAL_CLOSED")
         if self._capture_started:
             raise RuntimeError("SIGNAL_QUOTE_JOURNAL_ALREADY_CAPTURED")
+        if matching_mode not in {"SQL", "BUCKET_CACHE"}:
+            raise ValueError("matching_mode must be SQL or BUCKET_CACHE")
+        from .legacy_quote_bucket_matcher import BoundedQuoteBucketMatcher
+        matcher = (
+            BoundedQuoteBucketMatcher(
+                self._database,
+                bucket_minutes=bucket_minutes,
+                max_cache_buckets=max_cache_buckets,
+                max_cached_candidates=max_cached_candidates,
+            )
+            if matching_mode == "BUCKET_CACHE" else None
+        )
         # A partial failed capture cannot safely be replayed or retried.
         self._capture_started = True
         self._database.commit()
-        for symbol, row, columns in _quote_rows(path):
-            if symbol not in self._symbols:
-                continue
-            current_ns = timestamp_ns(_required(row, columns, "timestamp"))
-            matching = self._database.execute(
-                "SELECT event_id FROM events "
-                "WHERE symbol=? AND timestamp_ns < ? AND end_ns >= ? "
-                "ORDER BY event_id",
-                (symbol, current_ns, current_ns),
+        eligible_rows = 0
+        sql_queries = 0
+        try:
+            for symbol, row, columns in _quote_rows(path):
+                if symbol not in self._symbols:
+                    continue
+                current_ns = timestamp_ns(_required(row, columns, "timestamp"))
+                eligible_rows += 1
+                if matcher is None:
+                    # Preserve the original independent SQL oracle.
+                    matching_ids = (
+                        result[0] for result in self._database.execute(
+                            "SELECT event_id FROM events "
+                            "WHERE symbol=? AND timestamp_ns < ? AND end_ns >= ? "
+                            "ORDER BY event_id",
+                            (symbol, current_ns, current_ns),
+                        )
+                    )
+                    sql_queries += 1
+                else:
+                    matching_ids = matcher.matching_event_ids(symbol, current_ns)
+                # Decode only if a signal consumes this quote; input arrival
+                # order and duplicate quote rows are never changed.
+                quote = None
+                for event_id in matching_ids:
+                    if quote is None:
+                        quote = _payload(row, columns, current_ns)
+                    self._quotes.append(event_id, quote)
+            self._quotes.flush()
+            self._captured = True
+        finally:
+            self._matching_metrics = (
+                matcher.snapshot_metrics()
+                if matcher is not None
+                else {"matching_mode": "SQL", "db_queries": sql_queries}
             )
-            # Parse the original seven-field normalized quote only when at
-            # least one event actually consumes it, as with the legacy path.
-            quote = None
-            for (event_id,) in matching:
-                if quote is None:
-                    quote = _payload(row, columns, current_ns)
-                self._quotes.append(event_id, quote)
-        self._quotes.flush()
-        self._captured = True
+            self._matching_metrics["eligible_quote_rows"] = eligible_rows
 
     def count(self, config: str) -> int:
         return self._config_counts.get(config, 0)
@@ -219,6 +259,7 @@ class StreamingSignalQuoteJournal:
             "configs": len(self._config_counts),
             "selected_symbols": len(self._symbols),
             **quote_metrics,
+            **self._matching_metrics,
         }
 
     def close(self) -> None:
