@@ -1129,3 +1129,60 @@ identity and lossless parity; assess measurements before opting into any
 real backtest. The following integration milestone must preserve
 `min_option_true_ranges`, all execution decisions, costs and final reports
 before enabling quote-journal replay inside the H6 simulation runner.
+
+
+### Phase 1 — bounded time-bucket journal matching (experimental)
+
+The original SQLite-backed `StreamingSignalQuoteJournal` passed the
+user's full 14-day quote replay parity A/B benchmark: 457 signal events,
+29,703 captured quote records, zero differences across 12 runs. However,
+its median runtime was **85.740s vs 15.894s** for the full-frame
+capture (5.39× slower) and its process peak RSS was **84,258 KiB vs
+83,256 KiB** (1,002 KiB more). **Do not promote this journal to the
+normal H6 runner.** Quote matching previously ran an indexed SQLite
+interval query once for every quote row with a selected symbol, which
+can be disproportionately expensive when ticks repeat inside a time window.
+
+A new opt-in `matching_mode="BUCKET_CACHE"` in
+`StreamingSignalQuoteJournal.capture_quotes(...)` caches only the
+candidate signal intervals for a short wall-clock bucket. It still
+checks the exact `signal_ns < quote_ns <= end_ns` condition for each
+quote, supports duplicate and arbitrarily out-of-order CSV rows, and
+retains the original source arrival order. The bounded LRU has three
+separate controls: `bucket_minutes` (default 5),
+`max_cache_buckets` (default 256), and
+`max_cached_candidates` (default 4096). If the number of candidates
+in one bucket exceeds the candidate budget, it **does not cache the
+oversized bucket**, instead matching from a streaming SQLite cursor
+with no unbounded candidate list. The original per-quote SQL matcher
+is the unchanged default and independent correctness reference.
+
+Run the same full-frame versus journal comparison with the cached
+matching *only in the experimental journal*:
+
+```powershell
+.\.venv\Scripts\python.exe -m backtest.benchmark_signal_quote_journal `
+  --directory backtest/data/delta-history/segments/2026-08-24_09-22 `
+  --start 2026-09-01T00:00:00Z `
+  --end 2026-09-15T00:00:00Z `
+  --output backtest/reports/signal-quote-journal-bucket-ab `
+  --chunk-rows 512 --max-session-rows 4096 `
+  --journal-matching BUCKET_CACHE `
+  --bucket-minutes 5 --max-cache-buckets 256 `
+  --max-cached-candidates 4096 --rounds 3
+```
+
+The report includes total database lookups, cache hits and misses,
+evictions, dense-bucket fallbacks, and peak cache entries/candidates
+along with independent-process time/RSS and complete zero-tolerance
+quote/event replay comparisons. The baseline remains the unmodified
+full-frame positional capture, not the old journal. For the exact
+previous journal behavior, omit `--journal-matching` or set
+`--journal-matching SQL`.
+
+**Promotion gate:** Historical parity must remain at zero differences
+and the measured time/RSS tradeoff must improve materially; only then
+consider integrating quote replay into actual trade simulation. Full
+trade entries/exits, fees, GST, scenario report parity, option true
+ranges and end-to-end bounded process RSS remain pending. The JSON
+Strategy Lab and all existing trading defaults are unchanged.
