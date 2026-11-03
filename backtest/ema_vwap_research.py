@@ -748,6 +748,7 @@ def _stoch_rsi_momentum_entry_direction(
 
 def complete_indicators_from_core(
     frame: pd.DataFrame, *, compact_directions: bool = False,
+    stoch_k_d: tuple[list[float], list[float]] | None = None,
 ) -> pd.DataFrame:
     """Derive full legacy H6 indicator schema from sequential core outputs.
 
@@ -764,13 +765,19 @@ def complete_indicators_from_core(
                 index=index,
             )
         return pd.Series(values, index=index)
-    rsi_values = frame["rsi14"]
-    stoch_low = rsi_values.rolling(14, min_periods=14).min()
-    stoch_high = rsi_values.rolling(14, min_periods=14).max()
-    stoch_range = (stoch_high - stoch_low).replace(0.0, math.nan)
-    stoch_raw = 100.0 * (rsi_values - stoch_low) / stoch_range
-    frame["stoch_rsi_k"] = stoch_raw.rolling(3, min_periods=3).mean()
-    frame["stoch_rsi_d"] = frame["stoch_rsi_k"].rolling(3, min_periods=3).mean()
+    if stoch_k_d is None:
+        rsi_values = frame["rsi14"]
+        stoch_low = rsi_values.rolling(14, min_periods=14).min()
+        stoch_high = rsi_values.rolling(14, min_periods=14).max()
+        stoch_range = (stoch_high - stoch_low).replace(0.0, math.nan)
+        stoch_raw = 100.0 * (rsi_values - stoch_low) / stoch_range
+        frame["stoch_rsi_k"] = stoch_raw.rolling(3, min_periods=3).mean()
+        frame["stoch_rsi_d"] = frame["stoch_rsi_k"].rolling(3, min_periods=3).mean()
+    else:
+        if len(stoch_k_d[0]) != len(frame) or len(stoch_k_d[1]) != len(frame):
+            raise ValueError("STOCH_STREAMED_LENGTH_MISMATCH")
+        frame["stoch_rsi_k"] = stoch_k_d[0]
+        frame["stoch_rsi_d"] = stoch_k_d[1]
     frame["volume_median20_prior"] = frame["volume"].shift(1).rolling(
         20,
         min_periods=20,
