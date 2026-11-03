@@ -6,6 +6,20 @@ const defaults:FuturesConfig={symbol:'BTCUSD',contract_btc:0.001,quantity_lots:1
  funding_mode:'REQUIRE_CSV',margin_tier_mode:'FLAT_RESEARCH'};
 export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Strategy)=>void}){
  const f=value.futures||defaults;
+ const setupDefaults={enabled:false,setup_timeframe:'15m' as const,ema_indicator_id:'ema20_15m',
+  atr_indicator_id:'atr14_15m',volume_indicator_id:'volumeSMA20_5m',require_touch:true,
+  require_confirmation_color:true,require_volume:true,volume_multiplier:1,max_wait_bars:6,
+  swing_lookback_bars:3,stop_buffer_atr:0.1,breakout_buffer_points:0,reward_r_multiple:2,
+  size_mode:'RISK_EQUITY' as const,equity_risk_percent:0.5,max_lots:100000,
+  max_estimated_risk_multiple:1};
+ const pullback={...setupDefaults,...f.pullback};
+ const setup=(patch:Partial<typeof pullback>)=>onChange({...value,futures:{...f,
+   ...(patch.enabled===true?{stop_loss_percent:null,take_profit_percent:null}:{}),
+   pullback:{...pullback,...patch}}});
+ const setupNumber=(key:keyof typeof setupDefaults,label:string,step:string,min:number)=>(
+  <label key={key}>{label}<input type="number" step={step} min={min}
+   value={Number(pullback[key])} onChange={e=>setup({[key]:Number(e.target.value)})}/></label>);
+
  const risk=(patch:Record<string,any>)=>onChange({...value,risk:{...value.risk,...patch}});
  const session=(patch:Partial<Strategy['session']>)=>onChange({...value,session:{...value.session,...patch}});
  const windows=value.session.windows?.length?value.session.windows:[{start:'00:00',end:'23:59'}];
@@ -56,6 +70,35 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   </div>)}
  </div>
  <div className="warning-box"><b>Accuracy limitations:</b> Futures fills use historical 5m-derived OHLC and assumed slippage, not recorded futures order-book quotes. Funding requires <code>futures_funding.csv</code> with timestamp, symbol and decimal funding_rate. Collateral and liquidation are approximations; no Delta exchange liquidation precision is claimed. Current published snapshot supports size-dependent margins above $100,000 notional; INR conversion, historical collateral tiers, and genuine liquidation remain unmodeled. Pre-8-Sep-2025 minute-by-minute funding is not supported by the 8-hour funding importer. Backtests never place orders.</div>
+ </section>
+ <section className="card"><h2>Stateful futures trend / pullback / breakout</h2>
+ <p>Opt-in: freeze a completed 15m confirmation candle's breakout level and prior swing stop; enter at next 5m open after a confirmed breakout. This mode replaces the legacy fixed-percent stop/target. Configure 1h trend filtering with the standard LONG/SHORT entry rule trees.</p>
+ <label className="switch"><input type="checkbox" checked={pullback.enabled}
+  onChange={e=>setup({enabled:e.target.checked})}/><span>Enable stateful futures pullback engine</span></label>
+ {pullback.enabled&&<div className="form-grid">
+  <label>Confirmation timeframe<select value={pullback.setup_timeframe}
+   onChange={e=>setup({setup_timeframe:e.target.value as typeof pullback.setup_timeframe})}>
+   <option value="15m">15m</option><option value="30m">30m</option><option value="1h">1h</option></select></label>
+  <label>Setup EMA indicator ID<input value={pullback.ema_indicator_id} onChange={e=>setup({ema_indicator_id:e.target.value})}/></label>
+  <label>Setup ATR indicator ID<input value={pullback.atr_indicator_id} onChange={e=>setup({atr_indicator_id:e.target.value})}/></label>
+  <label>5m volume SMA indicator ID<input value={pullback.volume_indicator_id} onChange={e=>setup({volume_indicator_id:e.target.value})}/></label>
+  {setupNumber('max_wait_bars','Breakout expiry (5m candles)','1',1)}
+  {setupNumber('swing_lookback_bars','Swing window (completed setup candles)','1',1)}
+  {setupNumber('stop_buffer_atr','Stop buffer × setup ATR','0.05',0)}
+  {setupNumber('breakout_buffer_points','Breakout buffer (BTC points)','1',0)}
+  {setupNumber('volume_multiplier','Volume must exceed SMA ×','0.1',0)}
+  {setupNumber('reward_r_multiple','Target multiple of initial risk (R)','0.25',0.01)}
+  <label>Size calculation<select value={pullback.size_mode} onChange={e=>setup({size_mode:e.target.value as typeof pullback.size_mode})}>
+   <option value="RISK_EQUITY">Risk % of available equity</option><option value="FIXED">Existing fixed quantity, risk checked</option>
+  </select></label>
+  {setupNumber('equity_risk_percent','Maximum estimated equity risk %','0.1',0.01)}
+  {setupNumber('max_lots','Maximum allowed lots','1',1)}
+  {setupNumber('max_estimated_risk_multiple','Fixed-size risk allowance multiplier','0.1',1)}
+  <label className="switch"><input type="checkbox" checked={pullback.require_touch} onChange={e=>setup({require_touch:e.target.checked})}/>Require EMA touch</label>
+  <label className="switch"><input type="checkbox" checked={pullback.require_confirmation_color} onChange={e=>setup({require_confirmation_color:e.target.checked})}/>Require confirmation candle direction</label>
+  <label className="switch"><input type="checkbox" checked={pullback.require_volume} onChange={e=>setup({require_volume:e.target.checked})}/>Require breakout volume</label>
+ </div>}
+ <p>Research only: account equity risk is an estimate, not a hard guarantee. Stop gaps, spread, funding, and exchange liquidation can cause larger losses. Configure each indicator ID/timeframe in the indicator builder; the server validates them before running.</p>
  </section>
  <section className="card"><h2>Futures risk and entry sessions</h2>
  <div className="form-grid">
