@@ -71,3 +71,28 @@ def test_importable_futures_example_matches_current_strategy_schema():
     assert validated.market_type=="FUTURES"
     assert validated.futures.funding_mode=="EXCLUDE_WITH_WARNING"
     assert validated.position_policy=="EXCLUSIVE"
+
+
+def test_futures_ai_prompt_documents_stateful_risk_mode_and_example():
+    strategy = StrategyConfig(market_type="FUTURES")
+    prompt = build_strategy_prompt(AiStrategyPromptRequest(strategy=strategy))
+    for term in ("futures.pullback.enabled=true", "max_wait_bars",
+                 "swing_lookback_bars", "stop_buffer_atr", "reward_r_multiple",
+                 "equity_risk_percent", "risk budget", "NEXT 5m OPEN",
+                 "btc-futures-stateful-1h-15m-5m.strategy.json"):
+        assert term.lower() in prompt.lower()
+    assert "BOTH legacy fields MUST be null" in prompt
+    assert "Schema version remains 15" in prompt
+
+
+def test_stateful_futures_example_can_be_validated():
+    from pathlib import Path
+    import json
+    path = Path(__file__).resolve().parents[1] / "examples" / "btc-futures-stateful-1h-15m-5m.strategy.json"
+    obj = json.loads(path.read_text(encoding="utf-8"))
+    assert obj["schema_version"] == 15
+    strategy = StrategyConfig.model_validate(obj["strategy"])
+    assert strategy.futures.pullback.enabled
+    assert strategy.futures.stop_loss_percent is None
+    assert strategy.futures.take_profit_percent is None
+    assert strategy.market_type == "FUTURES"
