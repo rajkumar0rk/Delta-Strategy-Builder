@@ -121,6 +121,10 @@ def test_journal_fail_closed_signal_and_quote_limits(tmp_path):
         assert journal.count("A") == 1
         with pytest.raises(ValueError, match="CAPTURED_QUOTE_LIMIT"):
             journal.capture_quotes(path)
+        with pytest.raises(RuntimeError, match="ALREADY_CAPTURED"):
+            journal.capture_quotes(path)
+        with pytest.raises(RuntimeError, match="NOT_CAPTURED"):
+            list(journal.iter_events("A"))
 
 
 def test_journal_out_of_order_signal_and_bad_configuration(tmp_path):
