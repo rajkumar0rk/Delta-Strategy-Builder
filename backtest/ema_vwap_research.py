@@ -746,14 +746,14 @@ def _stoch_rsi_momentum_entry_direction(
     return ""
 
 
-def indicators(
-    path: Path, *,
-    indicator_chunk_rows: int | None = None,
-    compact_directions: bool = False,
+def complete_indicators_from_core(
+    frame: pd.DataFrame, *, compact_directions: bool = False,
 ) -> pd.DataFrame:
-    # Encode categorical CALL/PUT/flat direction columns at creation time.
-    # Numeric indicators and signal booleans remain in their original dtype.
-    # This is opt-in until actual report parity and peak RSS are verified.
+    """Derive full legacy H6 indicator schema from sequential core outputs.
+
+    Shared by the original full-frame research runner and the bounded
+    indicator-only chunk generator. No option selection or trade execution.
+    """
     def direction_series(values: list[str], *, index: pd.Index) -> pd.Series:
         if compact_directions:
             categories = ("", "CALL", "PUT")
@@ -764,20 +764,6 @@ def indicators(
                 index=index,
             )
         return pd.Series(values, index=index)
-    if indicator_chunk_rows is not None:
-        from .legacy_indicator_stream import streamed_core_frame
-        frame = streamed_core_frame(path, indicator_chunk_rows)
-    else:
-        frame = pd.read_csv(path, parse_dates=["timestamp"]).set_index("timestamp").sort_index()
-    for column in ("open", "high", "low", "close", "volume"):
-        frame[column] = pd.to_numeric(frame[column], errors="coerce")
-    frame = frame.dropna(subset=["open", "high", "low", "close", "volume"])
-    if indicator_chunk_rows is None:
-        closes = frame["close"].astype(float).tolist()
-        frame["ema9"] = ema(closes, 9)
-        frame["ema20"] = ema(closes, 20)
-        frame["ema50"] = ema(closes, 50)
-        frame["rsi14"] = rsi_wilder(closes, 14)
     rsi_values = frame["rsi14"]
     stoch_low = rsi_values.rolling(14, min_periods=14).min()
     stoch_high = rsi_values.rolling(14, min_periods=14).max()
@@ -785,22 +771,10 @@ def indicators(
     stoch_raw = 100.0 * (rsi_values - stoch_low) / stoch_range
     frame["stoch_rsi_k"] = stoch_raw.rolling(3, min_periods=3).mean()
     frame["stoch_rsi_d"] = frame["stoch_rsi_k"].rolling(3, min_periods=3).mean()
-    if indicator_chunk_rows is None:
-        frame["atr14"] = atr_wilder(
-            frame["high"].astype(float).tolist(),
-            frame["low"].astype(float).tolist(),
-            closes,
-            14,
-        )
     frame["volume_median20_prior"] = frame["volume"].shift(1).rolling(
         20,
         min_periods=20,
     ).median()
-    if indicator_chunk_rows is None:
-        frame["macd"] = pd.Series(ema(closes, 12), index=frame.index) - pd.Series(
-            ema(closes, 26), index=frame.index
-        )
-        frame["macd_signal"] = ema(frame["macd"].astype(float).tolist(), 9)
     local_dates = pd.Series(frame.index.tz_convert(IST).date, index=frame.index)
     typical_volume = ((frame["high"] + frame["low"] + frame["close"]) / 3.0) * frame["volume"]
     cumulative_value = typical_volume.groupby(local_dates).cumsum()
@@ -876,17 +850,47 @@ def indicators(
         frame[momentum_signal_target] = frame[momentum_target].ne("") & frame[
             momentum_target
         ].ne(frame[momentum_target].shift(1).fillna(""))
+    core_order = [
+        "open", "high", "low", "close", "volume",
+        "ema9", "ema20", "ema50", "rsi14",
+        "stoch_rsi_k", "stoch_rsi_d", "atr14",
+        "volume_median20_prior", "macd", "macd_signal",
+    ]
+    return frame[core_order + [name for name in frame.columns if name not in core_order]]
+
+
+def indicators(
+    path: Path, *,
+    indicator_chunk_rows: int | None = None,
+    compact_directions: bool = False,
+) -> pd.DataFrame:
     if indicator_chunk_rows is not None:
-        # Preserve original public schema/order for full-frame parity and
-        # downstream callers sensitive to column position.
-        core_order = [
-            "open", "high", "low", "close", "volume",
-            "ema9", "ema20", "ema50", "rsi14",
-            "stoch_rsi_k", "stoch_rsi_d", "atr14",
-            "volume_median20_prior", "macd", "macd_signal",
-        ]
-        frame = frame[core_order + [c for c in frame.columns if c not in core_order]]
-    return frame
+        from .legacy_indicator_stream import streamed_core_frame
+        frame = streamed_core_frame(path, indicator_chunk_rows)
+    else:
+        frame = pd.read_csv(path, parse_dates=["timestamp"]).set_index("timestamp").sort_index()
+    for column in ("open", "high", "low", "close", "volume"):
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    frame = frame.dropna(subset=["open", "high", "low", "close", "volume"])
+    if indicator_chunk_rows is None:
+        closes = frame["close"].astype(float).tolist()
+        frame["ema9"] = ema(closes, 9)
+        frame["ema20"] = ema(closes, 20)
+        frame["ema50"] = ema(closes, 50)
+        frame["rsi14"] = rsi_wilder(closes, 14)
+        frame["atr14"] = atr_wilder(
+            frame["high"].astype(float).tolist(),
+            frame["low"].astype(float).tolist(),
+            closes,
+            14,
+        )
+        frame["macd"] = pd.Series(ema(closes, 12), index=frame.index) - pd.Series(
+            ema(closes, 26), index=frame.index
+        )
+        frame["macd_signal"] = ema(frame["macd"].astype(float).tolist(), 9)
+    return complete_indicators_from_core(
+        frame, compact_directions=compact_directions,
+    )
 
 
 def _select_option(
