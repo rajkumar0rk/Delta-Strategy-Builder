@@ -64,7 +64,9 @@ def test_streamed_cli_exports_original_json_and_csv(monkeypatch, tmp_path):
         spool_directory=tmp_path / "scratch",
     )
     assert streaming["storage"] == "STREAMED"
+    assert streaming["quote_storage"] == "PACKED_MEMORY"
     assert memory["storage"] == "MEMORY"
+    assert memory["quote_storage"] == "MEMORY"
     assert streaming["counts"] == memory["counts"] == {
         "trades": 2, "execution_attempts": 2, "decision_events": 2,
     }
@@ -118,3 +120,60 @@ def test_file_export_rejects_incompatible_spool_configuration(tmp_path):
             tmp_path, start="a", end="b", output=tmp_path / "out",
             storage="INVALID",
         )
+
+
+def test_streamed_export_forwards_default_packed_and_explicit_dictionary_rollback(
+    monkeypatch, tmp_path,
+):
+    selected_modes = []
+
+    def fake_streamed(*args, **kwargs):
+        selected_modes.append(kwargs["quote_capture_storage"])
+        return {
+            "report_path": str(kwargs["output"]),
+            "csv_paths": {},
+            "counts": {
+                "trades": 0, "execution_attempts": 0, "decision_events": 0,
+            },
+        }
+
+    monkeypatch.setattr(legacy, "run_dataset_to_streamed_report", fake_streamed)
+    monkeypatch.setattr(legacy, "locked_h6_scenarios", lambda: [])
+    args = dict(
+        start="2026-09-01T00:00:00Z",
+        end="2026-09-15T00:00:00Z",
+        output=tmp_path / "report",
+    )
+    default = export_legacy_report(tmp_path, **args)
+    fallback = export_legacy_report(
+        tmp_path, **args, quote_storage="MEMORY",
+    )
+    explicit = export_legacy_report(
+        tmp_path, **args, quote_storage="PACKED_MEMORY",
+    )
+    assert selected_modes == ["PACKED_MEMORY", "MEMORY", "PACKED_MEMORY"]
+    assert [v["quote_storage"] for v in (default, fallback, explicit)] == selected_modes
+
+
+@pytest.mark.parametrize("bad", ["SQLITE", "UNKNOWN", ""])
+def test_file_export_rejects_invalid_quote_storage_before_running(tmp_path, bad):
+    with pytest.raises(ValueError, match="quote_storage"):
+        export_legacy_report(
+            tmp_path, start="a", end="b", output=tmp_path / "out",
+            quote_storage=bad,
+        )
+
+
+def test_original_memory_export_rejects_packed_override(tmp_path):
+    with pytest.raises(ValueError, match="requires STREAMED"):
+        export_legacy_report(
+            tmp_path, start="a", end="b", output=tmp_path / "out",
+            storage="MEMORY", quote_storage="PACKED_MEMORY",
+        )
+
+
+def test_default_research_runner_quote_storage_unchanged():
+    from inspect import signature
+    assert signature(legacy.run_dataset).parameters[
+        "quote_capture_storage"
+    ].default == "MEMORY"
