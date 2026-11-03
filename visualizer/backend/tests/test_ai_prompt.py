@@ -96,3 +96,36 @@ def test_stateful_futures_example_can_be_validated():
     assert strategy.futures.stop_loss_percent is None
     assert strategy.futures.take_profit_percent is None
     assert strategy.market_type == "FUTURES"
+
+
+def test_generation_prompt_rejects_unrecognized_strategy_fields_and_locates_request_settings():
+    from pathlib import Path
+
+    guide = (Path(__file__).resolve().parents[2] / "codex" /
+             "STRATEGY_JSON_GENERATION_PROMPT.md").read_text(encoding="utf-8")
+    assert "schema_version" in guide and "StrategyConfig.model_validate" in guide
+    assert "unknown keys" in guide.lower()
+    for text in ("dataset_mode", "warmup_candles", "storage_mode",
+                 "EXCLUDE_WITH_WARNING", "PULLBACK_SETUP", "RESEARCH_ONLY"):
+        assert text in guide
+
+
+def test_futures_ai_prompt_explicitly_documents_planner_and_schema_guards():
+    prompt = build_strategy_prompt(
+        AiStrategyPromptRequest(strategy=StrategyConfig(market_type="FUTURES"))
+    )
+    for fragment in ("unknown strategy keys", "max_wait_bars * 5",
+                     "PULLBACK_SETUP", "ordinary EntryBehavior lifecycle",
+                     "funding CSV exists", "BacktestRequest"):
+        # The request/settings contract is represented by a list of fields,
+        # not necessarily the class name in the futures-specific prompt.
+        if fragment == "BacktestRequest":
+            assert "warmup_candles" in prompt and "storage_mode" in prompt
+        else:
+            assert fragment in prompt
+
+
+def test_options_ai_prompt_documents_strict_generation_contract():
+    prompt = build_strategy_prompt(AiStrategyPromptRequest(strategy=StrategyConfig()))
+    assert "STRATEGY_JSON_GENERATION_PROMPT.md" in prompt
+    assert "Reject unknown keys" in prompt
