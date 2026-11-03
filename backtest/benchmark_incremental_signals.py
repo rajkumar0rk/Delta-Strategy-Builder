@@ -148,6 +148,10 @@ def _compare_value(reference, candidate, path, errors, *,
             for index, (left, right) in enumerate(zip(reference, candidate)):
                 _compare_value(left, right, f"{path}[{index}]",
                                errors, rtol=rtol, atol=atol)
+    elif type(reference) is int and type(candidate) is int:
+        # Nanosecond timestamps and integer counts must match exactly.
+        if reference != candidate:
+            errors.append(f"{path}: {reference!r} vs {candidate!r}")
     elif type(reference) in (int, float) and type(candidate) in (int, float):
         if not (
             (math.isnan(reference) and math.isnan(candidate))
