@@ -52,6 +52,12 @@ def build_strategy_prompt(req: AiStrategyPromptRequest) -> str:
             "market_type must be FUTURES. CALL entry/exit rules represent LONG; PUT entry/exit rules represent SHORT. "
             "Use direction_mode CALL, PUT or BOTH; position_policy EXCLUSIVE; no options are traded.\n"
             "Reuse available completed-candle OHLCV indicators, rule trees, alerts, entry lifecycles and Big Trend Score. "
+            "Every referenced condition/indicator/output must exist in the current catalog and entry tree, "
+            "including alert source condition_id, score component condition_id and lifecycle trigger_condition_id. "
+            "Model validation may silently ignore unknown strategy keys, so reject invented or misplaced keys "
+            "using the recursive StrategyConfig JSON schema. "
+            "Keep dataset_mode, start/end, warmup_candles, warmup_policy, storage_mode, "
+            "train_fraction, embargo_bars, replay scenarios and auto-download flags OUTSIDE strategy JSON. "
             "All signal entries and rule-based exits occur at the NEXT candle open, using an adverse slippage proxy. "
             "The futures engine offers TWO mutually exclusive protective-exit modes. "
             "Legacy mode (futures.pullback.enabled=false) uses futures.stop_loss_percent and "
@@ -83,6 +89,11 @@ def build_strategy_prompt(req: AiStrategyPromptRequest) -> str:
             "and require_volume with volume_multiplier requires breakout-bar volume greater than "
             "the configured 5m VOLUME_SMA times that multiplier. A signal fills at the NEXT 5m OPEN proxy. "
             "The 15m setup candle itself is NOT the 5m breakout trigger. "
+            "Set max_wait_bars so max_wait_bars * 5 <= 2 * setup_timeframe_minutes; "
+            "the StrategyConfig cross-field validator checks this in addition to numeric bounds. "
+            "The dedicated PULLBACK_SETUP entry path does not use ordinary EntryBehavior lifecycle "
+            "readiness for its timing; ordinary directional rules, score gates, no-trade rules, "
+            "sessions and conflict policy still apply. "
             "Do not invent a standalone indicator named frozen_setup_high or a custom condition operator.\\n"
             "The protective stop is computed from the already-frozen setup swing extreme and ATR buffer, "
             "tick-rounded away from the entry. target_price uses reward_r_multiple times actual "
@@ -111,6 +122,9 @@ def build_strategy_prompt(req: AiStrategyPromptRequest) -> str:
             "or an explicit EXCLUDE_WITH_WARNING research choice. Never invent funding rates.\n"
             "The historical funding model rejects strict CSV replay before the September 8, 2025 funding regime change; "
             "EXCLUDE_WITH_WARNING explicitly omits funding. Contract tier snapshots do not prove historical margin. "
+            "ARCHIVE automatic downloads may store free mark/index/funding-rate candles, but those are "
+            "not verified settlement cashflows; REQUIRE_CSV still needs futures_funding.csv. "
+            "EXCLUDE_WITH_WARNING excludes funding even when funding CSV exists. "
             "Dedicated futures replay, frozen holdout and internal chart-parity jobs are separate research APIs, "
             "NOT fields in strategy JSON. Schema version remains 15. "
             "Margin breaches, fills and liquidation prices are estimates, NOT Delta-verified. "
@@ -129,6 +143,7 @@ def build_strategy_prompt(req: AiStrategyPromptRequest) -> str:
         )
 
     return f"""You are designing a BTC options strategy for BTC Strategy Lab V15.2 / V16 research mode.
+For both markets, see visualizer/codex/STRATEGY_JSON_GENERATION_PROMPT.md. Reject unknown keys using the recursive StrategyConfig schema; Pydantic may silently discard unknown fields. Keep all BacktestRequest and research job settings outside StrategyConfig.
 
 IMPORTANT OUTPUT CONTRACT
 - Return ONE valid JSON object only. Do not return Python, Pine Script, prose around the JSON, markdown fences, comments, NaN, Infinity, or invented fields.
