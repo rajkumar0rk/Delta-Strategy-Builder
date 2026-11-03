@@ -1186,3 +1186,61 @@ consider integrating quote replay into actual trade simulation. Full
 trade entries/exits, fees, GST, scenario report parity, option true
 ranges and end-to-end bounded process RSS remain pending. The JSON
 Strategy Lab and all existing trading defaults are unchanged.
+
+
+### Phase 1 — opt-in per-symbol interval matcher, without time-bucket churn
+
+On the 2026-09-01 to 2026-09-15 local archive, the user verified the
+experimental bounded `BUCKET_CACHE` journal matched **all 457 signals
+and 29,703 quote records exactly**, with zero differences over 12 runs.
+Its median runtime was 35.408s versus 17.466s for full-frame capture
+(2.03× slower); median process peak RSS was 84,846 KiB versus 83,150 KiB
+(1.66 MiB more). Compared to the earlier SQL-only journal (85.740s),
+the bucket cache reduced runtime by approximately 59%, but is still
+unfit for default promotion.
+
+The lookup metrics explain the remaining slowdown: 422,252 eligible
+quote rows; 337,582 cache hits but **84,670 SQL queries** and
+**84,414 LRU evictions**, while the peak candidate count was only 107.
+The cache is limited by frequent *time bucket* turnover, not by the
+number of signal intervals.
+
+A new experimental `matching_mode="SYMBOL_INDEX"` in
+`StreamingSignalQuoteJournal.capture_quotes(...)` caches the entire
+set of intervals **for each active quote symbol** once, in original
+event-ID order, rather than loading short-lived time buckets.
+The per-symbol LRU is bounded by `max_cached_symbols` (default 256)
+and total `max_cached_candidates` (default 4096). Dense symbols
+whose intervals exceed the candidate cap bypass the in-memory index
+and use the original SQLite matching query. Dense-symbol markers are
+also LRU bounded, so a large catalog cannot create unbounded caches.
+Every quote still uses the exact historical filter
+`signal_ns < quote_ns <= end_ns`, preserving overlaps, unsorted
+source ticks, duplicate quote rows and per-event order. The existing
+`SQL` and `BUCKET_CACHE` modes and all default runner behavior
+are unchanged. Peak cached intervals/symbols, cache hits/misses and
+SQLite query totals are exported as capture metrics.
+
+Validate every selected quote against the untouched full-frame capture
+using the same 12-run benchmark and a *new* report directory:
+
+```powershell
+.\.venv\Scripts\python.exe -m backtest.benchmark_signal_quote_journal `
+  --directory backtest/data/delta-history/segments/2026-08-24_09-22 `
+  --start 2026-09-01T00:00:00Z `
+  --end 2026-09-15T00:00:00Z `
+  --output backtest/reports/signal-quote-journal-symbol-ab `
+  --chunk-rows 512 --max-session-rows 4096 `
+  --journal-matching SYMBOL_INDEX `
+  --max-cached-symbols 256 --max-cached-candidates 4096 `
+  --rounds 3
+```
+
+Zero complete signal/quote differences is mandatory. Compare actual
+median runtime and process RSS against both the bucket cache and full
+reference, not just cache-hit counts. Despite memory-bounded signal
+metadata and candidate caching, journal quote storage still relies
+on disk and actual H6 trade simulation is **not** integrated.
+Option true-range history, trade/execution/fee/GST report parity,
+long-period stress tests, and configurable JSON strategy engine
+integration are pending.

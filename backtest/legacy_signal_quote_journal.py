@@ -162,6 +162,7 @@ class StreamingSignalQuoteJournal:
         bucket_minutes: int = 5,
         max_cache_buckets: int = 256,
         max_cached_candidates: int = 4096,
+        max_cached_symbols: int = 256,
     ) -> None:
         """Capture event-local quote rows in source CSV order, including duplicates.
 
@@ -173,9 +174,10 @@ class StreamingSignalQuoteJournal:
             raise RuntimeError("SIGNAL_QUOTE_JOURNAL_CLOSED")
         if self._capture_started:
             raise RuntimeError("SIGNAL_QUOTE_JOURNAL_ALREADY_CAPTURED")
-        if matching_mode not in {"SQL", "BUCKET_CACHE"}:
-            raise ValueError("matching_mode must be SQL or BUCKET_CACHE")
+        if matching_mode not in {"SQL", "BUCKET_CACHE", "SYMBOL_INDEX"}:
+            raise ValueError("matching_mode must be SQL, BUCKET_CACHE or SYMBOL_INDEX")
         from .legacy_quote_bucket_matcher import BoundedQuoteBucketMatcher
+        from .legacy_symbol_interval_matcher import BoundedSymbolIntervalMatcher
         matcher = (
             BoundedQuoteBucketMatcher(
                 self._database,
@@ -183,7 +185,13 @@ class StreamingSignalQuoteJournal:
                 max_cache_buckets=max_cache_buckets,
                 max_cached_candidates=max_cached_candidates,
             )
-            if matching_mode == "BUCKET_CACHE" else None
+            if matching_mode == "BUCKET_CACHE" else
+            BoundedSymbolIntervalMatcher(
+                self._database,
+                max_cached_symbols=max_cached_symbols,
+                max_cached_candidates=max_cached_candidates,
+            )
+            if matching_mode == "SYMBOL_INDEX" else None
         )
         # A partial failed capture cannot safely be replayed or retried.
         self._capture_started = True

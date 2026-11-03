@@ -55,6 +55,7 @@ def _child(
     chunk_rows: int, max_session_rows: int,
     journal_matching: str = "SQL", bucket_minutes: int = 5,
     max_cache_buckets: int = 256, max_cached_candidates: int = 4096,
+    max_cached_symbols: int = 256,
 ):
     from .data import timestamp_ns
     from .ema_vwap_research import indicators, signal_events, _option_specs
@@ -113,6 +114,7 @@ def _child(
                 bucket_minutes=bucket_minutes,
                 max_cache_buckets=max_cache_buckets,
                 max_cached_candidates=max_cached_candidates,
+                max_cached_symbols=max_cached_symbols,
             )
             for config, _ in _scenarios():
                 with (output / f"config-{config}-events.jsonl").open(
@@ -167,6 +169,7 @@ def benchmark_signal_quote_journal(
     max_session_rows: int = 4096,
     journal_matching: str = "SQL", bucket_minutes: int = 5,
     max_cache_buckets: int = 256, max_cached_candidates: int = 4096,
+    max_cached_symbols: int = 256,
 ):
     if type(rounds) is not int or not 1 <= rounds <= 10:
         raise ValueError("rounds must be an integer between 1 and 10")
@@ -174,12 +177,13 @@ def benchmark_signal_quote_journal(
         raise ValueError("chunk_rows must be a positive integer")
     if type(max_session_rows) is not int or max_session_rows < 1:
         raise ValueError("max_session_rows must be a positive integer")
-    if journal_matching not in {"SQL", "BUCKET_CACHE"}:
-        raise ValueError("journal_matching must be SQL or BUCKET_CACHE")
+    if journal_matching not in {"SQL", "BUCKET_CACHE", "SYMBOL_INDEX"}:
+        raise ValueError("journal_matching must be SQL, BUCKET_CACHE or SYMBOL_INDEX")
     for name, value in (
         ("bucket_minutes", bucket_minutes),
         ("max_cache_buckets", max_cache_buckets),
         ("max_cached_candidates", max_cached_candidates),
+        ("max_cached_symbols", max_cached_symbols),
     ):
         if type(value) is not int or value < 1:
             raise ValueError(f"{name} must be a positive integer")
@@ -209,6 +213,7 @@ def benchmark_signal_quote_journal(
                 "--bucket-minutes", str(bucket_minutes),
                 "--max-cache-buckets", str(max_cache_buckets),
                 "--max-cached-candidates", str(max_cached_candidates),
+                "--max-cached-symbols", str(max_cached_symbols),
             ], check=True)
             metrics = json.loads(metrics_file.read_text(encoding="utf-8"))
             metrics_file.unlink()
@@ -264,6 +269,7 @@ def benchmark_signal_quote_journal(
         "bucket_minutes": bucket_minutes,
         "max_cache_buckets": max_cache_buckets,
         "max_cached_candidates": max_cached_candidates,
+        "max_cached_symbols": max_cached_symbols,
         "chunk_rows": chunk_rows,
         "max_session_rows": max_session_rows,
         "parity_passed": total == 0, "difference_count": total,
@@ -276,7 +282,9 @@ def benchmark_signal_quote_journal(
             "replay experiment, NOT end-to-end trade, exit, fee or GST parity. "
             "SQL preserves original per-quote database matching; BUCKET_CACHE "
             "uses bounded cached candidate windows with original SQL fallback "
-            "for dense time buckets. Original run_dataset remains unchanged."
+            "for dense time buckets. SYMBOL_INDEX caches per-symbol windows "
+            "with capped LRU bounds and per-quote SQL fallback for dense "
+            "symbols. Original run_dataset remains unchanged."
         ),
     }
     (output / "benchmark.json").write_text(json.dumps(
@@ -296,11 +304,12 @@ def main():
     parser.add_argument("--rounds", type=int, default=3)
     parser.add_argument("--chunk-rows", type=int, default=512)
     parser.add_argument("--max-session-rows", type=int, default=4096)
-    parser.add_argument("--journal-matching", choices=["SQL", "BUCKET_CACHE"],
+    parser.add_argument("--journal-matching", choices=["SQL", "BUCKET_CACHE", "SYMBOL_INDEX"],
                         default="SQL")
     parser.add_argument("--bucket-minutes", type=int, default=5)
     parser.add_argument("--max-cache-buckets", type=int, default=256)
     parser.add_argument("--max-cached-candidates", type=int, default=4096)
+    parser.add_argument("--max-cached-symbols", type=int, default=256)
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--mode", choices=["FULL", "JOURNAL"], help=argparse.SUPPRESS)
     parser.add_argument("--metadata", type=Path, help=argparse.SUPPRESS)
@@ -317,6 +326,7 @@ def main():
             bucket_minutes=args.bucket_minutes,
             max_cache_buckets=args.max_cache_buckets,
             max_cached_candidates=args.max_cached_candidates,
+            max_cached_symbols=args.max_cached_symbols,
         )
     else:
         print(json.dumps(benchmark_signal_quote_journal(
@@ -327,6 +337,7 @@ def main():
             bucket_minutes=args.bucket_minutes,
             max_cache_buckets=args.max_cache_buckets,
             max_cached_candidates=args.max_cached_candidates,
+            max_cached_symbols=args.max_cached_symbols,
         ), indent=2, allow_nan=False))
 
 

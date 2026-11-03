@@ -140,3 +140,56 @@ def test_journal_benchmark_rejects_invalid_match_settings(tmp_path, settings):
         benchmark_signal_quote_journal(
             tmp_path, "a", "b", tmp_path / "out", **settings,
         )
+
+
+def test_symbol_interval_benchmark_passes_bounded_controls_to_children(
+    monkeypatch, tmp_path,
+):
+    from backtest import benchmark_signal_quote_journal as benchmark
+
+    modes = []
+
+    def fake_run(argv, check):
+        assert check
+        mode = argv[argv.index("--mode") + 1]
+        modes.append(mode)
+        assert argv[argv.index("--journal-matching") + 1] == "SYMBOL_INDEX"
+        assert argv[argv.index("--max-cached-symbols") + 1] == "17"
+        assert argv[argv.index("--max-cached-candidates") + 1] == "211"
+        target = Path(argv[argv.index("--output") + 1])
+        for config in ("0", "1"):
+            _write(target / f"config-{config}-events.jsonl")
+        metadata = Path(argv[argv.index("--metadata") + 1])
+        metadata.write_text(json.dumps({
+            "mode": mode, "elapsed_seconds": 2.0,
+            "peak_process_rss_kib": 84000,
+            "counts": {"0": 1, "1": 1}, "captured_quote_rows": 2,
+            "lookup_metrics": {
+                "matching_mode": "SYMBOL_INDEX",
+                "db_queries": 2,
+                "peak_cached_symbols": 2,
+                "peak_cached_candidates": 2,
+            } if mode == "JOURNAL" else None,
+        }), encoding="utf-8")
+
+    monkeypatch.setattr(benchmark.subprocess, "run", fake_run)
+    result = benchmark_signal_quote_journal(
+        tmp_path, "2026-09-01", "2026-09-15",
+        tmp_path / "out", rounds=1,
+        journal_matching="SYMBOL_INDEX",
+        max_cached_symbols=17, max_cached_candidates=211,
+    )
+    assert result["parity_passed"]
+    assert result["journal_matching"] == "SYMBOL_INDEX"
+    assert result["max_cached_symbols"] == 17
+    assert modes == ["FULL", "JOURNAL", "JOURNAL", "FULL"]
+    assert result["measurements"][1]["lookup_metrics"]["db_queries"] == 2
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5])
+def test_benchmark_rejects_bad_cached_symbol_limit(tmp_path, value):
+    with pytest.raises(ValueError, match="max_cached_symbols"):
+        benchmark_signal_quote_journal(
+            tmp_path, "2026-09-01", "2026-09-15",
+            tmp_path / "out", max_cached_symbols=value,
+        )
