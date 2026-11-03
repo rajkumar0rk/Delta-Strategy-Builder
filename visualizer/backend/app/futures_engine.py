@@ -421,7 +421,10 @@ def run_futures_backtest(req, progress=None):
             if pullback:
                 if direction not in setup_signals:continue
                 tree=evaluate_group(frame,i,group,_entry_ignore_ids(strategy,side)) if group.configured() else {'passed':True}
-                if tree['passed']:eligible.append((direction,'PULLBACK_SETUP'))
+                score=_big_trend_score(frame,i,group,
+                    strategy.call_big_trend_score if side=='CALL' else strategy.put_big_trend_score,side)
+                if tree['passed'] and score['passed']:
+                    eligible.append((direction,'PULLBACK_SETUP'))
             else:
                 state=flat_lifecycles.get(direction,[])
                 if not any(x['eligible'] for x in state):continue
@@ -445,7 +448,9 @@ def run_futures_backtest(req, progress=None):
                         'entry_lifecycle_id':'PULLBACK_SETUP','entry_lifecycle_signal_time':ts.isoformat(),
                         'entry_lifecycle_age_bars':pending_setup['setup_age_bars'],'entry_lifecycle_delay_bars':0,
                         'entry_lifecycle_entries_before':0,'entry_lifecycle_max_entries':1,
-                        'entry_lifecycle_expired':False,'entry_lifecycle_eligible':True}
+                        'entry_lifecycle_expired':False,'entry_lifecycle_eligible':True,
+                        'setup_confirmation_time':pending_setup['setup_time'],
+                        'setup_breakout_level':pending_setup['setup_breakout_level']}
                     continue
                 selected_rows=flat_lifecycles[selected[0]]
                 selected_row=next(x for x in selected_rows if x['behavior'].id==selected[1])
