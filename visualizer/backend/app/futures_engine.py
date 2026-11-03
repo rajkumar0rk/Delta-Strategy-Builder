@@ -16,6 +16,7 @@ from .warmup import required_warmup_candles, historical_bar_sources, warmup_diag
 from .indicators import compute_indicators
 from .alerts import alert_markers
 from .rules import evaluate_group
+from .futures_setups import PullbackBreakoutPlanner, risk_sized_lots, target_at_r
 from .storage import write_json_gz, write_csv_gz, maybe_auto_cleanup
 from .config import result_root
 from .futures_contract import (BTCUSD_SNAPSHOT, EIGHT_HOUR_FUNDING_FROM_UTC, assumed_initial_margin_usd,
@@ -113,8 +114,12 @@ def _exit_level(pos, bar, config):
     """Adverse stop first on ambiguous stop+target; gaps fill at open."""
     long=pos['direction']=='LONG'
     entry=pos['entry_price']
-    sl=(entry*(1-config.stop_loss_percent/100) if long else entry*(1+config.stop_loss_percent/100)) if config.stop_loss_percent else None
-    tp=(entry*(1+config.take_profit_percent/100) if long else entry*(1-config.take_profit_percent/100)) if config.take_profit_percent else None
+    sl=pos.get('stop_price')
+    tp=pos.get('target_price')
+    if sl is None:
+        sl=(entry*(1-config.stop_loss_percent/100) if long else entry*(1+config.stop_loss_percent/100)) if config.stop_loss_percent else None
+    if tp is None:
+        tp=(entry*(1+config.take_profit_percent/100) if long else entry*(1-config.take_profit_percent/100)) if config.take_profit_percent else None
     opened=float(bar.open);high=float(bar.high);low=float(bar.low)
     if sl is not None and ((low<=sl) if long else (high>=sl)):
         return ('STOP_LOSS',min(opened,sl) if long else max(opened,sl))
@@ -152,7 +157,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':10,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':11,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
@@ -169,6 +174,8 @@ def run_futures_backtest(req, progress=None):
     daily_source=load_daily_source(store,bar_parts,req.start,req.end,strategy.timeframe,warmup_count,strategy.indicators)
     frame,meta=compute_indicators(bars,strategy.indicators,strategy.timeframe,daily_source=daily_source)
     _prepare_strategy_state(frame,strategy)
+    pullback=cfg.pullback if cfg.pullback.enabled else None
+    planner=PullbackBreakoutPlanner(frame,pullback,strategy.timeframe) if pullback else None
     rates,missing_funding=funding_events(parts,req.start,req.end,
         required=cfg.funding_mode=='REQUIRE_CSV')
     contract_warnings=assumed_contract_warnings(cfg)
@@ -178,7 +185,7 @@ def run_futures_backtest(req, progress=None):
     qty=cfg.quantity_lots*cfg.contract_btc
     markers=list(alert_markers(frame,strategy,req.start,req.end))
     trades=[];equity_curve=[]  # Marked candle-close equity is appended exactly once per active bar.
-    position=None;pending=None;pending_lifecycle_id=None;pending_lifecycle_snapshot=None;fee_total=0.0;fund_total=0.0
+    position=None;pending=None;pending_setup=None;pending_lifecycle_id=None;pending_lifecycle_snapshot=None;fee_total=0.0;fund_total=0.0
     margin_rejects=0;ambiguous=0;margin_stop_ambiguous=0;unresolved=None
     rejection_reasons={};decisions=[]
     mark_peak=initial;mark_max_dd=0.0;mark_max_dd_pct=0.0;last_close=None;last_equity=initial
@@ -190,14 +197,15 @@ def run_futures_backtest(req, progress=None):
     cycles={'LONG':_cycle_states(_entry_behaviors(strategy,'CALL')) if call_enabled else {},
             'SHORT':_cycle_states(_entry_behaviors(strategy,'PUT')) if put_enabled else {}}
     tf={'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'1D':1440}[strategy.timeframe]
-    def fee(price):
-        return price*qty*cfg.taker_fee_percent/100*(1+cfg.gst_percent/100)
+    def fee(price,quantity=None):
+        return price*(qty if quantity is None else quantity)*cfg.taker_fee_percent/100*(1+cfg.gst_percent/100)
     def close(pos,exit_time,price,reason):
         nonlocal balance,fee_total,fund_total,peak,max_dd,max_dd_pct
         exit_px=_slipped(price,pos['direction'],False,cfg.slippage_bps,cfg.tick_size,cfg.slippage_ticks)
         sign=1 if pos['direction']=='LONG' else -1
-        gross=(exit_px-pos['entry_price'])*qty*sign
-        exit_fee=fee(exit_px)
+        trade_qty=pos.get('quantity',qty)
+        gross=(exit_px-pos['entry_price'])*trade_qty*sign
+        exit_fee=fee(exit_px,trade_qty)
         cost=pos['entry_fee']+exit_fee
         net=gross-cost+pos['funding_usd']
         balance+=gross-exit_fee
@@ -205,13 +213,15 @@ def run_futures_backtest(req, progress=None):
         trade={'id':len(trades)+1,'symbol':cfg.symbol,'direction':pos['direction'],
           'action':'BUY' if sign==1 else 'SELL','entry_time':pos['entry_time'],
           'exit_time':pd.Timestamp(exit_time).isoformat(),
-          'entry_price':pos['entry_price'],'exit_price':exit_px,'quantity':qty,
+          'entry_price':pos['entry_price'],'exit_price':exit_px,'quantity':trade_qty,
           'gross_pnl_usd':gross,'entry_fee_usd':pos['entry_fee'],'exit_fee_usd':exit_fee,
           'base_fees_usd':cost/(1+cfg.gst_percent/100),'gst_usd':cost-cost/(1+cfg.gst_percent/100),
           'fees_usd':cost,'net_pnl_usd':net,'funding_usd':pos['funding_usd'],
           'return_percent':net/max(pos['margin'],1e-12)*100,
           'holding_minutes':(pd.Timestamp(exit_time)-pd.Timestamp(pos['entry_time'])).total_seconds()/60,
           'mfe_percent':pos['mfe']*100,'mae_percent':pos['mae']*100,
+          'stop_price':pos.get('stop_price'),'target_price':pos.get('target_price'),
+          'risk_per_lot_usd':pos.get('risk_per_lot_usd'),
           'exit_reason':reason,'entry_execution_side':'ASK_PROXY' if sign==1 else 'BID_PROXY',
           'exit_execution_side':'BID_PROXY' if sign==1 else 'ASK_PROXY',
           **pos['lifecycle_provenance']}
@@ -226,6 +236,7 @@ def run_futures_backtest(req, progress=None):
         # The candle-close marked equity series is appended once per bar in
         # the main loop. Do not append a duplicate exit timestamp here.
     for i,(ts,row) in enumerate(frame.iterrows()):
+        setup_signals=planner.step(i,ts,row) if planner else {}
         if ts<pd.Timestamp(req.start):
             # Warm up lifecycle state without placing pre-range orders.
             for direction,enabled,group,side in (
@@ -250,12 +261,32 @@ def run_futures_backtest(req, progress=None):
         # bar open, not on the signal bar close.
         if pending is not None and position is None:
             direction=pending;pending=None
+            execution_setup=pending_setup;pending_setup=None
             lifecycle_id=pending_lifecycle_id;pending_lifecycle_id=None
             lifecycle_snapshot=pending_lifecycle_snapshot;pending_lifecycle_snapshot=None
             px=_slipped(float(row.open),direction,True,cfg.slippage_bps,cfg.tick_size,cfg.slippage_ticks)
-            margin=assumed_initial_margin_usd(px,qty,cfg)
-            start_fee=fee(px)
-            if ((strategy.risk.max_trades_per_day is not None and daily['entries']>=strategy.risk.max_trades_per_day)
+            trade_qty=qty; stop_price=None; target_price=None; risk_per_lot=None; entry_rejection=None
+            if execution_setup:
+                raw_stop=float(execution_setup['stop_price'])
+                units=raw_stop/cfg.tick_size
+                stop_price=round((math.floor(units+1e-10) if direction=='LONG' else math.ceil(units-1e-10))*cfg.tick_size,10)
+                if stop_price<=0 or (px-stop_price)*(1 if direction=='LONG' else -1)<=0:
+                    entry_rejection='STOP_NOT_PROTECTIVE'
+                else:
+                    stop_proxy=_slipped(stop_price,direction,False,cfg.slippage_bps,cfg.tick_size,cfg.slippage_ticks)
+                    lots,reason,risk_per_lot=risk_sized_lots(px,stop_proxy,direction,balance,cfg,pullback)
+                    trade_qty=lots*cfg.contract_btc
+                    if not lots:entry_rejection=reason
+                    target_price=target_at_r(px,stop_price,direction,pullback.reward_r_multiple,cfg.tick_size)
+                    if target_price is None:entry_rejection='INVALID_R_TARGET'
+                    if lots and pullback.size_mode=='FIXED' and lots*risk_per_lot>balance*pullback.equity_risk_percent/100*pullback.max_estimated_risk_multiple:
+                        entry_rejection='FIXED_SIZE_RISK_EXCEEDED'
+            margin=assumed_initial_margin_usd(px,trade_qty,cfg) if trade_qty>0 else float('inf')
+            start_fee=fee(px,trade_qty) if trade_qty>0 else 0.0
+            if entry_rejection:
+                rejection_reasons[entry_rejection]=rejection_reasons.get(entry_rejection,0)+1
+                decisions.append({'timestamp':at_open.isoformat(),'kind':'EXECUTION','direction':direction,'passed':False,'reason':entry_rejection})
+            elif ((strategy.risk.max_trades_per_day is not None and daily['entries']>=strategy.risk.max_trades_per_day)
               or (strategy.risk.max_consecutive_losses is not None and daily['consecutive_losses']>=strategy.risk.max_consecutive_losses)
               or (strategy.risk.max_daily_loss_percent is not None and strategy.risk.stop_trading_after_daily_loss_limit
                   and daily['realized']<=-daily['start_balance']*strategy.risk.max_daily_loss_percent/100)
@@ -265,7 +296,7 @@ def run_futures_backtest(req, progress=None):
                 decisions.append({'timestamp':at_open.isoformat(),'kind':'EXECUTION','direction':direction,'passed':False,'reason':'RISK_OR_SESSION_BLOCK'})
             elif (cfg.margin_tier_mode=='DELTA_PUBLISHED_SNAPSHOT' and
                   pd.Timestamp(at_open)>=pd.Timestamp('2026-08-22T18:30:00Z') and
-                  px*qty>BTCUSD_SNAPSHOT['position_limit_usd']):
+                  px*trade_qty>BTCUSD_SNAPSHOT['position_limit_usd']):
                 margin_rejects+=1
                 rejection_reasons['PUBLISHED_POSITION_LIMIT']=rejection_reasons.get('PUBLISHED_POSITION_LIMIT',0)+1
                 decisions.append({'timestamp':at_open.isoformat(),'kind':'EXECUTION','direction':direction,'passed':False,'reason':'PUBLISHED_POSITION_LIMIT'})
@@ -282,6 +313,8 @@ def run_futures_backtest(req, progress=None):
                     accepted_cycle.last_entry_index=i
                 position={'direction':direction,'entry_time':at_open.isoformat(),'entry_price':px,
                     'entry_fee':start_fee,'margin':margin,'funding_usd':0.0,
+                    'quantity':trade_qty,'stop_price':stop_price,'target_price':target_price,
+                    'risk_per_lot_usd':risk_per_lot,
                     'mfe':0.0,'mae':0.0,
                     'lifecycle_provenance':dict(lifecycle_snapshot or {})}
                 markers.append({'id':f"future-entry-{len(trades)+1}",'time':int(at_open.timestamp()),
@@ -296,19 +329,20 @@ def run_futures_backtest(req, progress=None):
             # No OHLC path establishes which intrabar event came first.
             # A margin breach already at OPEN takes precedence; subsequently
             # prefer a protective stop over an ambiguous candle extreme.
+            trade_qty=position.get('quantity',qty)
             worst=(float(row.low) if sign==1 else float(row.high))
             hit=_exit_level(position,row,cfg)
-            open_breach=_margin_breached(position,float(row.open),balance,qty,cfg)
-            worst_breach=_margin_breached(position,worst,balance,qty,cfg)
+            open_breach=_margin_breached(position,float(row.open),balance,trade_qty,cfg)
+            worst_breach=_margin_breached(position,worst,balance,trade_qty,cfg)
             if open_breach:
                 close(position,at_open,float(row.open),'ESTIMATED_MARGIN_BREACH')
                 position=None;closed=True
             elif hit or worst_breach:
                 if hit:
                     if worst_breach:margin_stop_ambiguous+=1
-                    if cfg.stop_loss_percent and cfg.take_profit_percent:
-                        stop=position['entry_price']*(1-cfg.stop_loss_percent/100*sign)
-                        target=position['entry_price']*(1+cfg.take_profit_percent/100*sign)
+                    if ((position.get('stop_price') is not None and position.get('target_price') is not None) or (cfg.stop_loss_percent and cfg.take_profit_percent)):
+                        stop=position.get('stop_price') or position['entry_price']*(1-cfg.stop_loss_percent/100*sign)
+                        target=position.get('target_price') or position['entry_price']*(1+cfg.take_profit_percent/100*sign)
                         if (float(row.low)<=min(stop,target) and float(row.high)>=max(stop,target)):
                             ambiguous+=1
                     close(position,ts,hit[1],hit[0]);position=None;closed=True
@@ -332,7 +366,7 @@ def run_futures_backtest(req, progress=None):
             rate=rates.get(ts)
             if rate is not None and ts>pd.Timestamp(position['entry_time']):
                 funding_sign=1 if position['direction']=='LONG' else -1
-                funding=-funding_sign*float(row.close)*qty*rate*cfg.funding_rate_multiplier
+                funding=-funding_sign*float(row.close)*position.get('quantity',qty)*rate*cfg.funding_rate_multiplier
                 position['funding_usd']+=funding
                 balance+=funding
                 fund_total+=funding
@@ -358,8 +392,8 @@ def run_futures_backtest(req, progress=None):
         # Marked equity is a candle-close proxy, not the exchange mark.
         # Reserve hypothetical exit taker fee on open exposures.
         last_close=float(row.close)
-        unrealized=((last_close-position['entry_price'])*qty*(1 if position['direction']=='LONG' else -1)) if position else 0.0
-        reserved_exit_fee=fee(last_close) if position else 0.0
+        unrealized=((last_close-position['entry_price'])*position.get('quantity',qty)*(1 if position['direction']=='LONG' else -1)) if position else 0.0
+        reserved_exit_fee=fee(last_close,position.get('quantity',qty)) if position else 0.0
         last_equity=balance+unrealized-reserved_exit_fee
         mark_peak=max(mark_peak,last_equity)
         mark_max_dd=max(mark_max_dd,mark_peak-last_equity)
@@ -382,15 +416,20 @@ def run_futures_backtest(req, progress=None):
         for direction,enabled,group,nt,side in (
             ('LONG',call_enabled,strategy.call_entry,strategy.call_no_trade,'CALL'),
             ('SHORT',put_enabled,strategy.put_entry,strategy.put_no_trade,'PUT')):
-            if not enabled or not group.configured():continue
+            if not enabled or (not pullback and not group.configured()):continue
             if nt.configured() and evaluate_group(frame,i,nt)['passed']:continue
-            state=flat_lifecycles.get(direction,[])
-            if not any(x['eligible'] for x in state):continue
-            tree=evaluate_group(frame,i,group,_entry_ignore_ids(strategy,side))
-            score=_big_trend_score(frame,i,group,
-                strategy.call_big_trend_score if side=='CALL' else strategy.put_big_trend_score,side)
-            if tree['passed'] and score['passed']:
-                eligible.append((direction,next(x['behavior'].id for x in state if x['eligible'])))
+            if pullback:
+                if direction not in setup_signals:continue
+                tree=evaluate_group(frame,i,group,_entry_ignore_ids(strategy,side)) if group.configured() else {'passed':True}
+                if tree['passed']:eligible.append((direction,'PULLBACK_SETUP'))
+            else:
+                state=flat_lifecycles.get(direction,[])
+                if not any(x['eligible'] for x in state):continue
+                tree=evaluate_group(frame,i,group,_entry_ignore_ids(strategy,side))
+                score=_big_trend_score(frame,i,group,
+                    strategy.call_big_trend_score if side=='CALL' else strategy.put_big_trend_score,side)
+                if tree['passed'] and score['passed']:
+                    eligible.append((direction,next(x['behavior'].id for x in state if x['eligible'])))
         if eligible:
             selected=None
             if len(eligible)==2:
@@ -400,6 +439,14 @@ def run_futures_backtest(req, progress=None):
                 selected=eligible[0]
             if selected is not None:
                 pending,pending_lifecycle_id=selected
+                if pullback:
+                    pending_setup=dict(setup_signals[selected[0]])
+                    pending_lifecycle_snapshot={
+                        'entry_lifecycle_id':'PULLBACK_SETUP','entry_lifecycle_signal_time':ts.isoformat(),
+                        'entry_lifecycle_age_bars':pending_setup['setup_age_bars'],'entry_lifecycle_delay_bars':0,
+                        'entry_lifecycle_entries_before':0,'entry_lifecycle_max_entries':1,
+                        'entry_lifecycle_expired':False,'entry_lifecycle_eligible':True}
+                    continue
                 selected_rows=flat_lifecycles[selected[0]]
                 selected_row=next(x for x in selected_rows if x['behavior'].id==selected[1])
                 behavior=selected_row['behavior'];cycle=selected_row['state']
@@ -419,10 +466,11 @@ def run_futures_backtest(req, progress=None):
         unresolved={'reason':'END_OF_RANGE_FUTURES_EXPOSURE','entry_time':position['entry_time'],
             'entry_price':position['entry_price'],'direction':position['direction'],
             'entry_fee_usd':position['entry_fee'],'funding_usd':position['funding_usd'],
-            'quantity':qty,**position['lifecycle_provenance'],'marked_not_realized':True,'last_candle_close':last_close,
+            'quantity':position.get('quantity',qty),'stop_price':position.get('stop_price'),
+            'target_price':position.get('target_price'),**position['lifecycle_provenance'],'marked_not_realized':True,'last_candle_close':last_close,
             'estimated_unrealized_pnl_usd':(last_close-position['entry_price'])*qty*
                 (1 if position['direction']=='LONG' else -1),
-            'estimated_exit_fee_usd':fee(last_close)}
+            'estimated_exit_fee_usd':fee(last_close,position.get('quantity',qty))}
     wins=sum(t['net_pnl_usd']>0 for t in trades)
     gp=sum(max(0,t['net_pnl_usd']) for t in trades);gl=-sum(min(0,t['net_pnl_usd']) for t in trades)
     metrics={'trades':len(trades),'wins':wins,'losses':sum(t['net_pnl_usd']<0 for t in trades),
@@ -463,6 +511,7 @@ def run_futures_backtest(req, progress=None):
       'reliability':{'grade':'RESEARCH_ONLY','execution_model':'UNDERLYING_OHLC_PROXY',
         'limitations':['No historical futures orderbook/spread or fills',
            'Intrabar stops/targets, slippage and margin breaches are estimates',
+           'Risk-sized trades can exceed the configured estimated loss in stop gaps',
            'Option premium-based profit-protection fields are ignored in Futures mode; use futures price stop/target',
            'Real exchange mark-to-market drawdown cannot be computed; candle-close proxy estimates are supplied separately',
            'Cash balance includes accrued funding and entry fees of any unresolved futures position; closed-trade net PnL excludes its open price exposure',
@@ -474,6 +523,7 @@ def run_futures_backtest(req, progress=None):
         'settlement_inr_conversion_modelled':False,
         'funding_regime':'PRE_2025_MINUTE_FUNDING_EXCLUDED' if pd.Timestamp(req.start)<pd.Timestamp(EIGHT_HOUR_FUNDING_FROM_UTC) else 'EIGHT_HOUR_SNAPSHOT',
         'symbol':cfg.symbol,'leverage':cfg.leverage,'margin_mode':cfg.margin_mode,
+        'pullback_enabled':bool(pullback),
         'funding_mode':cfg.funding_mode,'funding_missing_intervals':len(missing_funding),
         'venue_verified_liquidation':False,'volume_fill_verified':False,
           'tick_size':cfg.tick_size,'execution_slippage_ticks':cfg.slippage_ticks}}
