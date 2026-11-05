@@ -47,7 +47,8 @@ def _strategy(**overrides):
     return StrategyConfig.model_validate(spec)
 
 
-def _dataset(tmp_path, monkeypatch, *, count=290, spike=112, high_after=102):
+def _dataset(tmp_path, monkeypatch, *, count=290, spike=112, high_after=102,
+             low_on_spike=99):
     root = tmp_path / 'data'
     folder = root / 'sample'
     folder.mkdir(parents=True)
@@ -65,6 +66,7 @@ def _dataset(tmp_path, monkeypatch, *, count=290, spike=112, high_after=102):
         if i == spike:
             # A wick-only breach: 5m CLOSE NEVER confirms a breakout.
             bar['high'] = 105
+            bar['low'] = low_on_spike
         if i == spike + 1:
             bar['high'] = high_after
             if high_after > 110:
@@ -158,3 +160,39 @@ def test_intraday_configuration_validates_1h_sources_and_clock():
         _strategy(pullback={'trend_fast_ema_id': 'ema50_1h'})
     assert FuturesConfig().pullback.execution_mode == 'CLOSE_CONFIRM_NEXT_OPEN'
     assert FuturesConfig().pullback.stop_anchor == 'SWING'
+
+
+def test_same_five_minute_bar_entry_and_stop_is_conservative(tmp_path, monkeypatch):
+    result = _run(tmp_path, monkeypatch, low_on_spike=95)
+    assert result['metrics']['trades'] >= 1
+    trade = result['trades'][0]
+    assert trade['entry_fill_timing'] == 'INTRABAR_ESTIMATED'
+    assert trade['exit_reason'] == 'STOP_LOSS'
+    assert trade['net_pnl_usd'] < 0
+
+
+def test_planner_aggregation_once_and_bounded_state(monkeypatch):
+    from app import futures_setups
+    times = pd.date_range('2026-01-01T00:05:00Z', periods=2040, freq='5min')
+    frame = pd.DataFrame({
+        'open': 100, 'high': 102, 'low': 99, 'close': 101,
+        'volume': 100, 'ema20_15m': 100, 'atr14_15m': 4,
+    }, index=times)
+    cfg = FuturesConfig().pullback
+    cfg.execution_mode = 'STOP_MARKET_INTRABAR'
+    cfg.stop_anchor = 'SIGNAL_CANDLE'
+    cfg.swing_lookback_bars = 3
+    cfg.max_wait_bars = 6
+    original = futures_setups._aggregate_completed
+    calls = []
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(futures_setups, '_aggregate_completed', counted)
+    planner = PullbackBreakoutPlanner(frame, cfg, '5m')
+    for i, (ts, row) in enumerate(frame.iterrows()):
+        planner.step(i, ts, row)
+        assert len(planner.history) <= cfg.swing_lookback_bars
+        assert len(planner.setups) <= 2
+        assert len(planner.new_setups) <= 2
+    assert len(calls) == 1  # no full-dataframe regrouping per candle
