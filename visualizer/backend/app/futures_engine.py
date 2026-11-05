@@ -236,6 +236,8 @@ def run_futures_backtest(req, progress=None):
     def cancel_stop(reason):
         nonlocal stop_entry
         if stop_entry is not None:
+            if planner is not None:
+                planner.setups.pop(stop_entry['direction'],None)
             stop_order_cancellations[reason]=stop_order_cancellations.get(reason,0)+1
             decisions.append({'timestamp':stop_entry['signal_time'],'kind':'PENDING_CANCEL',
                               'direction':stop_entry['direction'],'passed':False,'reason':reason})
@@ -313,7 +315,11 @@ def run_futures_backtest(req, progress=None):
         # A clock exit is a bar-open event, never a signal generated from
         # the high/low of the same bar. It is independent of entry windows.
         closed=False
-        if end_of_day_due(at_open):
+        new_local_day=at_open.tz_convert(ZoneInfo(strategy.session.timezone)).date()
+        prior_position_day=(pd.Timestamp(position['entry_time']).tz_convert(
+            ZoneInfo(strategy.session.timezone)).date() if position is not None else None)
+        if end_of_day_due(at_open) or (cfg.force_exit_time and prior_position_day is not None
+                                        and prior_position_day<new_local_day):
             cancel_stop('FORCE_EXIT_CLOCK')
             if position is not None:
                 close(position,at_open,float(row.open),'FORCE_EXIT_CLOCK')
@@ -356,6 +362,8 @@ def run_futures_backtest(req, progress=None):
                     pending_lifecycle_id='PULLBACK_SETUP'
                     pending_lifecycle_snapshot=state['lifecycle']
                     stop_entry=None
+                    if planner is not None:
+                        planner.setups.pop(direction,None)
                     stop_order_triggers+=1
         if pending is not None and position is None:
             direction=pending;pending=None
@@ -617,6 +625,20 @@ def run_futures_backtest(req, progress=None):
             'estimated_exit_fee_usd':fee(last_close,position.get('quantity',qty))}
     wins=sum(t['net_pnl_usd']>0 for t in trades)
     gp=sum(max(0,t['net_pnl_usd']) for t in trades);gl=-sum(min(0,t['net_pnl_usd']) for t in trades)
+    monthly={}
+    by_direction={}
+    streak=0;max_losing_streak=0
+    for trade in trades:
+        month=pd.Timestamp(trade['exit_time']).tz_convert(
+            ZoneInfo(strategy.session.timezone)).strftime('%Y-%m')
+        m=monthly.setdefault(month,{'trades':0,'net_pnl_usd':0.0,'wins':0})
+        d=by_direction.setdefault(trade['direction'],{'trades':0,'net_pnl_usd':0.0,'wins':0})
+        for group in (m,d):
+            group['trades']+=1
+            group['net_pnl_usd']+=trade['net_pnl_usd']
+            group['wins']+=int(trade['net_pnl_usd']>0)
+        streak=streak+1 if trade['net_pnl_usd']<0 else 0
+        max_losing_streak=max(max_losing_streak,streak)
     metrics={'trades':len(trades),'wins':wins,'losses':sum(t['net_pnl_usd']<0 for t in trades),
       'win_rate_percent':wins/max(len(trades),1)*100,
       'gross_pnl_usd':sum(t['gross_pnl_usd'] for t in trades),
@@ -645,7 +667,12 @@ def run_futures_backtest(req, progress=None):
       'insufficient_margin_rejections':margin_rejects,'rejection_reasons':rejection_reasons,
       'ambiguous_intrabar_stop_target':ambiguous,'ambiguous_margin_stop':margin_stop_ambiguous,
       'stop_market_order_triggers':stop_order_triggers,
-      'stop_market_order_cancellations':stop_order_cancellations}
+      'stop_market_order_cancellations':stop_order_cancellations,
+      'avg_net_r':(sum(t['r_multiple_net'] for t in trades if t['r_multiple_net'] is not None)/
+                    max(1,sum(t['r_multiple_net'] is not None for t in trades))),
+      'average_holding_minutes':(sum(t['holding_minutes'] for t in trades)/len(trades) if trades else 0),
+      'max_consecutive_losses':max_losing_streak,
+      'monthly_performance':monthly,'direction_performance':by_direction}
     run_id,out=_new_result_dir(strategy.name)
     result={'run_id':run_id,'result_dir':str(out),'start':req.start,'end':req.end,
       'dataset_id':getattr(req,'dataset_id',None),'dataset_ids':[p.id for p in parts],
