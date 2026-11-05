@@ -554,7 +554,7 @@ class FuturesConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_futures(self):
-        if self.force_exit_time is not None and not re.fullmatch(r"(?:[01]\\d|2[0-3]):[0-5]\\d", self.force_exit_time):
+        if self.force_exit_time is not None and not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", self.force_exit_time):
             raise ValueError("Futures force_exit_time must be a local 24-hour HH:MM clock")
         if self.take_profit_percent is not None and self.take_profit_percent>=100:
             raise ValueError("Futures short take-profit must be below 100% of entry price")
