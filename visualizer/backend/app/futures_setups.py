@@ -29,6 +29,7 @@ class PullbackBreakoutPlanner:
         self.config = config
         self.history = deque(maxlen=config.swing_lookback_bars)
         self.setups = {}
+        self.new_setups = {}  # emitted only on the completed setup candle
         self.completed = _aggregate_completed(
             frame[['open', 'high', 'low', 'close', 'volume']],
             strategy_timeframe, config.setup_timeframe)
@@ -36,6 +37,7 @@ class PullbackBreakoutPlanner:
 
     def step(self, index, timestamp, candle):
         cfg = self.config
+        self.new_setups = {}
         # Aggregation is completed/UTC-aligned. Never inspect a future HTF row.
         # Expire first; a fresh HTF confirmation can then establish a new setup.
         for side, snapshot in tuple(self.setups.items()):
@@ -49,22 +51,34 @@ class PullbackBreakoutPlanner:
                 self.history.append((low, high))
                 ema = _finite(candle.get(cfg.ema_indicator_id))
                 atr = _finite(candle.get(cfg.atr_indicator_id))
-                if len(self.history) == cfg.swing_lookback_bars and ema is not None and atr is not None and atr > 0:
+                enough = (len(self.history) == cfg.swing_lookback_bars
+                          or cfg.stop_anchor == 'SIGNAL_CANDLE')
+                if enough and ema is not None and atr is not None and atr > 0:
                     bullish = closed > ema and (not cfg.require_touch or low <= ema)
                     bearish = closed < ema and (not cfg.require_touch or high >= ema)
                     if cfg.require_confirmation_color:
                         bullish = bullish and closed > opened
                         bearish = bearish and closed < opened
                     if bullish and 'LONG' not in self.setups:
-                        stop = min(x[0] for x in self.history) - cfg.stop_buffer_atr * atr
+                        anchor = low if cfg.stop_anchor == 'SIGNAL_CANDLE' else min(x[0] for x in self.history)
+                        stop = anchor - cfg.stop_buffer_atr * atr
                         if stop > 0 and stop < closed:
-                            self.setups['LONG'] = {'setup_index': index, 'stop_price': stop,
+                            snapshot = {'setup_index': index, 'stop_price': stop,
                                 'level': high, 'setup_time': timestamp.isoformat()}
+                            self.setups['LONG'] = snapshot
+                            self.new_setups['LONG'] = dict(snapshot)
                     if bearish and 'SHORT' not in self.setups:
-                        stop = max(x[1] for x in self.history) + cfg.stop_buffer_atr * atr
+                        anchor = high if cfg.stop_anchor == 'SIGNAL_CANDLE' else max(x[1] for x in self.history)
+                        stop = anchor + cfg.stop_buffer_atr * atr
                         if stop > closed:
-                            self.setups['SHORT'] = {'setup_index': index, 'stop_price': stop,
+                            snapshot = {'setup_index': index, 'stop_price': stop,
                                 'level': low, 'setup_time': timestamp.isoformat()}
+                            self.setups['SHORT'] = snapshot
+                            self.new_setups['SHORT'] = dict(snapshot)
+        if cfg.execution_mode == 'STOP_MARKET_INTRABAR':
+            # The engine owns the pending stop trigger; never emit a
+            # close-confirmation signal in this path.
+            return {}
         volume = _finite(candle.get('volume'))
         volume_average = _finite(candle.get(cfg.volume_indicator_id))
         last_close = _finite(candle.get('close'))
@@ -95,7 +109,8 @@ class PullbackBreakoutPlanner:
         return signals
 
 
-def risk_sized_lots(entry_price, stop_fill_price, direction, equity, futures_cfg, setup_cfg):
+def risk_sized_lots(entry_price, stop_fill_price, direction, equity, futures_cfg, setup_cfg,
+                    *, max_risk_usd=None):
     """Risk includes round-trip taker fees + GST and adverse stop fill.
 
     Uses integer lot arithmetic and logarithmic search for the affordable size;
@@ -110,11 +125,16 @@ def risk_sized_lots(entry_price, stop_fill_price, direction, equity, futures_cfg
                     (entry_price + stop_fill_price) * fraction) * per_lot
     if not math.isfinite(per_lot_loss) or per_lot_loss <= 0:
         return (0, 'INVALID_PER_LOT_RISK', 0.0)
+    risk_budget = max(0.0, equity) * setup_cfg.equity_risk_percent / 100
+    if max_risk_usd is not None:
+        risk_budget = min(risk_budget, max(0.0, max_risk_usd))
     if setup_cfg.size_mode == 'FIXED':
         requested = futures_cfg.quantity_lots
+        if requested * per_lot_loss > risk_budget * setup_cfg.max_estimated_risk_multiple + 1e-10:
+            return (0, 'FIXED_SIZE_RISK_EXCEEDED', per_lot_loss)
     else:
         requested = min(setup_cfg.max_lots, int(math.floor(
-            max(0.0, equity) * setup_cfg.equity_risk_percent / 100 / per_lot_loss + 1e-12)))
+            risk_budget / per_lot_loss + 1e-12)))
     if requested < 1:
         return (0, 'RISK_BUDGET_BELOW_MIN_LOT', per_lot_loss)
     requested = min(requested, setup_cfg.max_lots)
