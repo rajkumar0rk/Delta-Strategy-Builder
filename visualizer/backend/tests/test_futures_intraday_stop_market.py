@@ -57,8 +57,11 @@ def _dataset(tmp_path, monkeypatch, *, count=290, spike=112, high_after=102):
     timestamps = pd.date_range('2026-01-01T00:05:00Z', periods=count, freq='5min')
     rows = []
     for i, ts in enumerate(timestamps):
-        bar = {'timestamp': ts.isoformat(), 'open': 101,
-               'high': 102, 'low': 99, 'close': 101, 'volume': 100}
+        # Seed EMA20 with 20 neutral 15m candles, then create genuine
+        # bullish 15m confirmations (close>EMA20 and close>open).
+        bar = {'timestamp': ts.isoformat(), 'open': 100,
+               'high': 102, 'low': 99, 'close': 100 if i < 60 else 101,
+               'volume': 100}
         if i == spike:
             # A wick-only breach: 5m CLOSE NEVER confirms a breakout.
             bar['high'] = 105
