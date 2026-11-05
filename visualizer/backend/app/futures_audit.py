@@ -36,7 +36,9 @@ def audit_futures_parity(result:dict, chart:dict, *, timeframe_minutes:int) -> d
     trades=result.get("trades") or []
     from .futures_engine import _slipped
     futures=result.get("strategy",{}).get("futures",{})
-    bps=float(futures.get("slippage_bps",2))
+    bps=float(futures.get("slippage_bps",2))+float(futures.get("extra_half_spread_bps",0))
+    pullback=futures.get("pullback") or {}
+    stop_mode=bool(pullback.get("enabled") and pullback.get("execution_mode")=="STOP_MARKET_INTRABAR")
     tick=float(futures.get("tick_size",0.5))
     extra_ticks=int(futures.get("slippage_ticks",0))
     markers=result.get("markers") or []
@@ -73,7 +75,7 @@ def audit_futures_parity(result:dict, chart:dict, *, timeframe_minutes:int) -> d
                 failures.append(f"Entry lifecycle delay not satisfied: trade {t.get('id')}")
             if int(t.get("entry_lifecycle_entries_before", 0)) >= int(t.get("entry_lifecycle_max_entries", 1)):
                 failures.append(f"Entry lifecycle activation limit exceeded: trade {t.get('id')}")
-            if _epoch(t["entry_lifecycle_signal_time"]) != entry:
+            if not stop_mode and _epoch(t["entry_lifecycle_signal_time"]) != entry:
                 failures.append(f"Entry lifecycle signal/next-open mismatch: trade {t.get('id')}")
         else:
             warnings.append(f"Legacy result has no lifecycle provenance: trade {t.get('id')}")
@@ -92,11 +94,21 @@ def audit_futures_parity(result:dict, chart:dict, *, timeframe_minutes:int) -> d
             failures.append(f"Missing OHLC entry bar at {t['entry_time']}; cannot certify parity")
         else:
             opened=float(bar["open"]);fill=float(t["entry_price"])
-            expected=_slipped(opened,direction,True,bps,tick,extra_ticks)
+            base=opened
+            if stop_mode:
+                trigger=t.get("pending_trigger_price")
+                if trigger is None:
+                    failures.append(f"Stop-market trigger missing: trade {t.get('id')}")
+                else:
+                    trigger=float(trigger)
+                    if not ((float(bar["high"])>=trigger) if direction=="LONG" else (float(bar["low"])<=trigger)):
+                        failures.append(f"Stop-market OHLC trigger missing: trade {t.get('id')}")
+                    base=max(opened,trigger) if direction=="LONG" else min(opened,trigger)
+            expected=_slipped(base,direction,True,bps,tick,extra_ticks)
             if not _same(fill,expected):
                 failures.append(f"Futures entry fill differs from configured adverse slippage/tick model: trade {t.get('id')}")
             checked_fills+=1
-        signal=states.get(entry)
+        signal=states.get(_epoch(t.get("entry_lifecycle_signal_time",entry)) if stop_mode else entry)
         if signal is None:
             failures.append(f"Missing completed-candle preview signal at {t['entry_time']}; cannot certify parity")
         else:
@@ -118,13 +130,20 @@ def audit_futures_parity(result:dict, chart:dict, *, timeframe_minutes:int) -> d
             failures.append("Missing chart marker for unresolved futures entry")
         if "quantity" in unresolved:
             q=float(unresolved["quantity"])
-            expected_entry=_slipped(float(bars.get(_epoch(unresolved["entry_time"])+timeframe_minutes*60,{}).get("open",float("nan"))),
-                                    unresolved["direction"],True,bps,tick,extra_ticks) if _epoch(unresolved["entry_time"])+timeframe_minutes*60 in bars else None
+            bar_entry=bars.get(_epoch(unresolved["entry_time"])+timeframe_minutes*60)
+            opened=float(bar_entry["open"]) if bar_entry else float("nan")
+            if stop_mode and unresolved.get("pending_trigger_price") is not None and bar_entry:
+                trigger=float(unresolved["pending_trigger_price"])
+                if not ((float(bar_entry["high"])>=trigger) if unresolved["direction"]=="LONG" else
+                        (float(bar_entry["low"])<=trigger)):
+                    failures.append("Unresolved stop-market trigger absent from OHLC")
+                opened=max(opened,trigger) if unresolved["direction"]=="LONG" else min(opened,trigger)
+            expected_entry=_slipped(opened,unresolved["direction"],True,bps,tick,extra_ticks) if bar_entry else None
             if expected_entry is None or not _same(expected_entry,unresolved["entry_price"]):
                 failures.append("Unresolved futures entry fill cannot be reconciled with chart OHLC")
         if "entry_lifecycle_id" in unresolved and (
             not unresolved.get("entry_lifecycle_eligible") or
-            _epoch(unresolved["entry_lifecycle_signal_time"])!=_epoch(unresolved["entry_time"])
+            (not stop_mode and _epoch(unresolved["entry_lifecycle_signal_time"])!=_epoch(unresolved["entry_time"]))
         ):
             failures.append("Unresolved position lifecycle provenance is invalid")
         warnings.append("Unresolved open exposure is excluded from closed-trade net P&L")
@@ -156,7 +175,9 @@ def audit_futures_parity(result:dict, chart:dict, *, timeframe_minutes:int) -> d
     from .futures_lifecycle_replay import independently_replay_lifecycles
     timeline=chart.get("lifecycle_triggers")
     replay=None
-    if timeline is None:
+    if stop_mode:
+        warnings.append("Stop-order fills checked against 5m OHLC, but independent 15m setup and tick-sequence replay remain unavailable")
+    elif timeline is None:
         warnings.append("Historical independent lifecycle trigger timeline unavailable")
     else:
         replay=independently_replay_lifecycles(result,timeline,timeframe_minutes)
@@ -166,7 +187,7 @@ def audit_futures_parity(result:dict, chart:dict, *, timeframe_minutes:int) -> d
     warnings.append("Actual Delta orderbook fills, historical mark prices, FX collateral and liquidations are not verified")
     return {
         "kind":"FUTURES_INTERNAL_PARITY_AUDIT",
-        "status":"FAILED" if failures else "PASSED_RESEARCH_ONLY",
+        "status":"FAILED" if failures else ("PARTIAL_RESEARCH_ONLY" if stop_mode else "PASSED_RESEARCH_ONLY"),
         "research_only":True,
         "checked_closed_trades":len(trades),
         "checked_preview_signals":checked_signals,

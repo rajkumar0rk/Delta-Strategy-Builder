@@ -129,3 +129,28 @@ def test_options_ai_prompt_documents_strict_generation_contract():
     prompt = build_strategy_prompt(AiStrategyPromptRequest(strategy=StrategyConfig()))
     assert "STRATEGY_JSON_GENERATION_PROMPT.md" in prompt
     assert "Reject unknown keys" in prompt
+
+def test_intraday_stop_market_futures_example_and_generation_contract():
+    import json
+    from pathlib import Path
+    path = (Path(__file__).resolve().parents[1] / "examples" /
+            "btc-futures-intraday-1h-15m-stop-market.strategy.json")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload['schema_version'] == 15
+    strategy = StrategyConfig.model_validate(payload['strategy'])
+    pullback = strategy.futures.pullback
+    assert strategy.market_type == 'FUTURES'
+    assert pullback.enabled and pullback.execution_mode == 'STOP_MARKET_INTRABAR'
+    assert pullback.stop_anchor == 'SIGNAL_CANDLE'
+    assert pullback.breakout_buffer_ticks == 1 and pullback.max_wait_bars == 6
+    assert pullback.trend_crossover_block_bars == 3
+    assert strategy.futures.force_exit_time == '23:45'
+    assert strategy.risk.max_daily_loss_percent == 1
+    assert strategy.risk.max_hold_minutes is None
+    assert strategy.session.timezone == 'Asia/Kolkata'
+    assert strategy.session.windows[0].end == '21:59'
+    prompt = build_strategy_prompt(AiStrategyPromptRequest(strategy=strategy))
+    for term in ('STOP_MARKET_INTRABAR', 'SIGNAL_CANDLE', 'breakout_buffer_ticks',
+                 'trend_crossover_block_bars', 'force_exit_time',
+                 'extra_half_spread_bps', 'btc-futures-intraday-1h-15m-stop-market.strategy.json'):
+        assert term in prompt

@@ -29,3 +29,16 @@ Task: Return **JSON only**, with exactly this outer structure: `{"schema_version
 5. Return the **full strategy JSON only**; no explanatory text outside it.
 
 If asked for a suggested research seed, use the repository's futures example as the starting point, preserve its valid schema, and describe performance as **unverified**. Do not fabricate backtest results.
+
+## Intraday 1H/15M stop-market breakout (opt-in, November 2026)
+
+For the exact mechanical 1H EMA50/EMA200 trend + 15M EMA20 rejection strategy, use the validated sample `visualizer/backend/examples/btc-futures-intraday-1h-15m-stop-market.strategy.json` (schema 15). Do NOT generate an approximation using the legacy completed-5m-close breakout.
+
+- Set `futures.pullback.execution_mode="STOP_MARKET_INTRABAR"`, `setup_timeframe="15m"`, `stop_anchor="SIGNAL_CANDLE"`, `require_touch=true`, `require_confirmation_color=true`, `require_volume=false`, `stop_buffer_atr=0.1`, `breakout_buffer_ticks=1`, `max_wait_bars=6`, `reward_r_multiple=2`. The 5m strategy timeframe is the execution data granularity, not the signal timeframe; 6 next 5m bars represent two next 15m candles.
+- Attach 1h non-chart-only EMA50, EMA200 and EMA(1) close proxy with `trend_fast_ema_id`, `trend_slow_ema_id`, `trend_close_indicator_id`. Set `trend_crossover_block_bars=3` and `cancel_on_trend_invalidation=true`. The 1h filter is sampled only from confirmed hourly closes. LONG: fast>slow and close>fast; SHORT: fast<slow and close<fast.
+- Set `size_mode="RISK_EQUITY"`, `equity_risk_percent=0.5`, `risk.max_daily_loss_percent=1`, `risk.max_hold_minutes=null`, and `futures.stop_loss_percent=null`, `take_profit_percent=null`; stop loss is signal low/high +/- ATR buffer and target is 2R from the executed entry. Risk sizing includes round-trip assumed taker fees/GST and adverse stop execution; it is bounded by remaining estimated daily risk.
+- Set entry `session.timezone="Asia/Kolkata"`, one window `14:00–21:59` (5m granularity approximates end-exclusive 22:00), and `futures.force_exit_time="23:45"` for a separate compulsory daily bar-OPEN exit. `extra_half_spread_bps` is a configurable *assumed* cost, not observed futures BBO.
+- Exactly ONE pending entry is armed after a completed setup bar. A later base bar high/low crossing the tick-rounded stop level fills with adverse slippage and gap-through-open logic, without requiring a breakout candle close. Orders cancel after `max_wait_bars`, trend invalidation, entry-session close, force-exit time or daily risk gate. No same-candle lookahead: OHLC ambiguity is resolved conservatively (possible pre-entry stop contact is counted as stop); report research-only fidelity.
+- Existing `CLOSE_CONFIRM_NEXT_OPEN` pullback mode remains default and unchanged unless the strategy opts into the new execution mode. Never insert stop-market settings into OPTIONS. No preset proves strategy profitability.
+
+Scalability contract: full-history bar/indicator aggregation is done once; pending order count is bounded to one; setup history and hourly crossover tracking use bounded state; runtime per processed candle is amortized constant apart from finite rule evaluation/position sizing. No per-candle full-frame rescan or external network call. Keep the UI, backend Pydantic schema, in-app AI prompt, example JSON, parity warnings and tests synchronized.
