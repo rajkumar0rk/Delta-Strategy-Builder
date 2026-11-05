@@ -130,7 +130,8 @@ def risk_sized_lots(entry_price, stop_fill_price, direction, equity, futures_cfg
         risk_budget = min(risk_budget, max(0.0, max_risk_usd))
     if setup_cfg.size_mode == 'FIXED':
         requested = futures_cfg.quantity_lots
-        if requested * per_lot_loss > risk_budget * setup_cfg.max_estimated_risk_multiple + 1e-10:
+        allowed = risk_budget if max_risk_usd is not None else risk_budget * setup_cfg.max_estimated_risk_multiple
+        if requested * per_lot_loss > allowed + 1e-10:
             return (0, 'FIXED_SIZE_RISK_EXCEEDED', per_lot_loss)
     else:
         requested = min(setup_cfg.max_lots, int(math.floor(
