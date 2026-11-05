@@ -509,6 +509,17 @@ class FuturesPullbackConfig(BaseModel):
     require_volume: bool = True
     volume_multiplier: float = Field(default=1.0, ge=0, le=100)
     max_wait_bars: int = Field(default=6, ge=1, le=288)
+    # Legacy planner waits for a completed 5m breakout close; opt-in mode
+    # submits a stop-market trigger immediately after the completed HTF setup.
+    execution_mode: Literal["CLOSE_CONFIRM_NEXT_OPEN", "STOP_MARKET_INTRABAR"] = "CLOSE_CONFIRM_NEXT_OPEN"
+    stop_anchor: Literal["SWING", "SIGNAL_CANDLE"] = "SWING"
+    breakout_buffer_ticks: int = Field(default=0, ge=0, le=1000)
+    # Optional 1h trend snapshot; all three operands are required together.
+    trend_fast_ema_id: str | None = None
+    trend_slow_ema_id: str | None = None
+    trend_close_indicator_id: str | None = None
+    trend_crossover_block_bars: int = Field(default=0, ge=0, le=100)
+    cancel_on_trend_invalidation: bool = True
     swing_lookback_bars: int = Field(default=3, ge=1, le=200)
     stop_buffer_atr: float = Field(default=0.1, ge=0, le=20)
     breakout_buffer_points: float = Field(default=0, ge=0)
@@ -531,6 +542,8 @@ class FuturesConfig(BaseModel):
     taker_fee_percent: float = Field(default=0.05, ge=0, le=5)
     gst_percent: float = Field(default=18, ge=0, le=100)
     slippage_bps: float = Field(default=2, ge=0, le=1000)
+    extra_half_spread_bps: float = Field(default=0, ge=0, le=1000)  # assumed; not historical BBO
+    force_exit_time: str | None = None  # local HH:MM, separate from the entry window
     tick_size: float = Field(default=0.5, gt=0)
     slippage_ticks: int = Field(default=0, ge=0, le=1000)
     funding_rate_multiplier: float = Field(default=1.0, ge=0, le=5)
@@ -541,6 +554,8 @@ class FuturesConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_futures(self):
+        if self.force_exit_time is not None and not re.fullmatch(r"(?:[01]\\d|2[0-3]):[0-5]\\d", self.force_exit_time):
+            raise ValueError("Futures force_exit_time must be a local 24-hour HH:MM clock")
         if self.take_profit_percent is not None and self.take_profit_percent>=100:
             raise ValueError("Futures short take-profit must be below 100% of entry price")
         if self.maintenance_margin_percent >= 100 / self.leverage:
@@ -662,14 +677,28 @@ class StrategyConfig(BaseModel):
             if self.pattern_trade.enabled:
                 raise ValueError("Futures pullback and options pattern modes are mutually exclusive")
             available = {item.id: item for item in self.indicators}
-            for name, kinds, expected_tf in (
+            dependencies = [
                 (cfg.ema_indicator_id, {"EMA"}, cfg.setup_timeframe),
                 (cfg.atr_indicator_id, {"ATR"}, cfg.setup_timeframe),
-                (cfg.volume_indicator_id, {"VOLUME_SMA"}, self.timeframe),
-            ):
+            ]
+            if cfg.require_volume or cfg.execution_mode == "CLOSE_CONFIRM_NEXT_OPEN":
+                dependencies.append((cfg.volume_indicator_id, {"VOLUME_SMA"}, self.timeframe))
+            for name, kinds, expected_tf in dependencies:
                 indicator = available.get(name)
                 if indicator is None or indicator.kind not in kinds or indicator.timeframe not in (expected_tf, "strategy" if expected_tf == self.timeframe else "") or indicator.chart_only:
                     raise ValueError(f"Futures pullback operand {name!r} must be non-chart-only {sorted(kinds)} at {expected_tf}")
+            trend_ids = (cfg.trend_fast_ema_id, cfg.trend_slow_ema_id, cfg.trend_close_indicator_id)
+            if any(trend_ids) and not all(trend_ids):
+                raise ValueError("Futures pullback trend requires fast, slow and 1h close indicator IDs")
+            if cfg.trend_crossover_block_bars and not all(trend_ids):
+                raise ValueError("Futures pullback crossover exclusion requires 1h trend indicator IDs")
+            if all(trend_ids):
+                for name in trend_ids:
+                    item = available.get(name)
+                    if item is None or item.kind != "EMA" or item.timeframe != "1h" or item.chart_only:
+                        raise ValueError(f"Futures pullback trend operand {name!r} must be a non-chart-only 1h EMA")
+                if available[cfg.trend_close_indicator_id].params.get("period") != 1:
+                    raise ValueError("Futures pullback trend close proxy must be a 1h EMA with period 1")
             if cfg.max_wait_bars * tf_minutes[self.timeframe] > tf_minutes[cfg.setup_timeframe] * 2:
                 raise ValueError("Futures pullback max_wait_bars cannot exceed two setup candles")
             if self.futures.stop_loss_percent is not None or self.futures.take_profit_percent is not None:
