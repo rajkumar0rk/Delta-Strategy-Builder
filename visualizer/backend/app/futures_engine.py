@@ -8,6 +8,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+from collections import deque
 from pathlib import Path
 import pandas as pd
 from zoneinfo import ZoneInfo
@@ -157,7 +158,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':11,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':12,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
@@ -186,6 +187,59 @@ def run_futures_backtest(req, progress=None):
     markers=list(alert_markers(frame,strategy,req.start,req.end))
     trades=[];equity_curve=[]  # Marked candle-close equity is appended exactly once per active bar.
     position=None;pending=None;pending_setup=None;pending_lifecycle_id=None;pending_lifecycle_snapshot=None;fee_total=0.0;fund_total=0.0
+    stop_entry=None  # bounded single pending stop-market order, opt-in
+    stop_order_cancellations={};stop_order_triggers=0
+    effective_slippage_bps=cfg.slippage_bps+cfg.extra_half_spread_bps
+    trend_crosses=deque(maxlen=128)
+    last_hour_emas=None
+    def update_hour_trend(timestamp, candle):
+        nonlocal last_hour_emas
+        setup=cfg.pullback
+        if not (setup.enabled and setup.trend_fast_ema_id and setup.trend_slow_ema_id):
+            return
+        if timestamp.minute or timestamp.second:  # completed UTC 1H boundary
+            return
+        fast=float(candle.get(setup.trend_fast_ema_id, float('nan')))
+        slow=float(candle.get(setup.trend_slow_ema_id, float('nan')))
+        if not (math.isfinite(fast) and math.isfinite(slow)):
+            return
+        if last_hour_emas is not None:
+            pf,ps=last_hour_emas
+            if (pf<=ps and fast>slow) or (pf>=ps and fast<slow):
+                trend_crosses.append(timestamp)
+        last_hour_emas=(fast,slow)
+    def trend_valid(candle, direction, asof):
+        setup=cfg.pullback
+        if not setup.trend_fast_ema_id:
+            return True
+        try:
+            fast=float(candle[setup.trend_fast_ema_id])
+            slow=float(candle[setup.trend_slow_ema_id])
+            close1h=float(candle[setup.trend_close_indicator_id])
+        except (KeyError,ValueError,TypeError):
+            return False
+        if not all(math.isfinite(v) for v in (fast,slow,close1h)):
+            return False
+        if not ((fast>slow and close1h>fast) if direction=='LONG' else
+                (fast<slow and close1h<fast)):
+            return False
+        if setup.trend_crossover_block_bars and any(
+            pd.Timedelta(0) <= asof-cross < pd.Timedelta(hours=setup.trend_crossover_block_bars)
+            for cross in trend_crosses):
+            return False
+        return True
+    def end_of_day_due(ts):
+        if not cfg.force_exit_time:
+            return False
+        local=ts.tz_convert(ZoneInfo(strategy.session.timezone))
+        return local.strftime('%H:%M') >= cfg.force_exit_time
+    def cancel_stop(reason):
+        nonlocal stop_entry
+        if stop_entry is not None:
+            stop_order_cancellations[reason]=stop_order_cancellations.get(reason,0)+1
+            decisions.append({'timestamp':stop_entry['signal_time'],'kind':'PENDING_CANCEL',
+                              'direction':stop_entry['direction'],'passed':False,'reason':reason})
+            stop_entry=None
     margin_rejects=0;ambiguous=0;margin_stop_ambiguous=0;unresolved=None
     rejection_reasons={};decisions=[]
     mark_peak=initial;mark_max_dd=0.0;mark_max_dd_pct=0.0;last_close=None;last_equity=initial
@@ -201,7 +255,7 @@ def run_futures_backtest(req, progress=None):
         return price*(qty if quantity is None else quantity)*cfg.taker_fee_percent/100*(1+cfg.gst_percent/100)
     def close(pos,exit_time,price,reason):
         nonlocal balance,fee_total,fund_total,peak,max_dd,max_dd_pct
-        exit_px=_slipped(price,pos['direction'],False,cfg.slippage_bps,cfg.tick_size,cfg.slippage_ticks)
+        exit_px=_slipped(price,pos['direction'],False,effective_slippage_bps,cfg.tick_size,cfg.slippage_ticks)
         sign=1 if pos['direction']=='LONG' else -1
         trade_qty=pos.get('quantity',qty)
         gross=(exit_px-pos['entry_price'])*trade_qty*sign
@@ -210,6 +264,7 @@ def run_futures_backtest(req, progress=None):
         net=gross-cost+pos['funding_usd']
         balance+=gross-exit_fee
         fee_total+=exit_fee
+        r_at_risk=(pos.get('risk_per_lot_usd') or 0)*(trade_qty/cfg.contract_btc)
         trade={'id':len(trades)+1,'symbol':cfg.symbol,'direction':pos['direction'],
           'action':'BUY' if sign==1 else 'SELL','entry_time':pos['entry_time'],
           'exit_time':pd.Timestamp(exit_time).isoformat(),
@@ -222,6 +277,8 @@ def run_futures_backtest(req, progress=None):
           'mfe_percent':pos['mfe']*100,'mae_percent':pos['mae']*100,
           'stop_price':pos.get('stop_price'),'target_price':pos.get('target_price'),
           'risk_per_lot_usd':pos.get('risk_per_lot_usd'),
+          'r_multiple_net':net/r_at_risk if r_at_risk>0 else None,
+          'entry_fill_timing':pos.get('entry_fill_timing','OPEN'),
           'exit_reason':reason,'entry_execution_side':'ASK_PROXY' if sign==1 else 'BID_PROXY',
           'exit_execution_side':'BID_PROXY' if sign==1 else 'ASK_PROXY',
           **pos['lifecycle_provenance']}
@@ -237,6 +294,7 @@ def run_futures_backtest(req, progress=None):
         # the main loop. Do not append a duplicate exit timestamp here.
     for i,(ts,row) in enumerate(frame.iterrows()):
         setup_signals=planner.step(i,ts,row) if planner else {}
+        update_hour_trend(ts,row)
         if ts<pd.Timestamp(req.start):
             # Warm up lifecycle state without placing pre-range orders.
             for direction,enabled,group,side in (
@@ -252,19 +310,60 @@ def run_futures_backtest(req, progress=None):
         day=at_open.tz_convert(ZoneInfo(strategy.session.timezone)).date()
         if daily['day']!=day:
             daily.update(day=day,start_balance=balance,entries=0,consecutive_losses=0,realized=0.0)
-        # Exits signalled on a prior completed bar fill at this bar OPEN.
+        # A clock exit is a bar-open event, never a signal generated from
+        # the high/low of the same bar. It is independent of entry windows.
         closed=False
+        if end_of_day_due(at_open):
+            cancel_stop('FORCE_EXIT_CLOCK')
+            if position is not None:
+                close(position,at_open,float(row.open),'FORCE_EXIT_CLOCK')
+                position=None
+                closed=True
+            pending=None;pending_setup=None;pending_lifecycle_id=None;pending_lifecycle_snapshot=None
         if isinstance(pending,tuple) and pending[0]=='CLOSE' and position is not None:
             close(position,at_open,float(row.open),pending[1])
             position=None;pending=None;closed=True
         # Pending signal from previous completed candle fills at the current
         # bar open, not on the signal bar close.
+        # Order was armed at a *prior* completed setup candle. Evaluate its
+        # stop-market trigger on this 5m OHLC interval, not on its close.
+        intrabar_candidate=None
+        if stop_entry is not None and position is None:
+            state=stop_entry
+            age=i-state['setup_index']
+            prior=frame.iloc[i-1] if i>0 else None
+            if age>pullback.max_wait_bars:
+                cancel_stop('PENDING_EXPIRED')
+            elif end_of_day_due(at_open) or not _session_allowed(at_open,strategy.session):
+                cancel_stop('ENTRY_SESSION_CLOSED')
+            elif (strategy.risk.max_daily_loss_percent is not None and
+                  strategy.risk.stop_trading_after_daily_loss_limit and
+                  daily['realized']<=-daily['start_balance']*strategy.risk.max_daily_loss_percent/100):
+                cancel_stop('DAILY_LIMIT')
+            elif pullback.cancel_on_trend_invalidation and (
+                  prior is None or not trend_valid(prior,state['direction'],at_open)):
+                cancel_stop('TREND_INVALIDATED')
+            else:
+                direction=state['direction']
+                trigger=state['trigger_price']
+                touched=float(row.high)>=trigger if direction=='LONG' else float(row.low)<=trigger
+                if touched:
+                    # A gap through the stop executes at the worse open.
+                    raw=max(float(row.open),trigger) if direction=='LONG' else min(float(row.open),trigger)
+                    intrabar_candidate=raw
+                    pending=direction
+                    pending_setup=state['setup']
+                    pending_lifecycle_id='PULLBACK_SETUP'
+                    pending_lifecycle_snapshot=state['lifecycle']
+                    stop_entry=None
+                    stop_order_triggers+=1
         if pending is not None and position is None:
             direction=pending;pending=None
             execution_setup=pending_setup;pending_setup=None
             lifecycle_id=pending_lifecycle_id;pending_lifecycle_id=None
             lifecycle_snapshot=pending_lifecycle_snapshot;pending_lifecycle_snapshot=None
-            px=_slipped(float(row.open),direction,True,cfg.slippage_bps,cfg.tick_size,cfg.slippage_ticks)
+            px=_slipped(intrabar_candidate if intrabar_candidate is not None else float(row.open),
+                        direction,True,effective_slippage_bps,cfg.tick_size,cfg.slippage_ticks)
             trade_qty=qty; stop_price=None; target_price=None; risk_per_lot=None; entry_rejection=None
             if execution_setup:
                 raw_stop=float(execution_setup['stop_price'])
@@ -273,8 +372,13 @@ def run_futures_backtest(req, progress=None):
                 if stop_price<=0 or (px-stop_price)*(1 if direction=='LONG' else -1)<=0:
                     entry_rejection='STOP_NOT_PROTECTIVE'
                 else:
-                    stop_proxy=_slipped(stop_price,direction,False,cfg.slippage_bps,cfg.tick_size,cfg.slippage_ticks)
-                    lots,reason,risk_per_lot=risk_sized_lots(px,stop_proxy,direction,balance,cfg,pullback)
+                    stop_proxy=_slipped(stop_price,direction,False,effective_slippage_bps,cfg.tick_size,cfg.slippage_ticks)
+                    remaining_day_risk=None
+                    if strategy.risk.max_daily_loss_percent is not None:
+                        remaining_day_risk=max(0.0, daily['start_balance']*
+                            strategy.risk.max_daily_loss_percent/100+daily['realized'])
+                    lots,reason,risk_per_lot=risk_sized_lots(
+                        px,stop_proxy,direction,balance,cfg,pullback,max_risk_usd=remaining_day_risk)
                     trade_qty=lots*cfg.contract_btc
                     if not lots:entry_rejection=reason
                     target_price=target_at_r(px,stop_price,direction,pullback.reward_r_multiple,cfg.tick_size)
@@ -315,6 +419,7 @@ def run_futures_backtest(req, progress=None):
                     'entry_fee':start_fee,'margin':margin,'funding_usd':0.0,
                     'quantity':trade_qty,'stop_price':stop_price,'target_price':target_price,
                     'risk_per_lot_usd':risk_per_lot,
+                    'entry_fill_timing':'INTRABAR_ESTIMATED' if intrabar_candidate is not None else 'OPEN',
                     'mfe':0.0,'mae':0.0,
                     'lifecycle_provenance':dict(lifecycle_snapshot or {})}
                 markers.append({'id':f"future-entry-{len(trades)+1}",'time':int(at_open.timestamp()),
