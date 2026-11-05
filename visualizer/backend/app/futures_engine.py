@@ -508,7 +508,8 @@ def run_futures_backtest(req, progress=None):
            'drawdown_percent':(mark_peak-last_equity)/max(mark_peak,1e-12)*100,
            'cash_balance_usd':balance,'unrealized_pnl_usd':unrealized,
            'reserved_exit_fee_usd':reserved_exit_fee,'equity_source':'OHLC_CLOSE_PROXY'})
-        if closed or position or pending is not None or not _session_allowed(ts,strategy.session):continue
+        if closed or position or pending is not None or stop_entry is not None or not _session_allowed(ts,strategy.session):continue
+        if end_of_day_due(ts):continue
         if strategy.risk.close_at_session_end and _session_end_due(ts,strategy.session,tf):continue
         if strategy.no_trade.configured() and evaluate_group(frame,i,strategy.no_trade)['passed']:continue
         if (strategy.risk.max_trades_per_day is not None and daily['entries']>=strategy.risk.max_trades_per_day
@@ -524,7 +525,10 @@ def run_futures_backtest(req, progress=None):
             if not enabled or (not pullback and not group.configured()):continue
             if nt.configured() and evaluate_group(frame,i,nt)['passed']:continue
             if pullback:
-                if direction not in setup_signals:continue
+                stateful_stop = pullback.execution_mode=='STOP_MARKET_INTRABAR'
+                candidate = planner.new_setups if stateful_stop else setup_signals
+                if direction not in candidate:continue
+                if stateful_stop and not trend_valid(row,direction,ts):continue
                 tree=evaluate_group(frame,i,group,_entry_ignore_ids(strategy,side)) if group.configured() else {'passed':True}
                 score=_big_trend_score(frame,i,group,
                     strategy.call_big_trend_score if side=='CALL' else strategy.put_big_trend_score,side)
@@ -546,6 +550,36 @@ def run_futures_backtest(req, progress=None):
             else:
                 selected=eligible[0]
             if selected is not None:
+                if pullback and pullback.execution_mode=='STOP_MARKET_INTRABAR':
+                    pending_lifecycle_id='PULLBACK_SETUP'
+                    signal=dict(planner.new_setups[selected[0]])
+                    level=signal['level']
+                    ticks=max(1,pullback.breakout_buffer_ticks)
+                    raw_level=level+(pullback.breakout_buffer_points if selected[0]=='LONG' else -pullback.breakout_buffer_points)
+                    if selected[0]=='LONG':
+                        trigger=(math.floor(raw_level/cfg.tick_size+1e-10)+ticks)*cfg.tick_size
+                    else:
+                        trigger=(math.ceil(raw_level/cfg.tick_size-1e-10)-ticks)*cfg.tick_size
+                    if trigger<=0:
+                        rejection_reasons['INVALID_TRIGGER_PRICE']=rejection_reasons.get('INVALID_TRIGGER_PRICE',0)+1
+                        continue
+                    stop_entry={'direction':selected[0],'trigger_price':round(trigger,10),
+                        'setup_index':i,'signal_time':ts.isoformat(),
+                        'setup':{'stop_price':signal['stop_price'],
+                            'setup_time':signal['setup_time'],
+                            'setup_breakout_level':level,'setup_max_wait_bars':pullback.max_wait_bars},
+                        'lifecycle':{
+                            'entry_lifecycle_id':'PULLBACK_SETUP',
+                            'entry_lifecycle_signal_time':ts.isoformat(),
+                            'entry_lifecycle_age_bars':0,'entry_lifecycle_delay_bars':0,
+                            'entry_lifecycle_entries_before':0,'entry_lifecycle_max_entries':1,
+                            'entry_lifecycle_expired':False,'entry_lifecycle_eligible':True,
+                            'setup_confirmation_time':signal['setup_time'],
+                            'setup_breakout_level':level,
+                            'pending_trigger_price':round(trigger,10)}}
+                    decisions.append({'timestamp':ts.isoformat(),'kind':'PENDING_ARM',
+                        'direction':selected[0],'passed':True,'reason':'STOP_MARKET_ARMED'})
+                    continue
                 pending,pending_lifecycle_id=selected
                 if pullback:
                     pending_setup=dict(setup_signals[selected[0]])
@@ -609,7 +643,9 @@ def run_futures_backtest(req, progress=None):
       'unresolved_position_count':int(unresolved is not None),
       'alerts_triggered':sum(m['kind']=='alert' for m in markers),'daily_risk_blocks':daily['blocks'],
       'insufficient_margin_rejections':margin_rejects,'rejection_reasons':rejection_reasons,
-      'ambiguous_intrabar_stop_target':ambiguous,'ambiguous_margin_stop':margin_stop_ambiguous}
+      'ambiguous_intrabar_stop_target':ambiguous,'ambiguous_margin_stop':margin_stop_ambiguous,
+      'stop_market_order_triggers':stop_order_triggers,
+      'stop_market_order_cancellations':stop_order_cancellations}
     run_id,out=_new_result_dir(strategy.name)
     result={'run_id':run_id,'result_dir':str(out),'start':req.start,'end':req.end,
       'dataset_id':getattr(req,'dataset_id',None),'dataset_ids':[p.id for p in parts],
@@ -621,6 +657,7 @@ def run_futures_backtest(req, progress=None):
       'reliability':{'grade':'RESEARCH_ONLY','execution_model':'UNDERLYING_OHLC_PROXY',
         'limitations':['No historical futures orderbook/spread or fills',
            'Intrabar stops/targets, slippage and margin breaches are estimates',
+           'Stop-market trigger timing is estimated from 5m OHLC; pre-entry extremes within the same bar may cause a conservatively counted stop',
            'Risk-sized trades can exceed the configured estimated loss in stop gaps',
            'Option premium-based profit-protection fields are ignored in Futures mode; use futures price stop/target',
            'Real exchange mark-to-market drawdown cannot be computed; candle-close proxy estimates are supplied separately',
@@ -634,6 +671,9 @@ def run_futures_backtest(req, progress=None):
         'funding_regime':'PRE_2025_MINUTE_FUNDING_EXCLUDED' if pd.Timestamp(req.start)<pd.Timestamp(EIGHT_HOUR_FUNDING_FROM_UTC) else 'EIGHT_HOUR_SNAPSHOT',
         'symbol':cfg.symbol,'leverage':cfg.leverage,'margin_mode':cfg.margin_mode,
         'pullback_enabled':bool(pullback),
+        'pullback_execution_mode':pullback.execution_mode if pullback else None,
+        'force_exit_time':cfg.force_exit_time,
+        'assumed_extra_half_spread_bps':cfg.extra_half_spread_bps,
         'funding_mode':cfg.funding_mode,'funding_missing_intervals':len(missing_funding),
         'venue_verified_liquidation':False,'volume_fill_verified':False,
           'tick_size':cfg.tick_size,'execution_slippage_ticks':cfg.slippage_ticks}}
