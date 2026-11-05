@@ -26,3 +26,7 @@ before claiming an exact backtest.
 
 ## Distinguish Strategy Lab futures
 This file describes the standalone `backtest/` options matrix, **not** the maintained `visualizer/` default strategy or BTCUSD futures engine. For an importable Strategy Lab JSON see `visualizer/examples/btcusd-futures-research.template.json`; for generation instructions see `visualizer/codex/FUTURES_STRATEGY_JSON_PROMPT.md`. Futures research P&L is not proven executable or profitable.
+
+## November 2026 configurable intraday futures stop order
+
+The opt-in 1H EMA50/200 + 15M EMA20 pullback **stop-market** strategy lives in `visualizer/backend/examples/btc-futures-intraday-1h-15m-stop-market.strategy.json`. Its authoritative generation guidance is `visualizer/codex/FUTURES_STRATEGY_JSON_PROMPT.md` and `visualizer/codex/STRATEGY_JSON_GENERATION_PROMPT.md`. Default legacy futures pullbacks remain close-confirm/next-open. The intraday order mode adds bounded pending stop entry, signal-candle ATR SL, fixed 2R, optional 1H crossover exclusion, remaining daily equity risk, separate force-exit clock, assumed half-spread and partial research-only parity. Re-run tests and benchmark relevant 5M history; these are not historical Delta execution fills or a profitability guarantee.
