@@ -337,8 +337,10 @@ def run_futures_backtest(req, progress=None):
         if stop_entry is not None and position is None:
             state=stop_entry
             age=i-state['setup_index']
+            # Missing candles must not prolong a pending order's clock lifetime.
+            elapsed=(ts-pd.Timestamp(state['signal_time']))/pd.Timedelta(minutes=tf)
             prior=frame.iloc[i-1] if i>0 else None
-            if age>pullback.max_wait_bars:
+            if age>pullback.max_wait_bars or elapsed>pullback.max_wait_bars:
                 cancel_stop('PENDING_EXPIRED')
             elif end_of_day_due(at_open) or not _session_allowed(at_open,strategy.session):
                 cancel_stop('ENTRY_SESSION_CLOSED')
