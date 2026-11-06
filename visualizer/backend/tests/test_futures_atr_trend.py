@@ -108,7 +108,7 @@ def test_directional_trend_atr_mode_runs_without_options(tmp_path,monkeypatch):
     strategy.risk.starting_balance_usd=5000
     strategy.session.windows=[]
     result=run_backtest(BacktestRequest(
-        dataset_id="sample",start="2026-01-01T00:00:00Z",
+        dataset_id="sample",start="2026-01-01T00:05:00Z",
         end="2026-01-02T12:00:00Z",strategy=strategy,warmup_candles=2))
     assert result["futures_research"]["trend_risk_enabled"] is True
     assert result["metrics"]["trades"]>=1 or result["unresolved_position"] is not None
