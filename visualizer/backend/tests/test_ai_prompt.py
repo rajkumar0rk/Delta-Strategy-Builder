@@ -154,3 +154,24 @@ def test_intraday_stop_market_futures_example_and_generation_contract():
                  'trend_crossover_block_bars', 'force_exit_time',
                  'extra_half_spread_bps', 'btc-futures-intraday-1h-15m-stop-market.strategy.json'):
         assert term in prompt
+
+def test_importable_options_shared_pullback_and_ai_prompt_contract():
+    from pathlib import Path
+    import json
+    path=(Path(__file__).resolve().parents[1]/'examples'/
+          'btc-options-intraday-pullback.strategy.json')
+    payload=json.loads(path.read_text(encoding='utf-8'))
+    assert payload['schema_version']==15 and payload['app']=='BTC Strategy Lab'
+    strategy=StrategyConfig.model_validate(payload['strategy'])
+    assert strategy.market_type=='OPTIONS'
+    assert strategy.options_pullback.enabled
+    assert strategy.options_pullback.execution_mode=='STOP_MARKET_INTRABAR'
+    assert strategy.options_pullback.stop_anchor=='SIGNAL_CANDLE'
+    assert strategy.options_pullback.trend_crossover_block_bars==3
+    assert strategy.options_force_exit_time=='23:45'
+    assert strategy.risk.stop_loss.mode=='NONE'
+    p=build_strategy_prompt(AiStrategyPromptRequest(strategy=strategy))
+    for key in ('options_pullback.enabled', 'options_force_exit_time',
+                'BUY CALL/BUY PUT', 'option premium', 'underlying_tick_size',
+                'OPTIONS_PULLBACK_BACKTEST.md'):
+        assert key.lower() in p.lower()
