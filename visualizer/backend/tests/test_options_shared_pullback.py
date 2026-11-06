@@ -111,8 +111,8 @@ def run(tmp_path,monkeypatch,*,hit_target=False,missing_quotes=False):
 def test_option_quote_entry_and_underlying_2r_target(tmp_path,monkeypatch):
     result=run(tmp_path,monkeypatch,hit_target=True)
     assert result['metrics']['option_stop_order_events']['armed']>=1
-    assert result['metrics']['option_stop_order_events']['triggered']>=1
-    assert result['metrics']['trades']>=1
+    assert result['metrics']['option_stop_order_events']['triggered']>=1, (result['metrics'],[(m.get('time'),m.get('text')) for m in result['markers'] if m.get('text','').startswith('OPTION')][:20])
+    assert result['metrics']['trades']>=1, (result['metrics'],[(m.get('time'),m.get('text')) for m in result['markers'] if m.get('text','').startswith('OPTION')][:20])
     first=result['trades'][0]
     assert first['action']=='BUY' and first['direction']=='CALL'
     assert first['entry_execution_side']=='ASK'
@@ -144,7 +144,7 @@ def test_disabled_mode_and_sell_rejection_are_backwards_compatible():
         config(call_action='SELL')
     with pytest.raises(ValidationError,match='legacy option exits'):
         config(risk={'stop_loss':{'mode':'OPTION_PERCENT','value':15}})
-    with pytest.raises(ValidationError,match='1h indicator IDs'):
+    with pytest.raises(ValidationError,match='1h trend IDs'):
         config(options_pullback={'enabled':True,'trend_crossover_block_bars':3})
     with pytest.raises(ValidationError,match='options_force_exit_time'):
         config(options_force_exit_time='25:00')
