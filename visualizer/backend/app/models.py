@@ -893,6 +893,10 @@ class DatasetSelection(BaseModel):
 
 
 class BacktestRequest(DatasetSelection):
+    # Explicitly opt in to supplemental 1m mark/index/rate observations.
+    # Never implied by auto_download_missing_data (which repairs BTC OHLCV).
+    # This is a backtest request setting, not a strategy JSON setting.
+    auto_sync_futures_observations: bool = False
     start: str
     end: str
     strategy: StrategyConfig
