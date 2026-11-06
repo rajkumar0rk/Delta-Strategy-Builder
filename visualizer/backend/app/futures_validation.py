@@ -38,7 +38,7 @@ def run_futures_validation(req:FuturesValidationRequest, progress=None):
     start,end=_parse_dt(req.start),_parse_dt(req.end)
     if end<=start:
         raise ValueError('Validation period end must exceed start')
-    minutes={'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'1D':1440}[req.strategy.timeframe]
+    minutes={'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'4h':240,'1D':1440}[req.strategy.timeframe]
     total=int((end-start).total_seconds()//(minutes*60))
     train_bars=int(total*req.train_fraction)
     if train_bars<30 or total-train_bars-req.embargo_bars<30:
