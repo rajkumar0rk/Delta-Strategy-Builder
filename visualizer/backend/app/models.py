@@ -564,7 +564,6 @@ class AdaptiveRegimeConfig(BaseModel):
     atr_compression_max: float = Field(default=30.0, ge=0, le=100)
     atr_extreme_min: float = Field(default=90.0, ge=0, le=100)
     confirmations: int = Field(default=2, ge=1, le=24)
-    compression_grace_hours: int = Field(default=2, ge=0, le=24)
     ema_slope_bars: int = Field(default=2, ge=1, le=24)
     require_ema_slope: bool = True
 
