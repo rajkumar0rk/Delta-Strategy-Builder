@@ -27,7 +27,8 @@ export function AdaptiveFuturesEditor({value,onChange}:{value:Strategy;onChange:
  const update=(patch:Partial<AdaptiveFuturesConfig>)=>{
   const next={...adaptive,...patch};
   onChange({...value,futures:{...value.futures!,adaptive:next,
-   ...(next.enabled?{pullback:{...value.futures?.pullback,enabled:false},
+   ...(next.enabled?{...(value.futures?.pullback?
+      {pullback:{...value.futures.pullback,enabled:false}}:{}),
     stop_loss_percent:null,take_profit_percent:null}: {})}});
  };
  const regime=(patch:Partial<AdaptiveRegimeConfig>)=>update({regime:{...adaptive.regime,...patch}});
