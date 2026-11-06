@@ -45,7 +45,6 @@ class AdaptiveBreakoutPlanner:
         self._hits = 0
         self.regime_log = []
         self.last_hour = None
-        self.trade_candidate = {}
 
     def _classify(self, row):
         c = self.config.regime
@@ -67,7 +66,7 @@ class AdaptiveBreakoutPlanner:
         if adx < c.adx_trend_min:
             return "TRANSITION"
         if c.require_ema_slope:
-            if len(self.hourly) < self.hourly.maxlen:
+            if len(self.hourly) < self.hourly.maxlen or self.hourly[0] is None:
                 return "TRANSITION"
             slope = fast-self.hourly[0]
         else:
