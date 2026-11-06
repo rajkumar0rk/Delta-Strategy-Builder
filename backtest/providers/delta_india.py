@@ -43,7 +43,7 @@ class DeltaPublicClient:
                 if exc.code not in {429, 500, 502, 503, 504} or attempt == self.max_attempts - 1:
                     raise RuntimeError(f"Delta API returned HTTP {exc.code}: {detail}") from exc
             except (urllib.error.URLError, OSError) as exc:
-                if attempt == 3:
+                if attempt == self.max_attempts - 1:
                     reason = getattr(exc, "reason", str(exc))
                     raise RuntimeError(f"Delta API request failed: {reason}") from exc
             time.sleep(min(60.0, self.retry_base_seconds * (2 ** attempt)))
