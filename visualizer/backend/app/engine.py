@@ -1683,6 +1683,17 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 add_marker(ts.isoformat(),'reject','PUT',reason,_event_details('Breakout/retest gate',reason,btc_close=_finite(row.close),
                     breakout_level=_strategy_operand(frame,i,'put_breakout_level'),bars_since_breakout=_strategy_operand(frame,i,'put_bars_since_breakout'),
                     retest_ready=_strategy_operand(frame,i,'put_retest_ready'),false_breakout=_strategy_operand(frame,i,'put_false_breakout')))
+        # A touched pending stop is a one-shot event. If no-trade or other
+        # directional gates block it, do not retain a stale triggered order.
+        if option_pending_filled is not None and not (call_candidate or put_candidate):
+            option_order_events['cancelled']+=1
+            add_marker(ts.isoformat(),'reject',option_pending.direction,
+                'OPTION_STOP_TRIGGER_BLOCKED',
+                _event_details('Underlying stop touched but strategy gate blocked',
+                               'OPTION_ENTRY_GATE',trigger=option_pending.trigger_price))
+            option_pending=None
+            continue
+
         risk_reason = daily_block_reason()
         if risk_reason and (call_candidate or put_candidate):
             daily_state['blocked_count'] = int(daily_state['blocked_count']) + 1
