@@ -1758,6 +1758,12 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
 
         action = strategy.call_action if direction == 'CALL' else strategy.put_action
         spec, q, why = _select_option(store, parts, inst, ts, float(row.close), direction, strategy, action)
+        if options_setup and q and (
+                not _session_allowed(pd.Timestamp(q['timestamp']),strategy.session)
+                or clock_due(pd.Timestamp(q['timestamp']),
+                             strategy.options_force_exit_time,strategy.session.timezone)):
+            why='OPTION_QUOTE_OUTSIDE_ENTRY_WINDOW'
+            q=None
         if not spec or not q:
             decision_tree = {'mode': 'EXECUTION', 'passed': False, 'passed_count': 0, 'total': 1, 'conditions': [], 'groups': []}
             decisions.append(_flatten_decision(next_event('decision'), direction, ts, 'EXECUTION', decision_tree, {'close': _finite(row.close), 'reason': why}))
@@ -1866,7 +1872,10 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             tick=options_setup.underlying_tick_size
             signal_stop=(math.floor(signal_stop/tick+1e-10)*tick if direction_up
                          else math.ceil(signal_stop/tick-1e-10)*tick)
-            target=target_at_r(float(row.close),signal_stop,
+            # Use the frozen underlying stop-trigger/gap fill proxy for R.
+            # The later observed BUY option ASK price is NOT a BTC price.
+            underlying_entry_proxy=float(filled_stop.crossed(row))
+            target=target_at_r(underlying_entry_proxy,signal_stop,
                                 'LONG' if direction_up else 'SHORT',
                                 options_setup.reward_r_multiple,tick)
             if target is None:
@@ -1875,6 +1884,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 'stop':round(signal_stop,10),'target':target,
                 'signal_time':filled_stop.signal_time.isoformat(),
                 'underlying_trigger':filled_stop.trigger_price,
+                'underlying_entry_proxy':underlying_entry_proxy,
                 'setup_level':filled_stop.setup_level,
                 'per_unit_risk':per_unit,
                 'r_definition':'BTC_UNDERLYING_POINTS_NOT_OPTION_PREMIUM'}
