@@ -111,6 +111,8 @@ export function RiskOptions({value,onChange}:{value:Strategy;onChange:(s:Strateg
    <option value="FIXED">Fixed option lots with risk guard</option></select></label>
   {optNum('equity_risk_percent','Maximum premium-risk equity %','0.1',0.01)}
   {optNum('max_lots','Maximum allowed option lots')}
+  {optNum('max_estimated_risk_multiple','Fixed-size risk multiplier (daily cap still enforced)','0.1',1)}
+  {optNum('volume_multiplier','5m volume confirmation multiplier','0.1')}
   <label>1h trend EMA fast ID<input value={opt.trend_fast_ema_id??''}
    onChange={e=>setOpt({trend_fast_ema_id:e.target.value||null})}/></label>
   <label>1h trend EMA slow ID<input value={opt.trend_slow_ema_id??''}
