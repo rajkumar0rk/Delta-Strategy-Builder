@@ -225,14 +225,133 @@ def repair_missing_btc_candles(
             "touched_files": len(additions), "reused": False}
 
 
+
+def append_uncovered_btc_intervals(
+    root: Path, gaps: list[tuple[str, str]], *,
+    client=None, progress: Callable[[str], None] | None = None,
+    now: datetime | None = None,
+):
+    """Append only missing catalog intervals, downloading BTC candles alone.
+
+    Existing archive segment intervals/files are never rewritten. A failed
+    request never adds a partly complete segment to catalog.json.
+    """
+    from .history_archive import ArchiveSegment, load_catalog, write_catalog
+
+    root = Path(root).resolve()
+    now = (now or datetime.now(UTC)).astimezone(UTC)
+    completed = int(now.timestamp()) // STEP * STEP
+    current = list(load_catalog(root)) if (root / "catalog.json").exists() else []
+    intervals = [(int(_epoch(item.start)), int(_epoch(item.end))) for item in current]
+    requested = []
+    for start, end in gaps:
+        a, b = _epoch(start), _epoch(end)
+        if b <= a or a % STEP or b % STEP:
+            raise ValueError("BTC catalog gaps must be nonempty UTC-aligned 5m intervals")
+        if b > completed:
+            raise ValueError("BTC_CANDLE_NOT_COMPLETE: missing interval includes an incomplete candle")
+        if any(a < y and x < b for x, y in intervals):
+            raise ValueError("BTC_CATALOG_GAP_OVERLAP: refusing to modify an existing archive segment")
+        if any(a < y and x < b for x, y in requested):
+            raise ValueError("BTC_CATALOG_GAP_OVERLAP: requested intervals overlap")
+        requested.append((a, b))
+
+    if not requested:
+        return {"appended_segments": 0, "downloaded": 0}
+    client = client or DeltaPublicClient(BASE_URL)
+    staging = []
+    # No downloads or catalog edits for an already-complete interval.
+    try:
+        for a, b in requested:
+            rows = {}
+            # Use close timestamps [a,b); Delta API timestamps candle opens.
+            for first_close in range(a, b, MAX_CHUNK_CANDLES * STEP):
+                end_close = min(b, first_close + MAX_CHUNK_CANDLES * STEP)
+                response = client.candles("BTCUSD", first_close - STEP, end_close - STEP, "5m")
+                expected = set(range(first_close, end_close, STEP))
+                got = {}
+                for item in response:
+                    close = int(item["time"]) + STEP
+                    if close in expected:
+                        normalized = _normalize_candle(item, close)
+                        if close in got and got[close] != normalized:
+                            raise ValueError("Conflicting Delta BTC candle responses")
+                        got[close] = normalized
+                if set(got) != expected:
+                    raise RuntimeError(
+                        f"BTC_CANDLE_DOWNLOAD_INCOMPLETE: {len(expected-set(got))} "
+                        f"missing 5m close(s) in {_iso(first_close)} → {_iso(end_close)}; "
+                        f"catalog unchanged"
+                    )
+                rows.update(got)
+            label = f"btc-only-{datetime.fromtimestamp(a, UTC):%Y%m%dT%H%M}-" \
+                    f"{datetime.fromtimestamp(b, UTC):%Y%m%dT%H%M}"
+            target = root / "segments" / label
+            if target.exists():
+                raise FileExistsError(f"Uncatalogued BTC gap segment already exists: {target}")
+            staging.append((a, b, target, rows))
+            if progress:
+                progress(f"Fetched {len(rows)} missing BTC 5m bars for {_iso(a)} → {_iso(b)}")
+
+        # Stage all complete files before publishing any new catalog reference.
+        segments = []
+        for a, b, target, rows in staging:
+            target.mkdir(parents=True, exist_ok=False)
+            output = target / "underlying_bars.csv"
+            temporary = output.with_name(output.name + f".{os.getpid()}.tmp")
+            with temporary.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.DictWriter(stream, fieldnames=list(HEADER), lineterminator="\\n")
+                writer.writeheader()
+                for close in sorted(rows):
+                    writer.writerow(rows[close])
+            os.replace(temporary, output)
+            segments.append(ArchiveSegment(target.name, target, _iso(a), _iso(b)))
+        write_catalog(root, tuple(current) + tuple(segments))
+        return {"appended_segments": len(segments), "downloaded": sum(len(x[3]) for x in staging)}
+    except BaseException:
+        # A failure leaves no newly catalogued segments; staging directories
+        # can be safely cleaned only when not referenced by an existing catalog.
+        raise
+
+
+def append_btc_catalog_gaps(
+    root: Path, start: str, end: str, *,
+    client=None, now: datetime | None = None,
+    progress: Callable[[str], None] | None = None,
+):
+    """Find uncovered archive intervals; do not download existing intervals."""
+    root = Path(root)
+    a, b = _epoch(start), _epoch(end)
+    if b <= a:
+        raise ValueError("Invalid requested BTC history range")
+    intervals = [(x, y) for x, y, _ in _segments(root)] if (root / "catalog.json").exists() else []
+    cursor = a
+    gaps = []
+    for x, y in intervals:
+        if y <= cursor or x >= b:
+            continue
+        if x > cursor:
+            gaps.append((_iso(cursor), _iso(min(x, b))))
+        cursor = max(cursor, y)
+    if cursor < b:
+        gaps.append((_iso(cursor), _iso(b)))
+    return append_uncovered_btc_intervals(root, gaps, client=client,
+                                          now=now, progress=progress)
+
 def main():
     parser = argparse.ArgumentParser(description="Repair only missing cached BTCUSD 5m candles")
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--start", required=True)
     parser.add_argument("--end", required=True)
+    parser.add_argument("--append-catalog-gaps", action="store_true",
+                        help="Append missing catalog intervals using BTC candles alone")
     args = parser.parse_args()
-    result = repair_missing_btc_candles(
-        args.root, args.start, args.end, progress=lambda text: print(text, flush=True))
+    if args.append_catalog_gaps:
+        result = append_btc_catalog_gaps(
+            args.root, args.start, args.end, progress=lambda text: print(text, flush=True))
+    else:
+        result = repair_missing_btc_candles(
+            args.root, args.start, args.end, progress=lambda text: print(text, flush=True))
     print(json.dumps(result), flush=True)
 
 
