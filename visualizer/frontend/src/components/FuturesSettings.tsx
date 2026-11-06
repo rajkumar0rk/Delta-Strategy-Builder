@@ -1,4 +1,5 @@
 import type {FuturesConfig,Strategy} from '../types';
+import {AdaptiveFuturesEditor} from './AdaptiveFuturesEditor';
 
 const defaults:FuturesConfig={symbol:'BTCUSD',contract_btc:0.001,quantity_lots:1,leverage:5,
  margin_mode:'ISOLATED',maintenance_margin_percent:.25,taker_fee_percent:.05,
@@ -19,7 +20,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
  const pullback={...setupDefaults,...f.pullback};
  const setup=(patch:Partial<typeof pullback>)=>onChange({...value,futures:{...f,
    ...(patch.enabled===true?{stop_loss_percent:null,take_profit_percent:null}:{}),
-   pullback:{...pullback,...patch}}});
+   pullback:{...pullback,...patch},...(patch.enabled===true&&f.adaptive?{adaptive:{...f.adaptive,enabled:false}}:{})}});
  const setupNumber=(key:keyof typeof setupDefaults,label:string,step:string,min:number)=>(
   <label key={key}>{label}<input type="number" step={step} min={min}
    value={Number(pullback[key])} onChange={e=>setup({[key]:Number(e.target.value)})}/></label>);
@@ -125,6 +126,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
  </div>}
  <p>Research only: account equity risk is an estimate, not a hard guarantee. Stop gaps, spread, funding, and exchange liquidation can cause larger losses. Configure each indicator ID/timeframe in the indicator builder; the server validates them before running.</p>
  </section>
+ <AdaptiveFuturesEditor value={value} onChange={onChange}/>
  <section className="card"><h2>Futures risk and entry sessions</h2>
  <div className="form-grid">
   <label>Starting balance (USD)<input type="number" min="1" step="10" value={value.risk.starting_balance_usd} onChange={e=>risk({starting_balance_usd:Number(e.target.value)})}/></label>
