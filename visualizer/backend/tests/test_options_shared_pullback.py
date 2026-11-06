@@ -61,7 +61,7 @@ def config(**patch):
     return StrategyConfig.model_validate(spec)
 
 
-def dataset(tmp_path,monkeypatch,*,hit_target=False,missing_quotes=False):
+def dataset(tmp_path,monkeypatch,*,hit_target=False,missing_quotes=False,short=False):
     for k,v in [('STRATEGY_LAB_DATA_ROOT',tmp_path/'data'),
                 ('STRATEGY_LAB_RESULT_ROOT',tmp_path/'results'),
                 ('STRATEGY_LAB_CACHE_ROOT',tmp_path/'cache')]:
@@ -71,20 +71,29 @@ def dataset(tmp_path,monkeypatch,*,hit_target=False,missing_quotes=False):
     times=pd.date_range('2026-01-01T00:05:00Z',periods=290,freq='5min')
     bars=[];quotes=[]
     for i,ts in enumerate(times):
-        row={'timestamp':ts.isoformat(),'open':100,
-             'high':102,'low':99,'close':100 if i<101 else 101,'volume':100}
+        row={'timestamp':ts.isoformat(),'open':101 if short else 100,
+             'high':102,'low':99,
+             'close':(101 if i<101 else 100) if short else (100 if i<101 else 101),
+             'volume':100}
         if i==102:
-            row['high']=105  # stop-market wick: close is only 101
+            if short:
+                row['low']=95
+            else:
+                row['high']=105  # stop-market wick: close is only 101
         if hit_target and i==103:
-            row['high']=112
+            if short:
+                row['low']=85
+            else:
+                row['high']=112
         bars.append(row)
         if not missing_quotes or i<101:
-            quotes.append({'timestamp':ts.isoformat(),'symbol':'BTC100CE',
+            quotes.append({'timestamp':ts.isoformat(),'symbol':'BTC100PE' if short else 'BTC100CE',
                'bid':10+(i>=102)*1,'ask':11+(i>=102)*1,
                'bid_size':1000,'ask_size':1000,'volume':100,'open_interest':1000,
                'source_event':'test'})
-    instruments=[{'symbol':'BTC100CE','source_symbol':'BTC100CE',
-        'expiry':'2026-01-03','strike':100,'option_type':'CE',
+    instruments=[{'symbol':'BTC100PE' if short else 'BTC100CE',
+        'source_symbol':'BTC100PE' if short else 'BTC100CE',
+        'expiry':'2026-01-03','strike':100,'option_type':'PE' if short else 'CE',
         'activation':'2025-12-31T00:00:00Z',
         'expiration':'2026-01-03T00:00:00Z',
         'price_precision':2,'size_precision':0,'price_increment':.1,
@@ -99,13 +108,16 @@ def dataset(tmp_path,monkeypatch,*,hit_target=False,missing_quotes=False):
     return times
 
 
-def run(tmp_path,monkeypatch,*,hit_target=False,missing_quotes=False):
+def run(tmp_path,monkeypatch,*,hit_target=False,missing_quotes=False,short=False):
     times=dataset(tmp_path,monkeypatch,hit_target=hit_target,
-                  missing_quotes=missing_quotes)
+                  missing_quotes=missing_quotes,short=short)
     return run_backtest(BacktestRequest(dataset_id='sample',
         start=times[0].isoformat(),
         end=(times[-1]+pd.Timedelta(minutes=5)).isoformat(),
-        strategy=config(),storage_mode='COMPACT'))
+        strategy=config(direction_mode='PUT',
+            put_entry={'conditions':[{'id':'bear','left':'close',
+                                     'operator':'GT','value':0}]})
+            if short else config(),storage_mode='COMPACT'))
 
 
 def test_option_quote_entry_and_underlying_2r_target(tmp_path,monkeypatch):
@@ -148,3 +160,16 @@ def test_disabled_mode_and_sell_rejection_are_backwards_compatible():
         config(options_pullback={'enabled':True,'trend_crossover_block_bars':3})
     with pytest.raises(ValidationError,match='options_force_exit_time'):
         config(options_force_exit_time='25:00')
+
+
+def test_buy_put_uses_short_underlying_trigger_with_option_ask_and_bid(tmp_path,monkeypatch):
+    result=run(tmp_path,monkeypatch,short=True,hit_target=True)
+    assert result['metrics']['option_stop_order_events']['triggered']>=1
+    assert result['metrics']['trades']>=1
+    trade=result['trades'][0]
+    assert trade['direction']=='PUT' and trade['action']=='BUY'
+    assert trade['symbol']=='BTC100PE'
+    assert trade['entry_execution_side']=='ASK'
+    assert trade['exit_execution_side']=='BID'
+    assert trade['underlying_signal_stop']>trade['underlying_r_target']
+    assert trade['exit_reason']=='UNDERLYING_R_TARGET'
