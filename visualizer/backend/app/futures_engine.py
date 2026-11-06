@@ -271,6 +271,10 @@ def run_futures_backtest(req, progress=None):
         # The candle-close marked equity series is appended once per bar in
         # the main loop. Do not append a duplicate exit timestamp here.
     for i,(ts,row) in enumerate(frame.iterrows()):
+        # The OHLC row describes the candle ending at ts. Pending orders
+        # execute at this candle's OPEN, so their regime gate must use the
+        # previously completed regime, never the state learned at ts.
+        prior_regime=planner.regime if adaptive else None
         setup_signals=planner.step(i,ts,row) if planner else {}
         update_hour_trend(ts,row)
         if ts<pd.Timestamp(req.start):
@@ -323,8 +327,11 @@ def run_futures_backtest(req, progress=None):
                   strategy.risk.stop_trading_after_daily_loss_limit and
                   daily['realized']<=-daily['start_balance']*strategy.risk.max_daily_loss_percent/100):
                 cancel_stop('DAILY_LIMIT')
+            elif adaptive and prior_regime in ('TRANSITION','RANGE','EXTREME_VOLATILITY'):
+                # Fail closed using ONLY the regime known before bar OPEN.
+                cancel_stop('UNSAFE_REGIME')
             elif pullback.cancel_on_trend_invalidation and (
-                  prior is None or (not planner.valid_pending(state['setup']) if adaptive
+                  prior is None or (state['setup'].get('regime')!=prior_regime if adaptive
                                      else not trend_valid(prior,state['direction'],at_open))):
                 cancel_stop('TREND_INVALIDATED')
             else:
