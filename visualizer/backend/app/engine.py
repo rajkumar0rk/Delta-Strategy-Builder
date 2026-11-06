@@ -19,6 +19,11 @@ from .rules import evaluate_group, evaluate_condition, find_condition
 from .config import result_root, cache_root
 from .storage import write_json_gz, write_csv_gz, load_result, maybe_auto_cleanup
 from .archive_sync import ensure_archive_data
+from .shared_execution import (
+    PendingUnderlyingStop, CompletedHourlyTrendGate, clock_due,
+    remaining_daily_risk, stop_trigger_price,
+)
+from .futures_setups import PullbackBreakoutPlanner, target_at_r
 
 UTC = timezone.utc
 
@@ -64,6 +69,9 @@ class Position:
     pattern_initial_quantity: float = 0.0
     pattern_realized_net: float = 0.0
     pattern_stage_index: int = 0
+    underlying_levels: dict[str, Any] | None = None
+    underlying_exit_pending: str | None = None
+    force_exit_pending: bool = False
 
 
 def _finite(v):
@@ -317,7 +325,7 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
 
 def _backtest_cache_key(req: BacktestRequest, paths) -> str:
     payload = {
-        'engine_version': 177,  # observed account risk replay alongside hypothetical strategy backtests
+        'engine_version': 178,  # observed account risk replay alongside hypothetical strategy backtests
         'warmup_candles': req.warmup_candles,
         'warmup_policy': req.warmup_policy,
         'bar_gap_policy': req.bar_gap_policy,
@@ -998,6 +1006,14 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
     _prepare_strategy_state(frame, strategy)
     pattern_tracker = None
     pattern_side_events = {}
+    options_setup = strategy.options_pullback if strategy.options_pullback.enabled else None
+    option_planner = PullbackBreakoutPlanner(frame, options_setup, strategy.timeframe) if options_setup else None
+    option_trend = CompletedHourlyTrendGate(options_setup) if options_setup else None
+    option_pending: PendingUnderlyingStop | None = None
+    option_pending_provenance = None
+    option_order_events = {'armed':0,'triggered':0,'expired':0,'cancelled':0,'rejected':0}
+    option_force_exit_count = 0
+    option_force_exit_missed_quotes = 0
     if strategy.pattern_trade.enabled:
         from .pattern_trades import PatternTracker
         pattern_tracker=PatternTracker(frame,strategy.pattern_trade)
@@ -1079,6 +1095,45 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             if float(daily_state['realized_pnl']) <= -limit:
                 return 'MAX_DAILY_LOSS'
         return ''
+
+    def option_buy_quantity(spec, entry, spot, available, max_daily_risk):
+        """BUY-only conservative maximum premium-loss budget, not ATR delta P&L.
+
+        The underlying ATR specifies WHEN to exit; without option Greeks and
+        historical executable depth, it does not specify option loss magnitude.
+        Assume the ENTIRE BUY premium + two fees is at risk for sizing.
+        """
+        cfg=options_setup
+        cv=float(spec['contract_value'])
+        step=float(spec.get('size_increment') or 1)
+        minimum=float(spec.get('min_quantity') or step)
+        if step<=0 or minimum<=0 or cv<=0:
+            return 0.0,0.0,'INVALID_CONTRACT_QUANTITY_RULES'
+        minimum=math.ceil(minimum/step-1e-12)*step
+        fees=_delta_fee(spot,entry,1.0,cv,strategy.execution)['total_fee_usd']
+        # The fee paid on an eventual exit may vary. Budget a second entry-sized
+        # fee as a conservative per-contract research allowance.
+        estimated_per_unit_loss=entry*cv+2*fees
+        if estimated_per_unit_loss<=0 or not math.isfinite(estimated_per_unit_loss):
+            return 0.0,0.0,'INVALID_PREMIUM_RISK'
+        trade_room=available*cfg.equity_risk_percent/100
+        if max_daily_risk is not None:
+            trade_room=min(trade_room,max_daily_risk)
+        cash_per_unit=entry*cv+fees
+        budget= min(available, float(strategy.risk.budget_usd)) if strategy.risk.enforce_trade_budget_strict else available
+        cap=min(trade_room/estimated_per_unit_loss,
+                budget/cash_per_unit,cfg.max_lots)
+        allowed=math.floor(cap/step+1e-12)*step
+        if cfg.size_mode=='FIXED':
+            requested=float(strategy.risk.quantity)
+            if requested<minimum-1e-12 or not _quantity_is_increment_aligned(requested,step):
+                return 0.0,estimated_per_unit_loss,'INVALID_FIXED_QUANTITY'
+            if requested>allowed+1e-12:
+                return 0.0,estimated_per_unit_loss,'FIXED_SIZE_RISK_OR_BUDGET_EXCEEDED'
+            return requested,estimated_per_unit_loss,''
+        if allowed<minimum-1e-12:
+            return 0.0,estimated_per_unit_loss,'PREMIUM_RISK_BUDGET_BELOW_MIN_CONTRACT'
+        return allowed,estimated_per_unit_loss,''
 
     def next_event(prefix: str) -> str:
         nonlocal event_counter
@@ -1235,6 +1290,10 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             'entry_lifecycle_id': pos.entry_lifecycle_id,
             'entry_lifecycle_name': pos.entry_lifecycle_name,
             'margin_research': pos.margin,
+            'underlying_levels': pos.underlying_levels,
+            'underlying_signal_stop': pos.underlying_levels.get('stop') if pos.underlying_levels else None,
+            'underlying_r_target': pos.underlying_levels.get('target') if pos.underlying_levels else None,
+            'option_risk_per_unit_usd': pos.underlying_levels.get('per_unit_risk') if pos.underlying_levels else None,
         }
         trades.append(trade)
         ensure_daily_state(exit_time)
@@ -1290,6 +1349,9 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
 
     measured_start = pd.Timestamp(parse_time(req.start))
     for i, (ts, row) in enumerate(frame.iterrows()):
+        setup_signals=option_planner.step(i,ts,row) if option_planner else {}
+        if option_trend is not None:
+            option_trend.update(ts,row)
         # State transitions during warm-up must affect the first live candle.
         # Never evaluate trade orders or record trades before From.
         if ts < measured_start:
