@@ -1,0 +1,9 @@
+# Shared execution architecture and market boundaries
+
+Both markets continue to use the same StrategyConfig indicator catalogs, completed multi-timeframe aggregations, rule trees, entry/no-trade gates and session definitions. `backend/app/shared_execution.py` owns only market-neutral components: pending underlying stop state, completed hourly EMA trend/crossover gate, tick-buffered trigger detection, day-start risk allowance, and timezone-local forced-exit clock. `futures_setups.PullbackBreakoutPlanner` supplies bounded completed higher-timeframe ATR/pullback snapshots and `target_at_r` computes underlying BTC R levels.
+
+FUTURES: `backend/app/futures_engine.py` executes BTCUSD OHLC-price proxy entries and exits, margin research and futures-specific fees/funding. The November 2026 1H EMA/15M stop-market mode can trigger on a subsequent 5m wick but cannot know real tick chronology.
+
+OPTIONS: `backend/app/engine.py` retains option instrument selection and timestamped bid/ask quotes, option premium P&L, option-specific fee/GST, expiry and optional short margin estimates. The opt-in `options_pullback` uses a shared BTC signal but waits for a valid quote **after the trigger 5m candle closes** before simulating a BUY. It never uses a futures fill/underlying level as an option premium, cannot guarantee option premium 2R, and rejects SELL/unsupported pattern combinations. Its mandatory 23:45 local force close is quote-backed and may remain unfilled without quotes.
+
+Both paths must preserve schema_version 15, saved strategy compatibility, exclusive exposure, risk/fee transparency, bounded memory, and deterministic no-lookahead trading decisions. Use validation tests for full options and futures engines, including daily session clock, pending expiry, fee/tick precision, missing quotes, HTF warmup and cache identity. Do not claim backtested profits from unit tests.
