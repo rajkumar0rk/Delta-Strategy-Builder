@@ -129,3 +129,73 @@ def test_stop_trails_only_in_profitable_direction_and_never_loosened():
     assert trail_stop(short,pd.Series({"close":99.0,"amrs_atr_15m":10.0}),
                       cfg,0.5) is None
     assert short["stop_price"]==92.0
+
+def test_adaptive_futures_end_to_end_uses_shared_risk_fee_and_exclusive_engine(
+    tmp_path, monkeypatch,
+):
+    import csv
+    from app.engine import run_backtest
+    from app import futures_engine
+
+    root=tmp_path/"datasets"
+    source=root/"sample"
+    source.mkdir(parents=True)
+    monkeypatch.setenv("STRATEGY_LAB_DATA_ROOT",str(root))
+    monkeypatch.setenv("STRATEGY_LAB_RESULT_ROOT",str(tmp_path/"results"))
+    monkeypatch.setenv("STRATEGY_LAB_CACHE_ROOT",str(tmp_path/"cache"))
+    timestamps=pd.date_range("2026-01-01T00:05:00Z",periods=72,freq="5min")
+    candle_rows=[]
+    for i,ts in enumerate(timestamps):
+        candle={"timestamp":ts.isoformat(),"open":100,"high":102,"low":99,
+                "close":100,"volume":100}
+        if i in (24,25):
+            candle.update(high=110,close=108)
+        if i==26:
+            candle.update(open=106,high=112,low=100,close=110)
+        if i==27:
+            candle.update(open=110,high=114,low=109,close=112)
+        if i==28:
+            candle.update(open=112,high=180,low=110,close=170)
+        candle_rows.append(candle)
+    with (source/"underlying_bars.csv").open("w",newline="") as out:
+        writer=csv.DictWriter(out,fieldnames=list(candle_rows[0]))
+        writer.writeheader()
+        writer.writerows(candle_rows)
+
+    example=Path(__file__).resolve().parents[1]/"examples"/"btc-futures-adaptive-regimes-v1.strategy.json"
+    strategy=StrategyConfig.model_validate(json.loads(example.read_text())["strategy"])
+    strategy.session.blocked_weekdays=[]
+    strategy.session.windows=[{"start":"00:00","end":"23:59"}]
+    strategy.futures.adaptive.size_mode="FIXED"
+    strategy.futures.adaptive.regime.require_ema_slope=False
+
+    def synthetic_indicators(frame,indicators,tf,**kwargs):
+        frame=frame.copy()
+        frame["amrs_ema50_1h"]=200.0
+        frame["amrs_ema200_1h"]=100.0
+        frame["amrs_close_1h"]=205.0
+        frame["amrs_adx_1h.adx"]=31.0
+        frame["amrs_adx_1h.plus_di"]=40.0
+        frame["amrs_adx_1h.minus_di"]=12.0
+        frame["amrs_atr_percentile_1h"]=55.0
+        frame["amrs_donchian_15m.upper"]=105.0
+        frame["amrs_donchian_15m.lower"]=95.0
+        frame["amrs_atr_15m"]=2.0
+        frame["amrs_volume_ratio_15m"]=2.0
+        return frame,[]
+    monkeypatch.setattr(futures_engine,"compute_indicators",synthetic_indicators)
+    from app.models import BacktestRequest
+    result=run_backtest(BacktestRequest(
+        dataset_id="sample",dataset_mode="SINGLE",
+        start=timestamps[0].isoformat(),
+        end=(timestamps[-1]+pd.Timedelta(minutes=5)).isoformat(),
+        warmup_candles=0,strategy=strategy))
+    assert result["futures_research"]["adaptive_enabled"] is True
+    assert result["metrics"]["trades"]>=1, result["metrics"]
+    for trade in result["trades"]:
+        assert trade["entry_lifecycle_id"]=="ADAPTIVE_BREAKOUT"
+        assert trade["fees_usd"]==pytest.approx(
+            trade["entry_fee_usd"]+trade["exit_fee_usd"])
+        assert trade["net_pnl_usd"]==pytest.approx(
+            trade["gross_pnl_usd"]-trade["fees_usd"]+trade["funding_usd"])
+    assert result["metrics"]["cash_reconciliation_residual_usd"]==pytest.approx(0)
