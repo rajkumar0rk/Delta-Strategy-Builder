@@ -8,7 +8,6 @@ from __future__ import annotations
 import csv
 import json
 import math
-from collections import deque
 from pathlib import Path
 import pandas as pd
 from zoneinfo import ZoneInfo
@@ -18,6 +17,10 @@ from .indicators import compute_indicators
 from .alerts import alert_markers
 from .rules import evaluate_group
 from .futures_setups import PullbackBreakoutPlanner, risk_sized_lots, target_at_r
+from .shared_execution import (
+    CompletedHourlyTrendGate, clock_due, remaining_daily_risk,
+    pending_expired, stop_trigger_price, stop_trigger_on_bar,
+)
 from .storage import write_json_gz, write_csv_gz, maybe_auto_cleanup
 from .config import result_root
 from .futures_contract import (BTCUSD_SNAPSHOT, EIGHT_HOUR_FUNDING_FROM_UTC, assumed_initial_margin_usd,
@@ -190,49 +193,13 @@ def run_futures_backtest(req, progress=None):
     stop_entry=None  # bounded single pending stop-market order, opt-in
     stop_order_cancellations={};stop_order_triggers=0
     effective_slippage_bps=cfg.slippage_bps+cfg.extra_half_spread_bps
-    trend_crosses=deque(maxlen=128)
-    last_hour_emas=None
+    hourly_gate=CompletedHourlyTrendGate(cfg.pullback)
     def update_hour_trend(timestamp, candle):
-        nonlocal last_hour_emas
-        setup=cfg.pullback
-        if not (setup.enabled and setup.trend_fast_ema_id and setup.trend_slow_ema_id):
-            return
-        if timestamp.minute or timestamp.second:  # completed UTC 1H boundary
-            return
-        fast=float(candle.get(setup.trend_fast_ema_id, float('nan')))
-        slow=float(candle.get(setup.trend_slow_ema_id, float('nan')))
-        if not (math.isfinite(fast) and math.isfinite(slow)):
-            return
-        if last_hour_emas is not None:
-            pf,ps=last_hour_emas
-            if (pf<=ps and fast>slow) or (pf>=ps and fast<slow):
-                trend_crosses.append(timestamp)
-        last_hour_emas=(fast,slow)
-    def trend_valid(candle, direction, asof):
-        setup=cfg.pullback
-        if not setup.trend_fast_ema_id:
-            return True
-        try:
-            fast=float(candle[setup.trend_fast_ema_id])
-            slow=float(candle[setup.trend_slow_ema_id])
-            close1h=float(candle[setup.trend_close_indicator_id])
-        except (KeyError,ValueError,TypeError):
-            return False
-        if not all(math.isfinite(v) for v in (fast,slow,close1h)):
-            return False
-        if not ((fast>slow and close1h>fast) if direction=='LONG' else
-                (fast<slow and close1h<fast)):
-            return False
-        if setup.trend_crossover_block_bars and any(
-            pd.Timedelta(0) <= asof-cross < pd.Timedelta(hours=setup.trend_crossover_block_bars)
-            for cross in trend_crosses):
-            return False
-        return True
+        hourly_gate.update(timestamp,candle)
+    def trend_valid(candle,direction,asof):
+        return hourly_gate.valid(candle,direction,asof)
     def end_of_day_due(ts):
-        if not cfg.force_exit_time:
-            return False
-        local=ts.tz_convert(ZoneInfo(strategy.session.timezone))
-        return local.strftime('%H:%M') >= cfg.force_exit_time
+        return clock_due(ts,cfg.force_exit_time,strategy.session.timezone)
     def cancel_stop(reason):
         nonlocal stop_entry
         if stop_entry is not None:
@@ -338,9 +305,8 @@ def run_futures_backtest(req, progress=None):
             state=stop_entry
             age=i-state['setup_index']
             # Missing candles must not prolong a pending order's clock lifetime.
-            elapsed=(ts-pd.Timestamp(state['signal_time']))/pd.Timedelta(minutes=tf)
             prior=frame.iloc[i-1] if i>0 else None
-            if age>pullback.max_wait_bars or elapsed>pullback.max_wait_bars:
+            if pending_expired(state['signal_time'],ts,tf,pullback.max_wait_bars,age):
                 cancel_stop('PENDING_EXPIRED')
             elif end_of_day_due(at_open) or not _session_allowed(at_open,strategy.session):
                 cancel_stop('ENTRY_SESSION_CLOSED')
@@ -354,10 +320,10 @@ def run_futures_backtest(req, progress=None):
             else:
                 direction=state['direction']
                 trigger=state['trigger_price']
-                touched=float(row.high)>=trigger if direction=='LONG' else float(row.low)<=trigger
-                if touched:
+                raw=stop_trigger_on_bar(float(row.open),float(row.high),
+                    float(row.low),trigger,upward=direction=='LONG')
+                if raw is not None:
                     # A gap through the stop executes at the worse open.
-                    raw=max(float(row.open),trigger) if direction=='LONG' else min(float(row.open),trigger)
                     intrabar_candidate=raw
                     pending=direction
                     pending_setup=state['setup']
@@ -383,10 +349,9 @@ def run_futures_backtest(req, progress=None):
                     entry_rejection='STOP_NOT_PROTECTIVE'
                 else:
                     stop_proxy=_slipped(stop_price,direction,False,effective_slippage_bps,cfg.tick_size,cfg.slippage_ticks)
-                    remaining_day_risk=None
-                    if strategy.risk.max_daily_loss_percent is not None:
-                        remaining_day_risk=max(0.0, daily['start_balance']*
-                            strategy.risk.max_daily_loss_percent/100+daily['realized'])
+                    remaining_day_risk=remaining_daily_risk(
+                        daily['start_balance'],daily['realized'],
+                        strategy.risk.max_daily_loss_percent)
                     lots,reason,risk_per_lot=risk_sized_lots(
                         px,stop_proxy,direction,balance,cfg,pullback,max_risk_usd=remaining_day_risk)
                     trade_qty=lots*cfg.contract_btc
@@ -564,12 +529,10 @@ def run_futures_backtest(req, progress=None):
                     pending_lifecycle_id='PULLBACK_SETUP'
                     signal=dict(planner.new_setups[selected[0]])
                     level=signal['level']
-                    ticks=max(1,pullback.breakout_buffer_ticks)
-                    raw_level=level+(pullback.breakout_buffer_points if selected[0]=='LONG' else -pullback.breakout_buffer_points)
-                    if selected[0]=='LONG':
-                        trigger=(math.floor(raw_level/cfg.tick_size+1e-10)+ticks)*cfg.tick_size
-                    else:
-                        trigger=(math.ceil(raw_level/cfg.tick_size-1e-10)-ticks)*cfg.tick_size
+                    trigger=stop_trigger_price(
+                        level,upward=selected[0]=='LONG',tick_size=cfg.tick_size,
+                        buffer_ticks=pullback.breakout_buffer_ticks,
+                        buffer_points=pullback.breakout_buffer_points)
                     if trigger<=0:
                         rejection_reasons['INVALID_TRIGGER_PRICE']=rejection_reasons.get('INVALID_TRIGGER_PRICE',0)+1
                         continue
