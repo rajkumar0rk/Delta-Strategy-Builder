@@ -256,9 +256,10 @@ def ensure_archive_data(start: str, end: str, progress: Callable[..., None] | No
             "Archive segment(s) lack required option files; automatic BTC candle "
             "repair cannot reconstruct option instruments or quotes: " + details
         )
-    if before["unresolved_ranges"] and not before["download_ranges"]:
+    if require_options and before["unresolved_ranges"] and not before["download_ranges"]:
         raise ValueError(
-            "Requested archive range includes an incomplete UTC day. Automatic history download only downloads completed UTC dates."
+            "Requested options archive range includes an incomplete UTC day. "
+            "Options contract/quote sync only downloads completed UTC dates."
         )
     if require_options and before["download_ranges"] and not before["module_available"]:
         raise ValueError(
