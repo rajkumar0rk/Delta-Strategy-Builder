@@ -27,7 +27,7 @@ class IndicatorInstance(BaseModel):
     # `strategy` means calculate on the strategy timeframe. Higher-timeframe
     # indicators are calculated only from fully completed aggregated candles and
     # forward-filled onto later lower-timeframe candles (no look-ahead).
-    timeframe: Literal["strategy", "5m", "10m", "15m", "30m", "1h", "1D"] = "strategy"
+    timeframe: Literal["strategy", "5m", "10m", "15m", "30m", "1h", "4h", "1D"] = "strategy"
 
     @model_validator(mode="after")
     def validate_day_levels(self):
@@ -550,9 +550,23 @@ class OptionsPullbackConfig(FuturesPullbackConfig):
     underlying_tick_size: float = Field(default=0.5, gt=0, le=10000)
 
 
+class FuturesTrendRiskConfig(BaseModel):
+    """Opt-in ATR-based protection for ordinary futures directional entry rules."""
+    enabled: bool = False
+    atr_indicator_id: str = "atr14_1h"
+    initial_stop_atr_multiple: float = Field(default=2.0, gt=0, le=50)
+    trailing_stop_atr_multiple: float = Field(default=3.0, gt=0, le=100)
+    trail_source: Literal["HIGH_LOW", "CLOSE"] = "HIGH_LOW"
+    size_mode: Literal["RISK_EQUITY", "FIXED"] = "RISK_EQUITY"
+    equity_risk_percent: float = Field(default=0.5, gt=0, le=100)
+    max_lots: int = Field(default=100000, ge=1, le=100000)
+    max_estimated_risk_multiple: float = Field(default=1.0, ge=1, le=10)
+
+
 class FuturesConfig(BaseModel):
     """BTCUSD perpetual research assumptions, never an exchange-margin oracle."""
     pullback: FuturesPullbackConfig = Field(default_factory=FuturesPullbackConfig)
+    trend_risk: FuturesTrendRiskConfig = Field(default_factory=FuturesTrendRiskConfig)
     symbol: Literal["BTCUSD"] = "BTCUSD"
     contract_btc: float = Field(default=0.001, gt=0)
     quantity_lots: int = Field(default=1, ge=1, le=100000)
@@ -591,7 +605,7 @@ class StrategyConfig(BaseModel):
     # Local-clock option close, opt-in and independently configurable from entry sessions.
     options_force_exit_time: str | None = None
     pattern_trade: PatternTradeConfig = Field(default_factory=PatternTradeConfig)
-    timeframe: Literal["5m", "10m", "15m", "30m", "1h", "1D"] = "5m"
+    timeframe: Literal["5m", "10m", "15m", "30m", "1h", "4h", "1D"] = "5m"
     direction_mode: Literal["CALL", "PUT", "BOTH"] = "BOTH"
     call_action: Literal["BUY", "SELL"] = "BUY"
     put_action: Literal["BUY", "SELL"] = "BUY"
@@ -682,7 +696,7 @@ class StrategyConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_strategy_references(self):
-        tf_minutes = {"5m":5,"10m":10,"15m":15,"30m":30,"1h":60,"1D":1440}
+        tf_minutes = {"5m":5,"10m":10,"15m":15,"30m":30,"1h":60,"4h":240,"1D":1440}
         base = tf_minutes[self.timeframe]
         for indicator in self.indicators:
             if indicator.timeframe == "strategy":
@@ -734,6 +748,16 @@ class StrategyConfig(BaseModel):
                     raise ValueError("Options pullback close proxy requires 1h EMA period 1")
             if cfg.max_wait_bars*5>({"15m":15,"30m":30,"1h":60}[cfg.setup_timeframe])*2:
                 raise ValueError("Options pullback expiry cannot exceed two setup candles")
+        if self.futures.trend_risk.enabled:
+            if self.market_type != "FUTURES" or self.futures.pullback.enabled:
+                raise ValueError("Futures ATR trend mode requires ordinary FUTURES rules, not pullback")
+            if self.futures.stop_loss_percent is not None or self.futures.take_profit_percent is not None:
+                raise ValueError("Disable fixed-percent stop/target when futures.trend_risk.enabled")
+            cfg = self.futures.trend_risk
+            operand = next((x for x in self.indicators if x.id == cfg.atr_indicator_id), None)
+            if (operand is None or operand.kind != "ATR" or operand.chart_only
+                    or operand.timeframe not in ("strategy", self.timeframe)):
+                raise ValueError("Futures trend ATR must reference a non-chart-only strategy-timeframe ATR indicator")
         if self.market_type == "FUTURES" and self.futures.pullback.enabled:
             cfg = self.futures.pullback
             if self.timeframe != "5m":
@@ -914,7 +938,7 @@ class BacktestRequest(DatasetSelection):
 class PreviewRequest(DatasetSelection):
     start: str
     end: str
-    timeframe: Literal["5m", "10m", "15m", "30m", "1h", "1D"] = "5m"
+    timeframe: Literal["5m", "10m", "15m", "30m", "1h", "4h", "1D"] = "5m"
     indicators: list[IndicatorInstance] = Field(default_factory=list)
     strategy: StrategyConfig | None = None
 
