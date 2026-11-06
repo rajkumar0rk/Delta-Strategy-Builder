@@ -815,6 +815,8 @@ class StrategyConfig(BaseModel):
             if cfg.max_wait_bars*5>({"15m":15,"30m":30,"1h":60}[cfg.setup_timeframe])*2:
                 raise ValueError("Options pullback expiry cannot exceed two setup candles")
 
+        if self.market_type != "FUTURES" and self.futures.adaptive.enabled:
+            raise ValueError("AMRS only supports market_type FUTURES")
         if self.market_type == "FUTURES" and self.futures.adaptive.enabled:
             adaptive = self.futures.adaptive
             if self.timeframe != "5m":
