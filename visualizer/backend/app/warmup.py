@@ -60,7 +60,14 @@ def required_warmup_candles(instances, timeframe: str, *, minimum: int = 500, st
         # stages; 5x the largest constituent is an intentionally conservative
         # approximation, with the available-history warning retained.
         horizon = max(periods, default=0)
-        required = max(required, (5 * horizon + 2) * ratio)
+        if inst.kind == "ATR_PERCENTILE":
+            # Rolling percentile needs exactly N reference ATRs, plus the
+            # smoother's convergence warmup. Do not multiply the entire
+            # percentile lookback by the generic 5x smoother heuristic.
+            horizon = int(params["lookback_bars"]) + 5 * int(params["atr_period"]) + 2
+            required = max(required, horizon * ratio)
+        else:
+            required = max(required, (5 * horizon + 2) * ratio)
 
     if strategy is not None:
         def rule_horizon(group):
