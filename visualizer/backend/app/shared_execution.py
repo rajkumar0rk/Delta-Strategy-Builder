@@ -70,6 +70,67 @@ def stop_trigger_on_bar(open_price: float, high: float, low: float, trigger: flo
     return min(open_price, trigger) if low <= trigger else None
 
 
+from collections import deque
+
+
+class CompletedHourlyTrendGate:
+    """One-pass completed-hour EMA trend + bounded crossover exclusion.
+
+    Indicator columns are already close-aligned and forward-filled by the
+    canonical aggregator. Only compare new values on 1h close boundaries.
+    """
+
+    def __init__(self, config):
+        self.config = config
+        self.previous = None
+        self.crosses = deque(maxlen=128)
+
+    def update(self, timestamp, row):
+        cfg = self.config
+        if not (cfg.trend_fast_ema_id and cfg.trend_slow_ema_id):
+            return
+        stamp = pd.Timestamp(timestamp)
+        if stamp.minute or stamp.second:
+            return
+        try:
+            fast = float(row[cfg.trend_fast_ema_id])
+            slow = float(row[cfg.trend_slow_ema_id])
+        except (KeyError, TypeError, ValueError):
+            return
+        if not (math.isfinite(fast) and math.isfinite(slow)):
+            return
+        if self.previous is not None:
+            before = self.previous
+            if ((before[0] <= before[1] and fast > slow) or
+                    (before[0] >= before[1] and fast < slow)):
+                self.crosses.append(stamp)
+        self.previous = (fast, slow)
+
+    def valid(self, row, direction, timestamp):
+        cfg = self.config
+        if not cfg.trend_fast_ema_id:
+            return True
+        try:
+            fast = float(row[cfg.trend_fast_ema_id])
+            slow = float(row[cfg.trend_slow_ema_id])
+            close = float(row[cfg.trend_close_indicator_id])
+        except (KeyError, TypeError, ValueError):
+            return False
+        if not all(math.isfinite(v) for v in (fast, slow, close)):
+            return False
+        upward = direction in ("LONG", "CALL")
+        if not ((fast > slow and close > fast) if upward else
+                (fast < slow and close < fast)):
+            return False
+        if cfg.trend_crossover_block_bars:
+            asof = pd.Timestamp(timestamp)
+            window = pd.Timedelta(hours=cfg.trend_crossover_block_bars)
+            if any(pd.Timedelta(0) <= asof - cross < window
+                   for cross in self.crosses):
+                return False
+        return True
+
+
 @dataclass(slots=True)
 class PendingUnderlyingStop:
     """One O(1)-sized pending order, contract selection delegated to consumer."""
