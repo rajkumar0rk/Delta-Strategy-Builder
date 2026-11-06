@@ -200,3 +200,41 @@ def test_adaptive_futures_end_to_end_uses_shared_risk_fee_and_exclusive_engine(
         assert trade["net_pnl_usd"]==pytest.approx(
             trade["gross_pnl_usd"]-trade["fees_usd"]+trade["funding_usd"])
     assert result["metrics"]["cash_reconciliation_residual_usd"]==pytest.approx(0)
+
+def test_rolling_atr_percentile_uses_prior_bars_only_and_exact_warmup():
+    from app.indicators import compute_indicators
+    from app.models import IndicatorInstance
+    from app.warmup import required_warmup_candles
+
+    idx=pd.date_range("2026-01-01T01:00:00Z",periods=180,freq="1h")
+    close=[100+i*.03+(i%5)*.5 for i in range(180)]
+    frame=pd.DataFrame({
+        "open":close,"close":close,
+        "high":[v+1+i%4*.1 for i,v in enumerate(close)],
+        "low":[v-1-i%3*.1 for i,v in enumerate(close)],
+        "volume":[100.0]*180},index=idx)
+    indicator=IndicatorInstance(id="atr_pct",kind="ATR_PERCENTILE",
+                                timeframe="1h",params={"atr_period":14,"lookback_bars":30})
+    before,_=compute_indicators(frame,[indicator],strategy_timeframe="1h")
+    assert before["atr_pct"].dropna().between(0,100).all()
+    assert before["atr_pct"].iloc[:40].isna().all()
+    assert pd.notna(before["atr_pct"].iloc[-1])
+    changed=frame.copy()
+    changed.loc[idx[120]:,"high"]+=500
+    after,_=compute_indicators(changed,[indicator],strategy_timeframe="1h")
+    pd.testing.assert_series_equal(before["atr_pct"].iloc[:120],
+                                   after["atr_pct"].iloc[:120])
+    assert required_warmup_candles([indicator],"1h",minimum=0)==102
+
+
+def test_invalid_adaptive_modules_and_legacy_pullback_cannot_be_enabled_together():
+    from app.models import FuturesPullbackConfig
+    path=Path(__file__).resolve().parents[1]/"examples"/"btc-futures-adaptive-regimes-v1.strategy.json"
+    data=json.loads(path.read_text())["strategy"]
+    data["futures"]["pullback"]["enabled"]=True
+    with pytest.raises(ValidationError,match="cannot share an execution engine"):
+        StrategyConfig.model_validate(data)
+    data["futures"]["pullback"]["enabled"]=False
+    data["futures"]["adaptive"]["regime"]["adx_range_max"]=26
+    with pytest.raises(ValidationError,match="below trend"):
+        StrategyConfig.model_validate(data)
