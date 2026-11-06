@@ -112,6 +112,12 @@ def test_directional_trend_atr_mode_runs_without_options(tmp_path,monkeypatch):
         end="2026-01-02T12:00:00Z",strategy=strategy,warmup_candles=2))
     assert result["futures_research"]["trend_risk_enabled"] is True
     assert result["metrics"]["trades"]>=1 or result["unresolved_position"] is not None
+    if result["unresolved_position"] is not None:
+        pos=result["unresolved_position"]
+        expected=(pos["last_candle_close"]-pos["entry_price"])*pos["quantity"]
+        if pos["direction"]=="SHORT":
+            expected=-expected
+        assert pos["estimated_unrealized_pnl_usd"]==pytest.approx(expected)
     for trade in result["trades"]:
         assert trade["initial_stop_price"] is not None
         assert trade["risk_per_lot_usd"]>0
