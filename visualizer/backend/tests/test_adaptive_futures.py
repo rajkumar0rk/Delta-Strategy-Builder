@@ -165,7 +165,8 @@ def test_adaptive_futures_end_to_end_uses_shared_risk_fee_and_exclusive_engine(
     example=Path(__file__).resolve().parents[1]/"examples"/"btc-futures-adaptive-regimes-v1.strategy.json"
     strategy=StrategyConfig.model_validate(json.loads(example.read_text())["strategy"])
     strategy.session.blocked_weekdays=[]
-    strategy.session.windows=[{"start":"00:00","end":"23:59"}]
+    from app.models import SessionWindow
+    strategy.session.windows=[SessionWindow(start="00:00",end="23:59")]
     strategy.futures.adaptive.size_mode="FIXED"
     strategy.futures.adaptive.regime.require_ema_slope=False
 
