@@ -547,6 +547,7 @@ class OptionsPullbackConfig(FuturesPullbackConfig):
     equity_risk_percent: float = Field(default=0.5, gt=0, le=100)
     max_estimated_risk_multiple: float = Field(default=1.0, ge=1, le=10)
     max_lots: int = Field(default=100000, ge=1, le=100000)
+    underlying_tick_size: float = Field(default=0.5, gt=0, le=10000)
 
 
 class FuturesConfig(BaseModel):
@@ -701,6 +702,9 @@ class StrategyConfig(BaseModel):
                 raise ValueError("Options pullback requires 5m strategy timeframe")
             if self.pattern_trade.enabled:
                 raise ValueError("Options pullback and option pattern execution are mutually exclusive")
+            if (self.risk.stop_loss.mode!="NONE" or self.risk.take_profit.mode!="NONE"
+                or self.risk.profit_protection.mode!="NONE"):
+                raise ValueError("Options pullback uses frozen underlying ATR stop/R target; disable legacy option exits")
             if ((self.direction_mode in ("CALL","BOTH") and self.call_action != "BUY")
                 or (self.direction_mode in ("PUT","BOTH") and self.put_action != "BUY")):
                 raise ValueError("Options pullback currently supports BUY CALL/PUT only; SELL premium risk is unbounded")
