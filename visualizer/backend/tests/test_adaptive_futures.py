@@ -231,7 +231,7 @@ def test_invalid_adaptive_modules_and_legacy_pullback_cannot_be_enabled_together
     from app.models import FuturesPullbackConfig
     path=Path(__file__).resolve().parents[1]/"examples"/"btc-futures-adaptive-regimes-v1.strategy.json"
     data=json.loads(path.read_text())["strategy"]
-    data["futures"]["pullback"]["enabled"]=True
+    data["futures"].setdefault("pullback",{})["enabled"]=True
     with pytest.raises(ValidationError,match="cannot share an execution engine"):
         StrategyConfig.model_validate(data)
     data["futures"]["pullback"]["enabled"]=False
