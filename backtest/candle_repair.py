@@ -13,6 +13,7 @@ import csv
 import json
 import math
 import os
+import shutil
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -260,6 +261,7 @@ def append_uncovered_btc_intervals(
         return {"appended_segments": 0, "downloaded": 0}
     client = client or DeltaPublicClient(BASE_URL)
     staging = []
+    created_directories = []
     # No downloads or catalog edits for an already-complete interval.
     try:
         for a, b in requested:
@@ -297,6 +299,7 @@ def append_uncovered_btc_intervals(
         segments = []
         for a, b, target, rows in staging:
             target.mkdir(parents=True, exist_ok=False)
+            created_directories.append(target)
             output = target / "underlying_bars.csv"
             temporary = output.with_name(output.name + f".{os.getpid()}.tmp")
             with temporary.open("w", newline="", encoding="utf-8") as stream:
@@ -309,8 +312,22 @@ def append_uncovered_btc_intervals(
         write_catalog(root, tuple(current) + tuple(segments))
         return {"appended_segments": len(segments), "downloaded": sum(len(x[3]) for x in staging)}
     except BaseException:
-        # A failure leaves no newly catalogued segments; staging directories
-        # can be safely cleaned only when not referenced by an existing catalog.
+        # If a CSV/catalog write fails, don't strand a partial segment that
+        # blocks future retries. Never remove a directory referenced by the
+        # canonical catalog (including the rare case of a late exception).
+        referenced = set()
+        try:
+            if (root / "catalog.json").exists():
+                referenced = {
+                    item.directory.resolve()
+                    for item in load_catalog(root)
+                }
+        except (OSError, ValueError, KeyError, json.JSONDecodeError):
+            # If the catalog itself is unreadable, do not delete anything.
+            referenced = {item.resolve() for item in created_directories}
+        for directory in created_directories:
+            if directory.resolve() not in referenced:
+                shutil.rmtree(directory)
         raise
 
 
