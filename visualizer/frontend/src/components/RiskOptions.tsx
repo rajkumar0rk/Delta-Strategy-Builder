@@ -1,4 +1,4 @@
-import type {SellMarginConfig,Strategy} from '../types';
+import type {SellMarginConfig,OptionsPullbackConfig,Strategy} from '../types';
 const days=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 
 /** Fully typed defaults for saved strategies that predate SELL margin support. */
@@ -14,10 +14,36 @@ export function mergeSellMargin(
  return {...sellMarginDefaults,...current,...change};
 }
 
+const optionsDefaults:OptionsPullbackConfig={
+ enabled:false,setup_timeframe:'15m',ema_indicator_id:'ema20_15m',
+ atr_indicator_id:'atr14_15m',volume_indicator_id:'volumeSMA20_5m',
+ require_touch:true,require_confirmation_color:true,require_volume:false,
+ volume_multiplier:1,max_wait_bars:6,execution_mode:'STOP_MARKET_INTRABAR',
+ stop_anchor:'SIGNAL_CANDLE',breakout_buffer_ticks:1,
+ trend_fast_ema_id:null,trend_slow_ema_id:null,trend_close_indicator_id:null,
+ trend_crossover_block_bars:0,cancel_on_trend_invalidation:true,
+ swing_lookback_bars:3,stop_buffer_atr:0.1,breakout_buffer_points:0,
+ reward_r_multiple:2,size_mode:'RISK_EQUITY',equity_risk_percent:0.5,
+ max_lots:100000,max_estimated_risk_multiple:1,underlying_tick_size:0.5,
+};
 export function RiskOptions({value,onChange}:{value:Strategy;onChange:(s:Strategy)=>void}){
  const s=value;
  const set=(part:string,k:string,v:any)=>onChange({...s,[part]:{...(s as any)[part],[k]:v}} as Strategy);
  const shortEnabled=s.call_action==='SELL'||s.put_action==='SELL';
+ const opt={...optionsDefaults,...s.options_pullback};
+ const setOpt=(patch:Partial<OptionsPullbackConfig>)=>onChange({
+  ...s,options_pullback:{...opt,...patch},
+  ...(patch.enabled===true?{risk:{...s.risk,
+   stop_loss:{...s.risk.stop_loss,mode:'NONE'},
+   take_profit:{...s.risk.take_profit,mode:'NONE'},
+   profit_protection:{...s.risk.profit_protection,mode:'NONE'},
+   max_hold_minutes:null}}:{}),
+ });
+ const optNum=(field:keyof OptionsPullbackConfig,label:string,step='1',min=0)=>(
+  <label key={field}>{label}<input type="number" step={step} min={min}
+   value={Number(opt[field]??0)}
+   onChange={e=>setOpt({[field]:Number(e.target.value)})}/></label>
+ );
  const updateSellMargin=(change:Partial<SellMarginConfig>)=>onChange({
   ...s,risk:{...s.risk,sell_margin:mergeSellMargin(s.risk.sell_margin,change)},
  });
@@ -47,6 +73,64 @@ export function RiskOptions({value,onChange}:{value:Strategy;onChange:(s:Strateg
  {mode!=='ORDER_ONLY'&&<label>Alert message<input maxLength={500} value={(s as any)[msg]||''} onChange={e=>onChange({...s,[msg]:e.target.value})}/></label>}
  </div>})}</div>)}
  </div>{shortEnabled&&<div className="warning-box"><b>SELL backtest:</b> entry BID; buy-to-close ASK. Actual Delta margin and liquidation are unverified. Configure optional research assumptions below; not an exchange margin calculator.</div>}</section>
+ {s.market_type!=='FUTURES'&&<section className="card">
+ <h2>Opt-in underlying stop-market pullback — BUY options</h2>
+ <p>Shared BTC signal/ATR planner, but entries and exits are executed only on the selected option's available bid/ask quotes. A 5m wick trigger is evaluated at the completed 5m close, not treated as an intrabar option fill. The 2R target measures BTC underlying points, not guaranteed option premium reward. SELL options are not supported by this risk model.</p>
+ <label className="switch"><input type="checkbox" checked={opt.enabled}
+   onChange={e=>setOpt({enabled:e.target.checked})}/>
+   Enable quote-backed options stop-market research (BUY only)</label>
+ <div className="form-grid">
+  <label>Separate forced exit time (session timezone)<input type="time"
+   value={s.options_force_exit_time??''}
+   onChange={e=>onChange({...s,options_force_exit_time:e.target.value||null})}/></label>
+ </div>
+ {opt.enabled&&<div className="form-grid">
+  <label>Setup timeframe<select value={opt.setup_timeframe}
+   onChange={e=>setOpt({setup_timeframe:e.target.value as OptionsPullbackConfig['setup_timeframe']})}>
+   <option value="15m">15m</option><option value="30m">30m</option><option value="1h">1h</option></select></label>
+  <label>Setup EMA indicator ID<input value={opt.ema_indicator_id}
+   onChange={e=>setOpt({ema_indicator_id:e.target.value})}/></label>
+  <label>Setup ATR indicator ID<input value={opt.atr_indicator_id}
+   onChange={e=>setOpt({atr_indicator_id:e.target.value})}/></label>
+  <label>Volume SMA indicator ID<input value={opt.volume_indicator_id}
+   onChange={e=>setOpt({volume_indicator_id:e.target.value})}/></label>
+  {optNum('underlying_tick_size','BTC assumed price tick','0.5',0.000001)}
+  {optNum('breakout_buffer_ticks','Entry breakout buffer ticks')}
+  {optNum('breakout_buffer_points','Additional breakout BTC points','0.5')}
+  {optNum('max_wait_bars','Pending expiry (5m bars)')}
+  {optNum('stop_buffer_atr','Stop buffer × ATR','0.05')}
+  {optNum('reward_r_multiple','Underlying BTC reward multiple (R)','0.25',0.01)}
+  {optNum('swing_lookback_bars','Completed setup swing lookback')}
+  <label>Stop anchor<select value={opt.stop_anchor}
+   onChange={e=>setOpt({stop_anchor:e.target.value as OptionsPullbackConfig['stop_anchor']})}>
+   <option value="SIGNAL_CANDLE">Confirmation candle</option>
+   <option value="SWING">Prior completed swing</option></select></label>
+  <label>BUY premium risk sizing<select value={opt.size_mode}
+   onChange={e=>setOpt({size_mode:e.target.value as OptionsPullbackConfig['size_mode']})}>
+   <option value="RISK_EQUITY">Risk % cash equity, rounded down</option>
+   <option value="FIXED">Fixed option lots with risk guard</option></select></label>
+  {optNum('equity_risk_percent','Maximum premium-risk equity %','0.1',0.01)}
+  {optNum('max_lots','Maximum allowed option lots')}
+  {optNum('max_estimated_risk_multiple','Fixed-size risk multiplier (daily cap still enforced)','0.1',1)}
+  {optNum('volume_multiplier','5m volume confirmation multiplier','0.1')}
+  <label>1h trend EMA fast ID<input value={opt.trend_fast_ema_id??''}
+   onChange={e=>setOpt({trend_fast_ema_id:e.target.value||null})}/></label>
+  <label>1h trend EMA slow ID<input value={opt.trend_slow_ema_id??''}
+   onChange={e=>setOpt({trend_slow_ema_id:e.target.value||null})}/></label>
+  <label>1h EMA(1) close proxy ID<input value={opt.trend_close_indicator_id??''}
+   onChange={e=>setOpt({trend_close_indicator_id:e.target.value||null})}/></label>
+  {optNum('trend_crossover_block_bars','Recent completed 1h crosses to block')}
+  <label className="switch"><input type="checkbox" checked={opt.require_touch}
+   onChange={e=>setOpt({require_touch:e.target.checked})}/>Require EMA touch</label>
+  <label className="switch"><input type="checkbox" checked={opt.require_confirmation_color}
+   onChange={e=>setOpt({require_confirmation_color:e.target.checked})}/>Require confirmation candle color</label>
+  <label className="switch"><input type="checkbox" checked={opt.require_volume}
+   onChange={e=>setOpt({require_volume:e.target.checked})}/>Require volume confirmation</label>
+  <label className="switch"><input type="checkbox" checked={opt.cancel_on_trend_invalidation}
+   onChange={e=>setOpt({cancel_on_trend_invalidation:e.target.checked})}/>Cancel pending on trend invalidation</label>
+ </div>}
+ <p>Choose CALL/PUT BUY only; add the referenced 15m EMA/ATR and optional 1h EMA indicators in Indicator Manager. Opt-in mode disables other option stop/target/profit protection to avoid conflicting exits. Quote absence leads to missing fills or delayed exits, not made-up premiums. Loss may exceed planned underlying-level expectations.</p>
+ </section>}
  {shortEnabled&&<section className="card"><h2>SELL collateral & leverage — research estimates</h2><p>These are explicitly user-defined estimates, NOT Delta Exchange verified margin or leverage. Enabling them can reject short entries and close simulated shorts at an estimated maintenance breach. Estimated breaches are not actual exchange liquidations.</p>
  <div className="form-grid">
   <label className="switch"><input type="checkbox" checked={s.risk.sell_margin?.enabled??false} onChange={e=>updateSellMargin({enabled:e.target.checked})}/><span>Enable assumed SELL margin checks</span></label>

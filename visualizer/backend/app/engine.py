@@ -19,6 +19,11 @@ from .rules import evaluate_group, evaluate_condition, find_condition
 from .config import result_root, cache_root
 from .storage import write_json_gz, write_csv_gz, load_result, maybe_auto_cleanup
 from .archive_sync import ensure_archive_data
+from .shared_execution import (
+    PendingUnderlyingStop, CompletedHourlyTrendGate, clock_due,
+    remaining_daily_risk, stop_trigger_price,
+)
+from .futures_setups import PullbackBreakoutPlanner, target_at_r
 
 UTC = timezone.utc
 
@@ -64,6 +69,9 @@ class Position:
     pattern_initial_quantity: float = 0.0
     pattern_realized_net: float = 0.0
     pattern_stage_index: int = 0
+    underlying_levels: dict[str, Any] | None = None
+    underlying_exit_pending: str | None = None
+    force_exit_pending: bool = False
 
 
 def _finite(v):
@@ -317,7 +325,7 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
 
 def _backtest_cache_key(req: BacktestRequest, paths) -> str:
     payload = {
-        'engine_version': 177,  # observed account risk replay alongside hypothetical strategy backtests
+        'engine_version': 178,  # observed account risk replay alongside hypothetical strategy backtests
         'warmup_candles': req.warmup_candles,
         'warmup_policy': req.warmup_policy,
         'bar_gap_policy': req.bar_gap_policy,
@@ -998,6 +1006,14 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
     _prepare_strategy_state(frame, strategy)
     pattern_tracker = None
     pattern_side_events = {}
+    options_setup = strategy.options_pullback if strategy.options_pullback.enabled else None
+    option_planner = PullbackBreakoutPlanner(frame, options_setup, strategy.timeframe) if options_setup else None
+    option_trend = CompletedHourlyTrendGate(options_setup) if options_setup else None
+    option_pending: PendingUnderlyingStop | None = None
+    option_pending_provenance = None
+    option_order_events = {'armed':0,'triggered':0,'expired':0,'cancelled':0,'rejected':0}
+    option_force_exit_count = 0
+    option_force_exit_missed_quotes = 0
     if strategy.pattern_trade.enabled:
         from .pattern_trades import PatternTracker
         pattern_tracker=PatternTracker(frame,strategy.pattern_trade)
@@ -1080,6 +1096,47 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 return 'MAX_DAILY_LOSS'
         return ''
 
+    def option_buy_quantity(spec, entry, spot, available, max_daily_risk):
+        """BUY-only conservative maximum premium-loss budget, not ATR delta P&L.
+
+        The underlying ATR specifies WHEN to exit; without option Greeks and
+        historical executable depth, it does not specify option loss magnitude.
+        Assume the ENTIRE BUY premium + two fees is at risk for sizing.
+        """
+        cfg=options_setup
+        cv=float(spec['contract_value'])
+        step=float(spec.get('size_increment') or 1)
+        minimum=float(spec.get('min_quantity') or step)
+        if step<=0 or minimum<=0 or cv<=0:
+            return 0.0,0.0,'INVALID_CONTRACT_QUANTITY_RULES'
+        minimum=math.ceil(minimum/step-1e-12)*step
+        fees=_delta_fee(spot,entry,1.0,cv,strategy.execution)['total_fee_usd']
+        # The fee paid on an eventual exit may vary. Budget a second entry-sized
+        # fee as a conservative per-contract research allowance.
+        estimated_per_unit_loss=entry*cv+2*fees
+        if estimated_per_unit_loss<=0 or not math.isfinite(estimated_per_unit_loss):
+            return 0.0,0.0,'INVALID_PREMIUM_RISK'
+        trade_room=available*cfg.equity_risk_percent/100
+        if cfg.size_mode=='FIXED':
+            trade_room*=cfg.max_estimated_risk_multiple
+        if max_daily_risk is not None:
+            trade_room=min(trade_room,max_daily_risk)
+        cash_per_unit=entry*cv+fees
+        budget= min(available, float(strategy.risk.budget_usd)) if strategy.risk.enforce_trade_budget_strict else available
+        cap=min(trade_room/estimated_per_unit_loss,
+                budget/cash_per_unit,cfg.max_lots)
+        allowed=math.floor(cap/step+1e-12)*step
+        if cfg.size_mode=='FIXED':
+            requested=float(strategy.risk.quantity)
+            if requested<minimum-1e-12 or not _quantity_is_increment_aligned(requested,step):
+                return 0.0,estimated_per_unit_loss,'INVALID_FIXED_QUANTITY'
+            if requested>allowed+1e-12:
+                return 0.0,estimated_per_unit_loss,'FIXED_SIZE_RISK_OR_BUDGET_EXCEEDED'
+            return requested,estimated_per_unit_loss,''
+        if allowed<minimum-1e-12:
+            return 0.0,estimated_per_unit_loss,'PREMIUM_RISK_BUDGET_BELOW_MIN_CONTRACT'
+        return allowed,estimated_per_unit_loss,''
+
     def next_event(prefix: str) -> str:
         nonlocal event_counter
         event_counter += 1
@@ -1113,11 +1170,11 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         return quote
 
     def spot_at(timestamp_text: str) -> float:
+        # Frame is sorted and UTC-indexed. The original boolean-index scan was
+        # O(history length) PER option quote; this is O(log history length).
         target = pd.Timestamp(parse_time(timestamp_text))
-        eligible = frame.loc[frame.index <= target, 'close']
-        if len(eligible):
-            return float(eligible.iloc[-1])
-        return float(frame.iloc[0].close)
+        idx = max(0,int(frame.index.searchsorted(target,side='right'))-1)
+        return float(frame.iloc[idx].close)
 
     def record_mtm_value(marked: float):
         nonlocal mtm_peak, mtm_max_dd, mtm_max_dd_percent, mtm_low, mtm_samples
@@ -1235,6 +1292,10 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             'entry_lifecycle_id': pos.entry_lifecycle_id,
             'entry_lifecycle_name': pos.entry_lifecycle_name,
             'margin_research': pos.margin,
+            'underlying_levels': pos.underlying_levels,
+            'underlying_signal_stop': pos.underlying_levels.get('stop') if pos.underlying_levels else None,
+            'underlying_r_target': pos.underlying_levels.get('target') if pos.underlying_levels else None,
+            'option_risk_per_unit_usd': pos.underlying_levels.get('per_unit_risk') if pos.underlying_levels else None,
         }
         trades.append(trade)
         ensure_daily_state(exit_time)
@@ -1290,6 +1351,9 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
 
     measured_start = pd.Timestamp(parse_time(req.start))
     for i, (ts, row) in enumerate(frame.iterrows()):
+        setup_signals=option_planner.step(i,ts,row) if option_planner else {}
+        if option_trend is not None:
+            option_trend.update(ts,row)
         # State transitions during warm-up must affect the first live candle.
         # Never evaluate trade orders or record trades before From.
         if ts < measured_start:
@@ -1381,6 +1445,43 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                     closed_this_candle = True
                     break
 
+        # Opt-in quote-backed BTC ATR/R stop. A completed underlying bar can
+        # assert the price threshold, but cannot certify option fill timing.
+        # Stop wins if the bar simultaneously touches the reward target.
+        if pos is not None and pos.underlying_levels is not None:
+            levels=pos.underlying_levels
+            upward=pos.direction=='CALL'
+            if pos.underlying_exit_pending is None:
+                stop_hit=(float(row.low)<=levels['stop'] if upward
+                          else float(row.high)>=levels['stop'])
+                target_hit=(float(row.high)>=levels['target'] if upward
+                            else float(row.low)<=levels['target'])
+                if stop_hit:
+                    pos.underlying_exit_pending='UNDERLYING_R_STOP'
+                elif target_hit:
+                    pos.underlying_exit_pending='UNDERLYING_R_TARGET'
+            if pos.underlying_exit_pending is not None:
+                quote=first_valid_exit_quote(pos,ts.isoformat())
+                if quote is not None:
+                    close_position(quote['timestamp'],
+                        _executable_exit_price(pos,quote,strategy),
+                        pos.underlying_exit_pending)
+                    closed_this_candle=True
+
+        # Force-close clock is independent of entry windows. A missing quote
+        # remains an unfilled/retryable exit rather than a fabricated price.
+        if pos is not None and (pos.force_exit_pending or clock_due(
+                ts,strategy.options_force_exit_time,strategy.session.timezone)):
+            pos.force_exit_pending=True
+            quote=first_valid_exit_quote(pos,ts.isoformat())
+            if quote is not None:
+                close_position(quote['timestamp'],_executable_exit_price(pos,quote,strategy),
+                               'OPTION_FORCE_EXIT_CLOCK')
+                option_force_exit_count+=1
+                closed_this_candle=True
+            else:
+                option_force_exit_missed_quotes+=1
+
         if pos is not None and strategy.risk.close_at_session_end and _session_end_due(
                 ts, strategy.session, {'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'1D':1440}[strategy.timeframe]):
             q = first_valid_exit_quote(pos, ts.isoformat())
@@ -1426,6 +1527,34 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
 
         if pos is not None or closed_this_candle:
             continue
+
+        # A pending BTC stop cannot be allowed to survive a candle gap, an
+        # entry-session closure, daily loss gate or invalidated hourly trend.
+        # The bar range may touch the stop, but contract execution only occurs
+        # after this completed base candle on a real option quote.
+        option_pending_filled=None
+        if option_pending is not None:
+            cancel_reason=None
+            if option_pending.expired(ts,i,5,options_setup.max_wait_bars):
+                cancel_reason='EXPIRED'
+            elif (not _session_allowed(ts,strategy.session)
+                  or clock_due(ts,strategy.options_force_exit_time,strategy.session.timezone)):
+                cancel_reason='SESSION_OR_CLOCK'
+            elif daily_block_reason():
+                cancel_reason='DAILY_RISK'
+            elif (options_setup.cancel_on_trend_invalidation
+                  and not option_trend.valid(row,option_pending.direction,ts)):
+                cancel_reason='TREND_INVALID'
+            if cancel_reason is not None:
+                option_order_events['expired' if cancel_reason=='EXPIRED' else 'cancelled']+=1
+                add_marker(ts.isoformat(),'reject',option_pending.direction,
+                    'OPTION_PENDING_'+cancel_reason,
+                    _event_details('Pending option underlying stop cancelled',cancel_reason,
+                                   trigger=option_pending.trigger_price))
+                option_pending=None
+                option_pending_provenance=None
+            elif i>option_pending.setup_index and option_pending.crossed(row) is not None:
+                option_pending_filled=option_pending
 
         # When flat, update every independent lifecycle for CALL and PUT. Each
         # lifecycle can arm from a different condition. The full directional entry
@@ -1496,6 +1625,23 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         put_entry_pass = _score_entry_pass(put, put_score, strategy.put_big_trend_score) if put_enabled else False
         call_candidate = bool(call_entry_pass and call_eligible and not shared_no_trade['passed'] and not call_no_trade['passed'])
         put_candidate = bool(put_entry_pass and put_eligible and not shared_no_trade['passed'] and not put_no_trade['passed'])
+        if options_setup:
+            # Before placing the order use ONLY a freshly completed HTF setup.
+            # Once armed, only the frozen order (not a new signal) can trigger.
+            if option_pending is None:
+                call_candidate=bool(call_entry_pass and 'LONG' in option_planner.new_setups
+                                    and option_trend.valid(row,'CALL',ts)
+                                    and not shared_no_trade['passed'] and not call_no_trade['passed'])
+                put_candidate=bool(put_entry_pass and 'SHORT' in option_planner.new_setups
+                                   and option_trend.valid(row,'PUT',ts)
+                                   and not shared_no_trade['passed'] and not put_no_trade['passed'])
+            else:
+                call_candidate=bool(option_pending_filled and option_pending.direction=='CALL'
+                                    and call_entry_pass and not shared_no_trade['passed']
+                                    and not call_no_trade['passed'])
+                put_candidate=bool(option_pending_filled and option_pending.direction=='PUT'
+                                   and put_entry_pass and not shared_no_trade['passed']
+                                   and not put_no_trade['passed'])
         if pattern_tracker is not None:
             config=strategy.pattern_trade
             def setup_pass(side):
@@ -1537,6 +1683,17 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 add_marker(ts.isoformat(),'reject','PUT',reason,_event_details('Breakout/retest gate',reason,btc_close=_finite(row.close),
                     breakout_level=_strategy_operand(frame,i,'put_breakout_level'),bars_since_breakout=_strategy_operand(frame,i,'put_bars_since_breakout'),
                     retest_ready=_strategy_operand(frame,i,'put_retest_ready'),false_breakout=_strategy_operand(frame,i,'put_false_breakout')))
+        # A touched pending stop is a one-shot event. If no-trade or other
+        # directional gates block it, do not retain a stale triggered order.
+        if option_pending_filled is not None and not (call_candidate or put_candidate):
+            option_order_events['cancelled']+=1
+            add_marker(ts.isoformat(),'reject',option_pending.direction,
+                'OPTION_STOP_TRIGGER_BLOCKED',
+                _event_details('Underlying stop touched but strategy gate blocked',
+                               'OPTION_ENTRY_GATE',trigger=option_pending.trigger_price))
+            option_pending=None
+            continue
+
         risk_reason = daily_block_reason()
         if risk_reason and (call_candidate or put_candidate):
             daily_state['blocked_count'] = int(daily_state['blocked_count']) + 1
@@ -1553,6 +1710,14 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         chosen_cycle: EntryCycleState | None = None
         chosen_behavior = None
         def choose_side(chosen_direction: str):
+            if options_setup:
+                group=call if chosen_direction=='CALL' else put
+                state=EntryCycleState(active=True,start_index=i,entries=0)
+                return group,state,SimpleNamespace(
+                    id='OPTION_UNDERLYING_STOP',name='Option underlying stop-market research',
+                    max_entries_per_activation=1,delay_bars=0,
+                    max_wait_bars=options_setup.max_wait_bars,
+                    trigger_condition_id=None),None
             ready = call_ready if chosen_direction=='CALL' else put_ready
             tree = call if chosen_direction=='CALL' else put
             origin = call_breakout_origin if chosen_direction=='CALL' else put_breakout_origin
@@ -1578,8 +1743,40 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         if not direction or chosen_tree is None or chosen_cycle is None or chosen_behavior is None:
             continue
 
+        if options_setup and option_pending is None:
+            snapshot=option_planner.new_setups['LONG' if direction=='CALL' else 'SHORT']
+            trigger=stop_trigger_price(snapshot['level'],upward=direction=='CALL',
+                tick_size=options_setup.underlying_tick_size,
+                buffer_ticks=options_setup.breakout_buffer_ticks,
+                buffer_points=options_setup.breakout_buffer_points)
+            option_pending=PendingUnderlyingStop(
+                direction=direction,signal_time=ts,setup_index=i,
+                trigger_price=trigger,stop_price=float(snapshot['stop_price']),
+                setup_level=float(snapshot['level']))
+            option_pending_provenance={'setup_confirmation_time':snapshot['setup_time']}
+            option_order_events['armed']+=1
+            add_marker(ts.isoformat(),'study',direction,'OPTION_STOP_ARMED',
+                _event_details('Pending underlying stop','ARMED',
+                               trigger=trigger,stop=snapshot['stop_price']))
+            continue
+        if options_setup and option_pending_filled is None:
+            continue
+
+        filled_stop=option_pending_filled
+        # One-shot stop attempt: even a missing quote cannot later use a stale
+        # historical breakout as though an option order had filled.
+        if filled_stop is not None:
+            option_pending=None
+            option_order_events['triggered']+=1
+
         action = strategy.call_action if direction == 'CALL' else strategy.put_action
         spec, q, why = _select_option(store, parts, inst, ts, float(row.close), direction, strategy, action)
+        if options_setup and q and (
+                not _session_allowed(pd.Timestamp(q['timestamp']),strategy.session)
+                or clock_due(pd.Timestamp(q['timestamp']),
+                             strategy.options_force_exit_time,strategy.session.timezone)):
+            why='OPTION_QUOTE_OUTSIDE_ENTRY_WINDOW'
+            q=None
         if not spec or not q:
             decision_tree = {'mode': 'EXECUTION', 'passed': False, 'passed_count': 0, 'total': 1, 'conditions': [], 'groups': []}
             decisions.append(_flatten_decision(next_event('decision'), direction, ts, 'EXECUTION', decision_tree, {'close': _finite(row.close), 'reason': why}))
@@ -1607,6 +1804,17 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                     pattern_level['stop'],effective_entry_quote,balance)
             except ValueError as err:
                 qty,cost,quantity_reject=0.,0.,str(err)
+        elif options_setup:
+            remaining=remaining_daily_risk(
+                daily_state['start_balance'],daily_state['realized_pnl'],
+                strategy.risk.max_daily_loss_percent)
+            qty,per_unit,quantity_reject=option_buy_quantity(
+                spec,entry,float(row.close),balance,remaining)
+            cost=qty*(entry*float(spec['contract_value'])+
+                      _delta_fee(float(row.close),entry,1,float(spec['contract_value']),
+                                 strategy.execution)['total_fee_usd'])
+            if quantity_reject:
+                option_order_events['rejected']+=1
         else:
             qty, cost, quantity_reject = _quantity(strategy, spec, entry, float(row.close), balance, action)
         if pattern_level is not None and qty>0:
@@ -1669,6 +1877,31 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             margin=margin_details,
             pattern_levels=pattern_level,pattern_initial_quantity=qty,
         )
+        if options_setup and filled_stop is not None:
+            direction_up=direction=='CALL'
+            signal_stop=filled_stop.stop_price
+            # Round protective stop away from the frozen signal, not toward
+            # BTC entry. Price must remain protective after any quote delay.
+            tick=options_setup.underlying_tick_size
+            signal_stop=(math.floor(signal_stop/tick+1e-10)*tick if direction_up
+                         else math.ceil(signal_stop/tick-1e-10)*tick)
+            # Use the frozen underlying stop-trigger/gap fill proxy for R.
+            # The later observed BUY option ASK price is NOT a BTC price.
+            underlying_entry_proxy=float(filled_stop.crossed(row))
+            target=target_at_r(underlying_entry_proxy,signal_stop,
+                                'LONG' if direction_up else 'SHORT',
+                                options_setup.reward_r_multiple,tick)
+            if target is None:
+                raise RuntimeError('Validated option stop should be protective')
+            pos.underlying_levels={
+                'stop':round(signal_stop,10),'target':target,
+                'signal_time':filled_stop.signal_time.isoformat(),
+                'underlying_trigger':filled_stop.trigger_price,
+                'underlying_entry_proxy':underlying_entry_proxy,
+                'setup_level':filled_stop.setup_level,
+                'per_unit_risk':per_unit,
+                'r_definition':'BTC_UNDERLYING_POINTS_NOT_OPTION_PREMIUM'}
+            option_pending_provenance=None
         chosen_cycle.entries += 1
         chosen_cycle.last_entry_index = i
         if pattern_tracker is not None and pattern_side_events.get(direction) is not None:
@@ -1844,6 +2077,9 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         'avg_mfe_percent': (sum(t['mfe_percent'] for t in trades) / len(trades) if trades else 0),
         'avg_mae_percent': (sum(t['mae_percent'] for t in trades) / len(trades) if trades else 0),
         'daily_risk_blocks': int(daily_state['blocked_count']),
+        'option_stop_order_events':option_order_events,
+        'option_forced_clock_exits':option_force_exit_count,
+        'option_force_exit_missing_quote_attempts':option_force_exit_missed_quotes,
     }
 
     broker_history_replay = replay_broker_account(parts, req.start, req.end, trades)
@@ -1885,6 +2121,9 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 'Session-end exit uses the last eligible completed strategy candle and requires a valid pre-expiry quote',
                 'Historical account snapshots are audit observations, not counterfactual margin and cannot validate hypothetical Delta orders',
                 'Option quote gaps are reported but cannot be converted into known bid/ask or liquidity',
+                'Opt-in option stop entry: BTC wick trigger is only known at completed-bar close; actual option fills are quote-backed later, not intrabar stop-market fills',
+                'Option ATR stop/2R target are BTC underlying price levels; realized option-premium R may differ materially due to delta, time decay, implied volatility and spread',
+                'BUY option risk sizing budgets full premium plus estimated fees, not model-inferred ATR option premium changes',
             ] + (['Warm-up incomplete'] if not warmup['contiguous'] else [])
               + (['Open position unresolved at end'] if unresolved_position else []),
         },
