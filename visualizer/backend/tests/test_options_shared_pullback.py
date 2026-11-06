@@ -72,7 +72,7 @@ def dataset(tmp_path,monkeypatch,*,hit_target=False,missing_quotes=False):
     bars=[];quotes=[]
     for i,ts in enumerate(times):
         row={'timestamp':ts.isoformat(),'open':100,
-             'high':102,'low':99,'close':100 if i<60 else 101,'volume':100}
+             'high':102,'low':99,'close':100 if i<101 else 101,'volume':100}
         if i==102:
             row['high']=105  # stop-market wick: close is only 101
         if hit_target and i==103:
