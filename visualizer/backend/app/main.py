@@ -48,14 +48,15 @@ def archive():
 @app.post('/api/archive/plan')
 def archive_plan(req: ArchiveSyncRequest):
     try:
-        return plan_archive_sync(req.start, req.end)
+        return plan_archive_sync(req.start, req.end, require_options=req.market_type=="OPTIONS")
     except (ValueError, OSError, json.JSONDecodeError) as exc:
         raise HTTPException(400, str(exc))
 
 
 @app.post('/api/archive/sync')
 def archive_sync(req: ArchiveSyncRequest):
-    jid = _enqueue(lambda progress: ensure_archive_data(req.start, req.end, progress))
+    jid = _enqueue(lambda progress: ensure_archive_data(
+        req.start, req.end, progress, require_options=req.market_type=="OPTIONS"))
     return {'job_id': jid}
 
 @app.get('/api/storage')
