@@ -9,7 +9,7 @@ const defaults:AdaptiveFuturesConfig={enabled:false,regime:{
  timeframe:'1h',fast_ema_id:'amrs_ema50_1h',slow_ema_id:'amrs_ema200_1h',
  close_ema_id:'amrs_close_1h',adx_id:'amrs_adx_1h',atr_percentile_id:'amrs_atr_percentile_1h',
  adx_trend_min:25,adx_range_max:20,atr_compression_max:30,atr_extreme_min:90,
- confirmations:2,compression_grace_hours:2,ema_slope_bars:2,require_ema_slope:true},
+ confirmations:2,ema_slope_bars:2,require_ema_slope:true},
  trend:{...moduleDefault},compression:{...moduleDefault,volume_ratio_min:1.5,require_retest:true},
  trailing:{enabled:true,atr_id:'amrs_atr_15m',activation_r:2,atr_multiple:2,update_mode:'PRIOR_COMPLETED_BAR'},
  execution_mode:'STOP_MARKET_INTRABAR',breakout_buffer_ticks:1,breakout_buffer_points:0,
