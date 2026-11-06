@@ -95,8 +95,14 @@ export function AdaptiveFuturesEditor({value,onChange}:{value:Strategy;onChange:
     {num('Entry order expiry (5m bars)',adaptive.max_wait_bars,n=>update({max_wait_bars:n}),1,1)}
     {num('Breakout buffer ticks',adaptive.breakout_buffer_ticks,n=>update({breakout_buffer_ticks:n}),1,1)}
     {num('Breakout buffer BTC points',adaptive.breakout_buffer_points,n=>update({breakout_buffer_points:n}))}
+    <label>Position sizing<select value={adaptive.size_mode}
+     onChange={e=>update({size_mode:e.target.value as AdaptiveFuturesConfig['size_mode']})}>
+     <option value="RISK_EQUITY">Equity risk, rounded down</option>
+     <option value="FIXED">Fixed whole lots, risk checked</option></select></label>
     {num('Estimated risk per trade %',adaptive.equity_risk_percent,n=>update({equity_risk_percent:n}),.01)}
     {num('Maximum whole lots',adaptive.max_lots,n=>update({max_lots:n}),1,1)}
+    {num('Fixed-size risk budget multiplier',adaptive.max_estimated_risk_multiple,n=>update({max_estimated_risk_multiple:n}),1)}
+    {num('Fallback R multiple',adaptive.reward_r_multiple,n=>update({reward_r_multiple:n}),.1)}
     {check('Cancel pending orders on regime change',adaptive.cancel_on_trend_invalidation,n=>update({cancel_on_trend_invalidation:n}))}
    </div>
   </>}
