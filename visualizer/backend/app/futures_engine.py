@@ -637,7 +637,7 @@ def run_futures_backtest(req, progress=None):
             'entry_fee_usd':position['entry_fee'],'funding_usd':position['funding_usd'],
             'quantity':position.get('quantity',qty),'stop_price':position.get('stop_price'),
             'target_price':position.get('target_price'),**position['lifecycle_provenance'],'marked_not_realized':True,'last_candle_close':last_close,
-            'estimated_unrealized_pnl_usd':(last_close-position['entry_price'])*qty*
+            'estimated_unrealized_pnl_usd':(last_close-position['entry_price'])*position.get('quantity',qty)*
                 (1 if position['direction']=='LONG' else -1),
             'estimated_exit_fee_usd':fee(last_close,position.get('quantity',qty))}
     wins=sum(t['net_pnl_usd']>0 for t in trades)
