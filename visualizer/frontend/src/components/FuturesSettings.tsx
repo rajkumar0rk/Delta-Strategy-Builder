@@ -17,8 +17,23 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   size_mode:'RISK_EQUITY' as const,equity_risk_percent:0.5,max_lots:100000,
   max_estimated_risk_multiple:1};
  const pullback={...setupDefaults,...f.pullback};
+ const trendDefaults={enabled:false,atr_indicator_id:'atr14_1h',
+  initial_stop_atr_multiple:2,trailing_stop_atr_multiple:3,
+  trail_source:'HIGH_LOW' as const,size_mode:'RISK_EQUITY' as const,
+  equity_risk_percent:0.5,max_lots:100000,max_estimated_risk_multiple:1};
+ const trend={...trendDefaults,...f.trend_risk};
+ const setTrend=(patch:Partial<typeof trend>)=>onChange({...value,futures:{...f,
+   ...(patch.enabled===true?{stop_loss_percent:null,take_profit_percent:null,
+     pullback:{...pullback,enabled:false}}:{}),
+   ...(patch.enabled===false?{stop_loss_percent:f.stop_loss_percent??1,
+     take_profit_percent:f.take_profit_percent}:{}),
+   trend_risk:{...trend,...patch}}});
+ const trendNumber=(key:keyof typeof trendDefaults,label:string,step:string,min:number)=>(
+  <label key={key}>{label}<input type="number" step={step} min={min}
+   value={Number(trend[key])} onChange={e=>setTrend({[key]:Number(e.target.value)})}/></label>);
+
  const setup=(patch:Partial<typeof pullback>)=>onChange({...value,futures:{...f,
-   ...(patch.enabled===true?{stop_loss_percent:null,take_profit_percent:null}:{}),
+   ...(patch.enabled===true?{stop_loss_percent:null,take_profit_percent:null,trend_risk:{...trend,enabled:false}}:{}),
    pullback:{...pullback,...patch}}});
  const setupNumber=(key:keyof typeof setupDefaults,label:string,step:string,min:number)=>(
   <label key={key}>{label}<input type="number" step={step} min={min}
@@ -57,8 +72,8 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
     onChange={e=>set({force_exit_time:e.target.value||null})}/></label>
    {number('tick_size','Assumed futures price tick ($)','0.5',0.000001)}
    {number('slippage_ticks','Additional adverse execution ticks','1',0)}
-  {optional('stop_loss_percent','Price-based stop-loss %')}
-  {optional('take_profit_percent','Price-based take-profit %')}
+  {!trend.enabled&&optional('stop_loss_percent','Price-based stop-loss %')}
+  {!trend.enabled&&optional('take_profit_percent','Price-based take-profit %')}
   <label>Funding history<select value={f.funding_mode} onChange={e=>set({funding_mode:e.target.value as FuturesConfig['funding_mode']})}><option value="REQUIRE_CSV">Require historical funding CSV</option><option value="EXCLUDE_WITH_WARNING">Exclude funding (research only)</option></select></label>
  </div>
  <div className="form-grid">
@@ -77,6 +92,30 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   </div>)}
  </div>
  <div className="warning-box"><b>Accuracy limitations:</b> Futures fills use historical 5m-derived OHLC and assumed slippage, not recorded futures order-book quotes. Funding requires <code>futures_funding.csv</code> with timestamp, symbol and decimal funding_rate. Collateral and liquidation are approximations; no Delta exchange liquidation precision is claimed. Current published snapshot supports size-dependent margins above $100,000 notional; INR conversion, historical collateral tiers, and genuine liquidation remain unmodeled. Pre-8-Sep-2025 minute-by-minute funding is not supported by the 8-hour funding importer. Backtests never place orders.</div>
+ </section>
+ <section className="card"><h2>ATR trend-risk protection (directional futures rules)</h2>
+ <p>Opt-in mode for normal CALL/LONG and PUT/SHORT breakout strategies, separate from pullback. Stop distances use strategy-timeframe ATR. Trailing updates are based only on completed candles and activate on the following bar. This is conservative OHLC research, not order-book execution.</p>
+ <label className="switch"><input type="checkbox" checked={trend.enabled}
+  onChange={e=>setTrend({enabled:e.target.checked})}/><span>Enable ATR stop, trailing stop and equity-risk sizing</span></label>
+ {trend.enabled&&<div className="form-grid">
+  <label>ATR indicator ID (strategy timeframe)<input value={trend.atr_indicator_id}
+   onChange={e=>setTrend({atr_indicator_id:e.target.value})}/></label>
+  {trendNumber('initial_stop_atr_multiple','Initial stop distance × ATR','0.25',0.01)}
+  {trendNumber('trailing_stop_atr_multiple','Trailing distance × ATR','0.25',0.01)}
+  <label>Trailing reference<select value={trend.trail_source}
+   onChange={e=>setTrend({trail_source:e.target.value as typeof trend.trail_source})}>
+   <option value="HIGH_LOW">Highest high / lowest low since entry</option>
+   <option value="CLOSE">Highest / lowest close since entry</option>
+  </select></label>
+  <label>Position sizing<select value={trend.size_mode}
+   onChange={e=>setTrend({size_mode:e.target.value as typeof trend.size_mode})}>
+   <option value="RISK_EQUITY">Risk % of available equity</option>
+   <option value="FIXED">Fixed lots, guarded by risk budget</option>
+  </select></label>
+  {trendNumber('equity_risk_percent','Equity risk per entry %','0.1',0.01)}
+  {trendNumber('max_lots','Maximum whole futures lots','1',1)}
+  {trend.size_mode==='FIXED'&&trendNumber('max_estimated_risk_multiple','Fixed-size risk guard multiple','0.1',1)}
+ </div>}
  </section>
  <section className="card"><h2>Stateful futures trend / pullback / breakout</h2>
  <p>Opt-in: freeze a completed setup candle and simulate either the original next-open confirmation or a stop-market trigger from subsequent 5m OHLC. Stop-market mode uses conservative same-bar ordering; no historical tick sequence or real BBO is available. Set one open position and one pending order at a time.</p>
