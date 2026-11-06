@@ -57,7 +57,8 @@ def _merge_ranges(ranges: list[SyncRange]) -> list[SyncRange]:
     return out
 
 
-def plan_archive_sync(start: str, end: str, *, root: Path | None = None, now: datetime | None = None) -> dict[str, Any]:
+def plan_archive_sync(start: str, end: str, *, root: Path | None = None, now: datetime | None = None,
+                      require_options: bool = True) -> dict[str, Any]:
     """Plan safe downloads for uncovered *completed UTC days*.
 
     Catalog intervals are authoritative. Existing catalog segments with missing
@@ -90,7 +91,11 @@ def plan_archive_sync(start: str, end: str, *, root: Path | None = None, now: da
             continue
         intervals.append((max(s, a), min(e, b), raw))
         seg_root = root / str(raw.get("directory") or "")
-        missing = [name for name in ("underlying_bars.csv", "option_instruments.csv", "option_quotes.csv") if not (seg_root / name).is_file()]
+        # Futures signal execution only consumes underlying BTC OHLCV; never
+        # require option instruments/quotes to repair its historical archive.
+        required_files = (("underlying_bars.csv", "option_instruments.csv", "option_quotes.csv")
+                          if require_options else ("underlying_bars.csv",))
+        missing = [name for name in required_files if not (seg_root / name).is_file()]
         if missing:
             missing_files.append({
                 "name": str(raw.get("name") or raw.get("directory") or "segment"),
@@ -191,17 +196,62 @@ def _run_sync_range(root: Path, item: SyncRange, progress: Callable[..., None] |
         raise
 
 
-def ensure_archive_data(start: str, end: str, progress: Callable[..., None] | None = None) -> dict[str, Any]:
+def _run_btc_candle_gap_repair(
+    root: Path, start: str, end: str,
+    progress: Callable[..., None] | None = None,
+) -> None:
+    """Subprocess isolates the shared backtest downloader from app import paths."""
+    cmd = [
+        sys.executable, "-m", "backtest.candle_repair",
+        "--root", str(root), "--start", start, "--end", end,
+    ]
+    proc = subprocess.Popen(
+        cmd, cwd=str(project_root()), env=os.environ.copy(),
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", errors="replace", bufsize=1,
+    )
+    lines: list[str] = []
+    try:
+        assert proc.stdout is not None
+        for raw in proc.stdout:
+            message = raw.strip()
+            if message:
+                lines.append(message)
+                if len(lines) > 8:
+                    lines.pop(0)
+                if progress:
+                    progress(message, 8, "BTC_CANDLE_SYNC", "Verify 5m candle coverage")
+        if proc.wait():
+            raise RuntimeError("BTC candle gap sync failed: " + "; ".join(lines[-4:])[-1200:])
+    except BaseException:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        raise
+
+
+def ensure_archive_data(start: str, end: str, progress: Callable[..., None] | None = None,
+                        *, require_options: bool = True) -> dict[str, Any]:
     """Download uncovered completed UTC days, then verify coverage again."""
     root = data_root().resolve()
-    before = plan_archive_sync(start, end, root=root)
-    if before["missing_segment_files"]:
+    before = plan_archive_sync(start, end, root=root, require_options=require_options)
+    # Option files are deliberately not generated from BTC OHLC candles. Their
+    # absence still blocks an Options backtest; missing underlying_bars.csv is
+    # repaired by the separate BTC candle-gap downloader below.
+    missing_non_bars = [
+        x for x in before["missing_segment_files"]
+        if any(name != "underlying_bars.csv" for name in x["missing"])
+    ]
+    if missing_non_bars:
         details = "; ".join(
-            f"{x['name']}: {', '.join(x['missing'])}" for x in before["missing_segment_files"][:4]
+            f"{x['name']}: {', '.join(x['missing'])}" for x in missing_non_bars[:4]
         )
         raise ValueError(
-            "Archive catalog references segment(s) whose normalized files are missing. "
-            "Automatic append cannot safely replace an existing migrated segment: " + details
+            "Archive segment(s) lack required option files; automatic BTC candle "
+            "repair cannot reconstruct option instruments or quotes: " + details
         )
     if before["unresolved_ranges"] and not before["download_ranges"]:
         raise ValueError(
@@ -227,7 +277,10 @@ def ensure_archive_data(start: str, end: str, progress: Callable[..., None] | No
             (lambda msg: progress(msg, 3.0 + index / max(1, len(ranges)) * 5.0, "DATA_SYNC", "Refresh archive catalog")) if progress else None,
         )
 
-    after = plan_archive_sync(start, end, root=root)
+    # Fix intra-segment 5m candle gaps that are invisible to catalog intervals.
+    # This read-through step does not hit Delta when every local close is present.
+    _run_btc_candle_gap_repair(root, start, end, progress)
+    after = plan_archive_sync(start, end, root=root, require_options=require_options)
     if after["catalog_gaps"] or after["missing_segment_files"]:
         unresolved_text = ", ".join(
             f"{x['start']} → {x['end_exclusive']}" for x in after["catalog_gaps"][:4]
