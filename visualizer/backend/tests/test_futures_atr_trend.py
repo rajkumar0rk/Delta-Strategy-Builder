@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import csv
-import math
 import pandas as pd
 import pytest
 from pydantic import ValidationError
@@ -34,7 +33,7 @@ def test_four_hour_completed_only_and_no_lookahead():
     missing=_aggregate_completed(raw.drop(raw.index[17]),"5m","4h")
     assert pd.Timestamp("2026-01-01T04:00:00Z") not in missing.index
     instance=IndicatorInstance(id="ema4h",kind="EMA",timeframe="4h",params={"period":2})
-    result,_=compute_indicators(raw,[instance],"1h") if False else compute_indicators(raw,[instance],"5m")
+    result,_=compute_indicators(raw,[instance],"5m")
     cutoff=pd.Timestamp("2026-01-01T11:00:00Z")
     future=raw.copy()
     future.loc[future.index>cutoff,"close"]+=10000
