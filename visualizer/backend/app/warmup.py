@@ -11,7 +11,7 @@ from .data_store import DataStore
 from .indicators import CATALOG
 from .day_levels import DayLevelParams
 
-TF_MINUTES = {"5m": 5, "10m": 10, "15m": 15, "30m": 30, "1h": 60, "1D": 1440}
+TF_MINUTES = {"5m": 5, "10m": 10, "15m": 15, "30m": 30, "1h":60,"4h":240,"1D":1440}
 HISTORY_LIMIT = 200000
 
 
