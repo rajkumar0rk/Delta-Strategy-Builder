@@ -45,7 +45,6 @@
           "atr_compression_max": 30,
           "atr_extreme_min": 90,
           "confirmations": 2,
-          "compression_grace_hours": 2,
           "ema_slope_bars": 2,
           "require_ema_slope": true
         },
