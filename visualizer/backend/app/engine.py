@@ -1117,6 +1117,8 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         if estimated_per_unit_loss<=0 or not math.isfinite(estimated_per_unit_loss):
             return 0.0,0.0,'INVALID_PREMIUM_RISK'
         trade_room=available*cfg.equity_risk_percent/100
+        if cfg.size_mode=='FIXED':
+            trade_room*=cfg.max_estimated_risk_multiple
         if max_daily_risk is not None:
             trade_room=min(trade_room,max_daily_risk)
         cash_per_unit=entry*cv+fees
@@ -1168,11 +1170,11 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         return quote
 
     def spot_at(timestamp_text: str) -> float:
+        # Frame is sorted and UTC-indexed. The original boolean-index scan was
+        # O(history length) PER option quote; this is O(log history length).
         target = pd.Timestamp(parse_time(timestamp_text))
-        eligible = frame.loc[frame.index <= target, 'close']
-        if len(eligible):
-            return float(eligible.iloc[-1])
-        return float(frame.iloc[0].close)
+        idx = max(0,int(frame.index.searchsorted(target,side='right'))-1)
+        return float(frame.iloc[idx].close)
 
     def record_mtm_value(marked: float):
         nonlocal mtm_peak, mtm_max_dd, mtm_max_dd_percent, mtm_low, mtm_samples
