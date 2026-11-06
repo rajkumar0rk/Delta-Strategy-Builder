@@ -199,12 +199,15 @@ def _run_sync_range(root: Path, item: SyncRange, progress: Callable[..., None] |
 def _run_btc_candle_gap_repair(
     root: Path, start: str, end: str,
     progress: Callable[..., None] | None = None,
+    *, append_catalog_gaps: bool = False,
 ) -> None:
     """Subprocess isolates the shared backtest downloader from app import paths."""
     cmd = [
         sys.executable, "-m", "backtest.candle_repair",
         "--root", str(root), "--start", start, "--end", end,
     ]
+    if append_catalog_gaps:
+        cmd.append("--append-catalog-gaps")
     proc = subprocess.Popen(
         cmd, cwd=str(project_root()), env=os.environ.copy(),
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -257,25 +260,32 @@ def ensure_archive_data(start: str, end: str, progress: Callable[..., None] | No
         raise ValueError(
             "Requested archive range includes an incomplete UTC day. Automatic history download only downloads completed UTC dates."
         )
-    if before["download_ranges"] and not before["module_available"]:
+    if require_options and before["download_ranges"] and not before["module_available"]:
         raise ValueError(
             f"Missing archive utility: {before['module_path']}. Expected backtest.history_archive in the repository."
         )
 
     ranges = [SyncRange(date.fromisoformat(x["start_date"]), date.fromisoformat(x["end_date"])) for x in before["download_ranges"]]
-    for index, item in enumerate(ranges, 1):
-        if progress:
-            progress(
-                f"Downloading missing completed history {index}/{len(ranges)}: {item.start_date} → {item.end_date}…",
-                3.0 + (index - 1) / max(1, len(ranges)) * 5.0,
-                "DATA_SYNC",
-                "Refresh archive catalog",
+    if not require_options and before["catalog_gaps"]:
+        # Futures only needs BTC candles. Fetch exact uncovered UTC intervals
+        # without downloading option products, quotes, or whole covered days.
+        _run_btc_candle_gap_repair(root, start, end, progress,
+                                   append_catalog_gaps=True)
+    else:
+        # OPTIONS retains complete contract/quote segment construction.
+        for index, item in enumerate(ranges, 1):
+            if progress:
+                progress(
+                    f"Downloading missing completed history {index}/{len(ranges)}: {item.start_date} → {item.end_date}…",
+                    3.0 + (index - 1) / max(1, len(ranges)) * 5.0,
+                    "DATA_SYNC",
+                    "Refresh archive catalog",
+                )
+            _run_sync_range(
+                root,
+                item,
+                (lambda msg: progress(msg, 3.0 + index / max(1, len(ranges)) * 5.0, "DATA_SYNC", "Refresh archive catalog")) if progress else None,
             )
-        _run_sync_range(
-            root,
-            item,
-            (lambda msg: progress(msg, 3.0 + index / max(1, len(ranges)) * 5.0, "DATA_SYNC", "Refresh archive catalog")) if progress else None,
-        )
 
     # Fix intra-segment 5m candle gaps that are invisible to catalog intervals.
     # This read-through step does not hit Delta when every local close is present.
