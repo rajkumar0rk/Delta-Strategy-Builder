@@ -164,7 +164,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':12,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':13,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
@@ -182,6 +182,7 @@ def run_futures_backtest(req, progress=None):
     frame,meta=compute_indicators(bars,strategy.indicators,strategy.timeframe,daily_source=daily_source)
     _prepare_strategy_state(frame,strategy)
     pullback=cfg.pullback if cfg.pullback.enabled else None
+    trend_risk=cfg.trend_risk if cfg.trend_risk.enabled else None
     planner=PullbackBreakoutPlanner(frame,pullback,strategy.timeframe) if pullback else None
     rates,missing_funding=funding_events(parts,req.start,req.end,
         required=cfg.funding_mode=='REQUIRE_CSV')
@@ -222,7 +223,7 @@ def run_futures_backtest(req, progress=None):
     put_enabled=strategy.direction_mode in ('PUT','BOTH') and strategy.put_signal_mode!='ALERT_ONLY'
     cycles={'LONG':_cycle_states(_entry_behaviors(strategy,'CALL')) if call_enabled else {},
             'SHORT':_cycle_states(_entry_behaviors(strategy,'PUT')) if put_enabled else {}}
-    tf={'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'1D':1440}[strategy.timeframe]
+    tf={'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'4h':240,'1D':1440}[strategy.timeframe]
     def fee(price,quantity=None):
         return price*(qty if quantity is None else quantity)*cfg.taker_fee_percent/100*(1+cfg.gst_percent/100)
     def close(pos,exit_time,price,reason):
@@ -249,6 +250,7 @@ def run_futures_backtest(req, progress=None):
           'mfe_percent':pos['mfe']*100,'mae_percent':pos['mae']*100,
           'stop_price':pos.get('stop_price'),'target_price':pos.get('target_price'),
           'risk_per_lot_usd':pos.get('risk_per_lot_usd'),
+          'initial_stop_price':pos.get('initial_stop_price'),
           'r_multiple_net':net/r_at_risk if r_at_risk>0 else None,
           'entry_fill_timing':pos.get('entry_fill_timing','OPEN'),
           'exit_reason':reason,'entry_execution_side':'ASK_PROXY' if sign==1 else 'BID_PROXY',
@@ -344,6 +346,33 @@ def run_futures_backtest(req, progress=None):
             px=_slipped(intrabar_candidate if intrabar_candidate is not None else float(row.open),
                         direction,True,effective_slippage_bps,cfg.tick_size,cfg.slippage_ticks)
             trade_qty=qty; stop_price=None; target_price=None; risk_per_lot=None; entry_rejection=None
+            if trend_risk:
+                # This bar's OPEN follows the most recently completed signal
+                # candle. Never use the current bar's ATR for its own entry.
+                prior_atr=(frame.iloc[i-1].get(trend_risk.atr_indicator_id)
+                           if i>0 else None)
+                if prior_atr is None or not math.isfinite(float(prior_atr)) or float(prior_atr)<=0:
+                    entry_rejection='ATR_NOT_READY'
+                else:
+                    stop_distance=float(prior_atr)*trend_risk.initial_stop_atr_multiple
+                    raw_stop=px-stop_distance if direction=='LONG' else px+stop_distance
+                    units=raw_stop/cfg.tick_size
+                    stop_price=round(
+                        (math.floor(units+1e-10) if direction=='LONG' else math.ceil(units-1e-10))
+                        *cfg.tick_size,10)
+                    if stop_price<=0 or (px-stop_price)*(1 if direction=='LONG' else -1)<=0:
+                        entry_rejection='STOP_NOT_PROTECTIVE'
+                    else:
+                        stop_proxy=_slipped(stop_price,direction,False,
+                            effective_slippage_bps,cfg.tick_size,cfg.slippage_ticks)
+                        available_day_risk=remaining_daily_risk(
+                            daily['start_balance'],daily['realized'],
+                            strategy.risk.max_daily_loss_percent)
+                        lots,reason,risk_per_lot=risk_sized_lots(
+                            px,stop_proxy,direction,balance,cfg,trend_risk,
+                            max_risk_usd=available_day_risk)
+                        trade_qty=lots*cfg.contract_btc
+                        if not lots:entry_rejection=reason
             if execution_setup:
                 raw_stop=float(execution_setup['stop_price'])
                 units=raw_stop/cfg.tick_size
@@ -395,10 +424,11 @@ def run_futures_backtest(req, progress=None):
                     accepted_cycle.last_entry_index=i
                 position={'direction':direction,'entry_time':at_open.isoformat(),'entry_price':px,
                     'entry_fee':start_fee,'margin':margin,'funding_usd':0.0,
-                    'quantity':trade_qty,'stop_price':stop_price,'target_price':target_price,
+                    'quantity':trade_qty,'stop_price':stop_price,
+                    'initial_stop_price':stop_price,'target_price':target_price,
                     'risk_per_lot_usd':risk_per_lot,
                     'entry_fill_timing':'INTRABAR_ESTIMATED' if intrabar_candidate is not None else 'OPEN',
-                    'mfe':0.0,'mae':0.0,
+                    'trail_extreme':px,'mfe':0.0,'mae':0.0,
                     'lifecycle_provenance':dict(lifecycle_snapshot or {})}
                 markers.append({'id':f"future-entry-{len(trades)+1}",'time':int(at_open.timestamp()),
                     'kind':'entry','direction':'CALL' if direction=='LONG' else 'PUT',
@@ -433,6 +463,25 @@ def run_futures_backtest(req, progress=None):
                     close(position,ts,worst,'ESTIMATED_MARGIN_BREACH')
                     position=None;closed=True
             else:
+                if trend_risk:
+                    # Ratchet only AFTER this candle has closed. The updated
+                    # stop becomes executable from the following bar, so the
+                    # candle's own high/low cannot trigger its freshly raised stop.
+                    atr_value=row.get(trend_risk.atr_indicator_id)
+                    if atr_value is not None and math.isfinite(float(atr_value)) and float(atr_value)>0:
+                        extreme=float(row.close) if trend_risk.trail_source=='CLOSE' else (
+                            float(row.high) if sign==1 else float(row.low))
+                        old_extreme=position['trail_extreme']
+                        position['trail_extreme']=(max(old_extreme,extreme) if sign==1
+                                                   else min(old_extreme,extreme))
+                        candidate=position['trail_extreme']-sign*(
+                            float(atr_value)*trend_risk.trailing_stop_atr_multiple)
+                        units=candidate/cfg.tick_size
+                        candidate=round((math.floor(units+1e-10) if sign==1
+                                         else math.ceil(units-1e-10))*cfg.tick_size,10)
+                        old_stop=position['stop_price']
+                        if candidate>0 and (candidate>old_stop if sign==1 else candidate<old_stop):
+                            position['stop_price']=candidate
                 if strategy.risk.max_hold_minutes is not None and (ts-pd.Timestamp(position['entry_time'])).total_seconds()/60>=strategy.risk.max_hold_minutes:
                     pending=('CLOSE','TIME_STOP')
                 elif strategy.risk.close_at_session_end and _session_end_due(ts,strategy.session,tf):
@@ -666,6 +715,7 @@ def run_futures_backtest(req, progress=None):
         'funding_regime':'PRE_2025_MINUTE_FUNDING_EXCLUDED' if pd.Timestamp(req.start)<pd.Timestamp(EIGHT_HOUR_FUNDING_FROM_UTC) else 'EIGHT_HOUR_SNAPSHOT',
         'symbol':cfg.symbol,'leverage':cfg.leverage,'margin_mode':cfg.margin_mode,
         'pullback_enabled':bool(pullback),
+        'trend_risk_enabled':bool(trend_risk),
         'pullback_execution_mode':pullback.execution_mode if pullback else None,
         'force_exit_time':cfg.force_exit_time,
         'assumed_extra_half_spread_bps':cfg.extra_half_spread_bps,
