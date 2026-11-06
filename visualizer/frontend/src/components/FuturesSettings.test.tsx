@@ -20,6 +20,14 @@ describe('BTCUSD perpetual futures market editor',()=>{
   }
   expect(html).not.toContain('SELL collateral &amp; leverage');
  });
+ it('separates regular missing BTC archive downloads from optional futures observations',()=>{
+   // The choice is owned by App (BacktestRequest), not FuturesConfig.
+   const s=defaultStrategy();s.market_type='FUTURES';
+   expect(s.futures?.funding_mode).toBe('REQUIRE_CSV');
+   const html=renderToStaticMarkup(<FuturesSettings value={s} onChange={()=>{}}/>);
+   expect(html).toContain('Funding history');
+   expect(html).not.toContain('auto_sync_futures_observations');
+ });
  it('clearly labels simulated futures fills in result report',()=>{
   const s=defaultStrategy();s.market_type='FUTURES';
   const result:BacktestResult={run_id:'test',result_dir:'test',storage_mode:'COMPACT',strategy:s,

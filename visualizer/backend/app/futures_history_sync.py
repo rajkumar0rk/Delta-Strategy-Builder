@@ -33,7 +33,24 @@ def ensure_futures_observations(start, end, progress=None):
                     progress(message,12,"FUTURES_DATA_SYNC","Load BTC candles and validate funding assumptions")
         status=proc.wait()
         if status:
-            raise RuntimeError("Free futures history sync failed: "+("; ".join(messages[-5:])))
+            tail="; ".join(messages[-5:])
+            # A DNS outage is not a funding or candle-data requirement.
+            # Do not swallow explicit download errors or fabricate quotes.
+            diagnostic=" ".join(messages).lower()
+            if any(token in diagnostic for token in (
+                "getaddrinfo failed", "name or service not known",
+                "temporary failure in name resolution", "nodename nor servname",
+                "no such host is known",
+            )):
+                raise RuntimeError(
+                    "FUTURES_OBSERVATION_DNS_FAILURE: Windows could not resolve "
+                    "api.india.delta.exchange. Supplemental 1m mark/index/rate "
+                    "download was explicitly enabled. Disable 'Sync optional futures "
+                    "observations' to run from existing BTC OHLCV, or fix DNS/network "
+                    "and retry. Required missing BTC archive candles still need "
+                    "their own successful download. Cause: "+tail[-350:]
+                )
+            raise RuntimeError("FUTURES_OBSERVATION_SYNC_FAILED: "+tail)
         return {"downloaded_or_reused":True,"root":str(data_root()/"futures")}
     except BaseException:
         if proc.poll() is None:

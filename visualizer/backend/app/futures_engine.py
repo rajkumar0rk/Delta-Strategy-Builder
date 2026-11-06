@@ -144,9 +144,12 @@ def run_futures_backtest(req, progress=None):
         from .archive_sync import ensure_archive_data
         ensure_archive_data(req.start,req.end,progress)
         store.close();store=DataStore()
-    # Reuse the existing archive's opt-in automatic history path. Futures
-    # observations are separate files; never mutate public BTC/option candles.
-    if getattr(req,'dataset_mode','SINGLE')=='ARCHIVE' and getattr(req,'auto_download_missing_data',False):
+    # Optional 1m mark/index/funding-rate observations are NOT inputs to
+    # this OHLC backtest. Preserve BTC archive repair above but never force
+    # supplemental downloads just because futures mode was selected.
+    if req.auto_sync_futures_observations:
+        if req.dataset_mode != 'ARCHIVE':
+            raise ValueError('FUTURES_OBSERVATION_SYNC_REQUIRES_ARCHIVE_MODE')
         from .futures_history_sync import ensure_futures_observations
         ensure_futures_observations(req.start,req.end,progress)
     parts=store.resolve_request(req,require_options=False)
