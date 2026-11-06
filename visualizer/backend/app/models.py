@@ -930,6 +930,8 @@ class PreflightRequest(DatasetSelection):
 class ArchiveSyncRequest(BaseModel):
     start: str
     end: str
+    # Market-specific archive repair; OPTIONS remains default for older clients.
+    market_type: Literal["OPTIONS", "FUTURES"] = "OPTIONS"
 
 class SaveStrategyRequest(BaseModel):
     strategy: StrategyConfig

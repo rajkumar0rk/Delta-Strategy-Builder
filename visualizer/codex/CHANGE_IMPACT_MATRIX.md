@@ -71,3 +71,9 @@ Do **not** claim "all related files updated" without inspecting the consumers an
 | When changing… | Inspect/update these companion files | Verify |
 |---|---|---|
 | `BacktestRequest.auto_download_missing_data` or `auto_sync_futures_observations` | `backend/app/models.py`, `backend/app/futures_engine.py`, `backend/app/futures_history_sync.py`, `frontend/src/App.tsx`, `backend/app/archive_sync.py`, `backtest/futures_history.py`, `backend/tests/test_futures_optional_sync.py`, `codex/FUTURES_BACKTEST.md` | In an already-complete archive, both toggles off => zero network calls; BTC archive toggle alone => only archive sync; optional toggle alone => only supplemental sync; explicitly requested errors remain visible; frontend build; OPTIONS regression. |
+
+## Cache-first BTC candle synchronization change map
+
+| Change | Companion files | Mandatory validation |
+|---|---|---|
+| Physical BTC 5m candle cache repair / additional missing catalog intervals | `backtest/candle_repair.py`, `backtest/history_archive.py`, `backtest/providers/delta_india.py`, `visualizer/backend/app/archive_sync.py`, `visualizer/backend/app/futures_engine.py`, `visualizer/backend/app/engine.py`, `visualizer/backend/app/main.py`, `visualizer/backend/app/models.py`, `visualizer/frontend/src/App.tsx`, `visualizer/codex/FUTURES_BACKTEST.md` | `tests/test_candle_repair.py`, `visualizer/backend/tests/test_cache_first_archive.py`, `test_futures_optional_sync.py`, `test_v14_archive_sessions.py`, full backend/frontend/legacy suites, no-network cache-hit, atomic partial-failure behavior, true 5m grid and catalog correctness, OPTIONS quote preservation |
