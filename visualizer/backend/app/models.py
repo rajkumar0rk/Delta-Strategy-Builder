@@ -530,6 +530,25 @@ class FuturesPullbackConfig(BaseModel):
     max_estimated_risk_multiple: float = Field(default=1.0, ge=1, le=10)
 
 
+class OptionsPullbackConfig(FuturesPullbackConfig):
+    """Opt-in underlying-trigger/option-quote research, BUY only.
+
+    Base-bar OHLC can estimate when a BTC trigger touched but cannot prove
+    when an option order would have filled. Entries use a subsequent option
+    quote; risk is bounded by premium-at-risk, NOT underlying ATR distance.
+    """
+    enabled: bool = False
+    execution_mode: Literal["STOP_MARKET_INTRABAR"] = "STOP_MARKET_INTRABAR"
+    stop_anchor: Literal["SWING", "SIGNAL_CANDLE"] = "SIGNAL_CANDLE"
+    breakout_buffer_ticks: int = Field(default=1, ge=1, le=1000)
+    require_volume: bool = False
+    max_wait_bars: int = Field(default=6, ge=1, le=288)
+    size_mode: Literal["RISK_EQUITY", "FIXED"] = "RISK_EQUITY"
+    equity_risk_percent: float = Field(default=0.5, gt=0, le=100)
+    max_estimated_risk_multiple: float = Field(default=1.0, ge=1, le=10)
+    max_lots: int = Field(default=100000, ge=1, le=100000)
+
+
 class FuturesConfig(BaseModel):
     """BTCUSD perpetual research assumptions, never an exchange-margin oracle."""
     pullback: FuturesPullbackConfig = Field(default_factory=FuturesPullbackConfig)
@@ -567,6 +586,9 @@ class StrategyConfig(BaseModel):
     name: str = "New BTC options strategy"
     market_type: Literal["OPTIONS", "FUTURES"] = "OPTIONS"
     futures: FuturesConfig = Field(default_factory=FuturesConfig)
+    options_pullback: OptionsPullbackConfig = Field(default_factory=OptionsPullbackConfig)
+    # Local-clock option close, opt-in and independently configurable from entry sessions.
+    options_force_exit_time: str | None = None
     pattern_trade: PatternTradeConfig = Field(default_factory=PatternTradeConfig)
     timeframe: Literal["5m", "10m", "15m", "30m", "1h", "1D"] = "5m"
     direction_mode: Literal["CALL", "PUT", "BOTH"] = "BOTH"
@@ -670,6 +692,44 @@ class StrategyConfig(BaseModel):
                     f"Indicator '{indicator.id}' timeframe {indicator.timeframe} must be an exact multiple "
                     f"of strategy timeframe {self.timeframe}"
                 )
+        if self.options_force_exit_time is not None and not re.fullmatch(
+                r"(?:[01]\d|2[0-3]):[0-5]\d",self.options_force_exit_time):
+            raise ValueError("options_force_exit_time must use 24h HH:MM")
+        if self.market_type == "OPTIONS" and self.options_pullback.enabled:
+            cfg=self.options_pullback
+            if self.timeframe!="5m":
+                raise ValueError("Options pullback requires 5m strategy timeframe")
+            if self.pattern_trade.enabled:
+                raise ValueError("Options pullback and option pattern execution are mutually exclusive")
+            if ((self.direction_mode in ("CALL","BOTH") and self.call_action != "BUY")
+                or (self.direction_mode in ("PUT","BOTH") and self.put_action != "BUY")):
+                raise ValueError("Options pullback currently supports BUY CALL/PUT only; SELL premium risk is unbounded")
+            available={item.id:item for item in self.indicators}
+            deps=[
+                (cfg.ema_indicator_id,"EMA",cfg.setup_timeframe),
+                (cfg.atr_indicator_id,"ATR",cfg.setup_timeframe)]
+            if cfg.require_volume:
+                deps.append((cfg.volume_indicator_id,"VOLUME_SMA","5m"))
+            for ident,kind,tf in deps:
+                item=available.get(ident)
+                if item is None or item.kind!=kind or item.timeframe not in (
+                    tf, "strategy" if tf=="5m" else "") or item.chart_only:
+                    raise ValueError(f"Options pullback indicator {ident!r} must be non-chart-only {kind} on {tf}")
+            trend_ids=(cfg.trend_fast_ema_id,cfg.trend_slow_ema_id,
+                       cfg.trend_close_indicator_id)
+            if any(trend_ids) and not all(trend_ids):
+                raise ValueError("Options pullback trend requires all three 1h indicator IDs")
+            if cfg.trend_crossover_block_bars and not all(trend_ids):
+                raise ValueError("Options pullback recent-cross filter requires all 1h trend IDs")
+            if all(trend_ids):
+                for ident in trend_ids:
+                    item=available.get(ident)
+                    if item is None or item.kind!="EMA" or item.timeframe!="1h" or item.chart_only:
+                        raise ValueError(f"Options pullback trend operand {ident!r} must be 1h EMA")
+                if available[cfg.trend_close_indicator_id].params.get("period") != 1:
+                    raise ValueError("Options pullback close proxy requires 1h EMA period 1")
+            if cfg.max_wait_bars*5>({"15m":15,"30m":30,"1h":60}[cfg.setup_timeframe])*2:
+                raise ValueError("Options pullback expiry cannot exceed two setup candles")
         if self.market_type == "FUTURES" and self.futures.pullback.enabled:
             cfg = self.futures.pullback
             if self.timeframe != "5m":
