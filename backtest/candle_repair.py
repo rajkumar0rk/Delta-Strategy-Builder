@@ -300,7 +300,7 @@ def append_uncovered_btc_intervals(
             output = target / "underlying_bars.csv"
             temporary = output.with_name(output.name + f".{os.getpid()}.tmp")
             with temporary.open("w", newline="", encoding="utf-8") as stream:
-                writer = csv.DictWriter(stream, fieldnames=list(HEADER), lineterminator="\\n")
+                writer = csv.DictWriter(stream, fieldnames=list(HEADER), lineterminator="\n")
                 writer.writeheader()
                 for close in sorted(rows):
                     writer.writerow(rows[close])
