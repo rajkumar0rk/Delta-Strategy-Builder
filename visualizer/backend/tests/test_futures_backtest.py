@@ -327,7 +327,7 @@ def test_compact_futures_audit_preview_matches_small_chart_and_result(tmp_path,m
     assert parity['failure_count']==0, parity['failures']
 
 
-def test_futures_archive_auto_sync_reuses_existing_repair_hook_without_network(tmp_path,monkeypatch):
+def test_futures_archive_btc_auto_sync_does_not_download_unneeded_futures_observations(tmp_path,monkeypatch):
     from app import futures_history_sync
     calls=[]
     def fake_sync(start,end,progress=None):
@@ -339,12 +339,12 @@ def test_futures_archive_auto_sync_reuses_existing_repair_hook_without_network(t
     request=BacktestRequest(dataset_id="sample",dataset_mode="ARCHIVE",
         auto_download_missing_data=True,
         start="2026-01-01T00:00:00Z",end="2026-01-01T01:00:00Z",strategy=strategy)
-    # Archive sync is already independently tested and must not be networked.
+    # Archive BTC repair is independently tested and must not implicitly fetch 1m observations.
     monkeypatch.setattr("app.archive_sync.ensure_archive_data",lambda *args,**kwargs:None)
     # Mock dataset selection where this micro fixture lacks a catalog.
     original=DataStore.resolve_request
     monkeypatch.setattr(DataStore,"resolve_request",
         lambda store,req,require_options=False:original(store,req.model_copy(update={"dataset_mode":"SINGLE"}),require_options=require_options))
     result=run_backtest(request)
-    assert calls==[(request.start,request.end)]
+    assert calls==[]  # BTC archive repair alone must not download supplemental futures observations
     assert result["strategy"]["market_type"]=="FUTURES"
