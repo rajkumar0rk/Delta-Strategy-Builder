@@ -34,3 +34,7 @@ The opt-in 1H EMA50/200 + 15M EMA20 pullback **stop-market** strategy lives in `
 ## November 2026 Options market extension
 
 The canonical option-side cross-market implementation guide is `visualizer/codex/OPTIONS_PULLBACK_BACKTEST.md` with importable `visualizer/backend/examples/btc-options-intraday-pullback.strategy.json`. Shared neutral helpers live in `visualizer/backend/app/shared_execution.py`. Only opt-in BUY CALL/PUT option strategies use the new pending underlying ATR stop and BTC 2R price targets. Option premium execution and fees remain quote-backed in `engine.py`; no assumption that BTC 2R equals option premium 2R, and no fabricated option fills. The original Options/Futures modes are backward compatible; verify via backend/frontend regression and representative local archival backtest.
+
+## Futures auto-download policy (November 2026)
+
+Archive BTC candle repair (`BacktestRequest.auto_download_missing_data`) and supplemental 1m mark/index/rate collection (`BacktestRequest.auto_sync_futures_observations`) are independent, default-off controls in `visualizer/frontend/src/App.tsx`. Futures execution uses BTC bars, not the optional rate/mark/index observations. Do not force data network access just because the selected market is FUTURES; missing BTC archive data must still be downloaded or rejected. Do not move BacktestRequest flags into importable strategy JSON. `visualizer/backend/app/futures_history_sync.py` reports DNS failures with an actionable message. See `visualizer/codex/FUTURES_BACKTEST.md`.
