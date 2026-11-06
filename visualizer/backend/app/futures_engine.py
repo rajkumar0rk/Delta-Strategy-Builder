@@ -17,6 +17,7 @@ from .indicators import compute_indicators
 from .alerts import alert_markers
 from .rules import evaluate_group
 from .futures_setups import PullbackBreakoutPlanner, risk_sized_lots, target_at_r
+from .adaptive_futures import AdaptiveBreakoutPlanner, trail_stop
 from .shared_execution import (
     CompletedHourlyTrendGate, clock_due, remaining_daily_risk,
     pending_expired, stop_trigger_price, stop_trigger_on_bar,
@@ -134,7 +135,7 @@ def _exit_level(pos, bar, config):
 
 def run_futures_backtest(req, progress=None):
     strategy=req.strategy;cfg=strategy.futures
-    if ((strategy.call_breakout_retest.enabled and strategy.call_breakout_retest.require_retest_for_entry)
+    if not cfg.adaptive.enabled and ((strategy.call_breakout_retest.enabled and strategy.call_breakout_retest.require_retest_for_entry)
        or (strategy.put_breakout_retest.enabled and strategy.put_breakout_retest.require_retest_for_entry)):
         raise ValueError('Futures retest entry override is not implemented; disable require_retest_for_entry or express it with normal indicator conditions.')
     store=DataStore()
@@ -164,7 +165,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':12,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':13,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
@@ -181,8 +182,10 @@ def run_futures_backtest(req, progress=None):
     daily_source=load_daily_source(store,bar_parts,req.start,req.end,strategy.timeframe,warmup_count,strategy.indicators)
     frame,meta=compute_indicators(bars,strategy.indicators,strategy.timeframe,daily_source=daily_source)
     _prepare_strategy_state(frame,strategy)
-    pullback=cfg.pullback if cfg.pullback.enabled else None
-    planner=PullbackBreakoutPlanner(frame,pullback,strategy.timeframe) if pullback else None
+    adaptive=cfg.adaptive if cfg.adaptive.enabled else None
+    pullback=adaptive if adaptive else (cfg.pullback if cfg.pullback.enabled else None)
+    planner=(AdaptiveBreakoutPlanner(frame,adaptive,strategy.timeframe) if adaptive else
+             PullbackBreakoutPlanner(frame,pullback,strategy.timeframe) if pullback else None)
     rates,missing_funding=funding_events(parts,req.start,req.end,
         required=cfg.funding_mode=='REQUIRE_CSV')
     contract_warnings=assumed_contract_warnings(cfg)
@@ -200,6 +203,9 @@ def run_futures_backtest(req, progress=None):
     def update_hour_trend(timestamp, candle):
         hourly_gate.update(timestamp,candle)
     def trend_valid(candle,direction,asof):
+        if adaptive:
+            return planner.regime == ('TREND_UP' if direction=='LONG' else 'TREND_DOWN') or (
+                planner.regime=='COMPRESSION')
         return hourly_gate.valid(candle,direction,asof)
     def end_of_day_due(ts):
         return clock_due(ts,cfg.force_exit_time,strategy.session.timezone)
@@ -318,7 +324,8 @@ def run_futures_backtest(req, progress=None):
                   daily['realized']<=-daily['start_balance']*strategy.risk.max_daily_loss_percent/100):
                 cancel_stop('DAILY_LIMIT')
             elif pullback.cancel_on_trend_invalidation and (
-                  prior is None or not trend_valid(prior,state['direction'],at_open)):
+                  prior is None or (not planner.valid_pending(state['setup']) if adaptive
+                                     else not trend_valid(prior,state['direction'],at_open))):
                 cancel_stop('TREND_INVALIDATED')
             else:
                 direction=state['direction']
@@ -330,7 +337,7 @@ def run_futures_backtest(req, progress=None):
                     intrabar_candidate=raw
                     pending=direction
                     pending_setup=state['setup']
-                    pending_lifecycle_id='PULLBACK_SETUP'
+                    pending_lifecycle_id='ADAPTIVE_BREAKOUT' if adaptive else 'PULLBACK_SETUP'
                     pending_lifecycle_snapshot=state['lifecycle']
                     stop_entry=None
                     if planner is not None:
@@ -359,7 +366,9 @@ def run_futures_backtest(req, progress=None):
                         px,stop_proxy,direction,balance,cfg,pullback,max_risk_usd=remaining_day_risk)
                     trade_qty=lots*cfg.contract_btc
                     if not lots:entry_rejection=reason
-                    target_price=target_at_r(px,stop_price,direction,pullback.reward_r_multiple,cfg.tick_size)
+                    multiple=(execution_setup.get('reward_r_multiple',pullback.reward_r_multiple)
+                              if adaptive else pullback.reward_r_multiple)
+                    target_price=target_at_r(px,stop_price,direction,multiple,cfg.tick_size)
                     if target_price is None:entry_rejection='INVALID_R_TARGET'
                     if lots and pullback.size_mode=='FIXED' and lots*risk_per_lot>balance*pullback.equity_risk_percent/100*pullback.max_estimated_risk_multiple:
                         entry_rejection='FIXED_SIZE_RISK_EXCEEDED'
@@ -397,12 +406,26 @@ def run_futures_backtest(req, progress=None):
                     'entry_fee':start_fee,'margin':margin,'funding_usd':0.0,
                     'quantity':trade_qty,'stop_price':stop_price,'target_price':target_price,
                     'risk_per_lot_usd':risk_per_lot,
+                    'adaptive_module':execution_setup.get('module') if adaptive and execution_setup else None,
+                    'adaptive_regime':execution_setup.get('regime') if adaptive and execution_setup else None,
+                    'initial_r':abs(px-stop_price) if adaptive and stop_price is not None else None,
+                    'favorable_close':px,'trailing_active':False,
                     'entry_fill_timing':'INTRABAR_ESTIMATED' if intrabar_candidate is not None else 'OPEN',
                     'mfe':0.0,'mae':0.0,
                     'lifecycle_provenance':dict(lifecycle_snapshot or {})}
                 markers.append({'id':f"future-entry-{len(trades)+1}",'time':int(at_open.timestamp()),
                     'kind':'entry','direction':'CALL' if direction=='LONG' else 'PUT',
                     'text':direction,'details':{'title':direction+' future','entry_ask':px,'symbol':cfg.symbol}})
+        if adaptive and position and position.get('adaptive_module') and i>0 and pd.Timestamp(position['entry_time'])<at_open:
+            # Update only with the previously completed bar before this
+            # candle's price extremes can activate a protective exit.
+            previous=frame.iloc[i-1]
+            revised=trail_stop(position,previous,adaptive.trailing,cfg.tick_size)
+            if revised is not None:
+                position['trailing_active']=True
+                decisions.append({'timestamp':at_open.isoformat(),'kind':'TRAIL_UPDATE',
+                                  'direction':position['direction'],'passed':True,
+                                  'reason':'ATR_RATCHET','stop_price':revised})
         if position:
             sign=1 if position['direction']=='LONG' else -1
             favorable=(float(row.high)-position['entry_price'])/position['entry_price'] if sign==1 else (position['entry_price']-float(row.low))/position['entry_price']
@@ -428,7 +451,8 @@ def run_futures_backtest(req, progress=None):
                         target=position.get('target_price') or position['entry_price']*(1+cfg.take_profit_percent/100*sign)
                         if (float(row.low)<=min(stop,target) and float(row.high)>=max(stop,target)):
                             ambiguous+=1
-                    close(position,ts,hit[1],hit[0]);position=None;closed=True
+                    exit_reason=('TRAILING_STOP' if hit[0]=='STOP_LOSS' and position.get('trailing_active') else hit[0])
+                    close(position,ts,hit[1],exit_reason);position=None;closed=True
                 else:
                     close(position,ts,worst,'ESTIMATED_MARGIN_BREACH')
                     position=None;closed=True
@@ -529,7 +553,7 @@ def run_futures_backtest(req, progress=None):
                 selected=eligible[0]
             if selected is not None:
                 if pullback and pullback.execution_mode=='STOP_MARKET_INTRABAR':
-                    pending_lifecycle_id='PULLBACK_SETUP'
+                    pending_lifecycle_id='ADAPTIVE_BREAKOUT' if adaptive else 'PULLBACK_SETUP'
                     signal=dict(planner.new_setups[selected[0]])
                     level=signal['level']
                     trigger=stop_trigger_price(
@@ -543,16 +567,20 @@ def run_futures_backtest(req, progress=None):
                         'setup_index':i,'signal_time':ts.isoformat(),
                         'setup':{'stop_price':signal['stop_price'],
                             'setup_time':signal['setup_time'],
+                            'module':signal.get('module'), 'regime':signal.get('regime'),
+                            'reward_r_multiple':signal.get('reward_r_multiple',pullback.reward_r_multiple),
                             'setup_breakout_level':level,'setup_max_wait_bars':pullback.max_wait_bars},
                         'lifecycle':{
-                            'entry_lifecycle_id':'PULLBACK_SETUP',
+                            'entry_lifecycle_id':'ADAPTIVE_BREAKOUT' if adaptive else 'PULLBACK_SETUP',
                             'entry_lifecycle_signal_time':ts.isoformat(),
                             'entry_lifecycle_age_bars':0,'entry_lifecycle_delay_bars':0,
                             'entry_lifecycle_entries_before':0,'entry_lifecycle_max_entries':1,
                             'entry_lifecycle_expired':False,'entry_lifecycle_eligible':True,
                             'setup_confirmation_time':signal['setup_time'],
                             'setup_breakout_level':level,
-                            'pending_trigger_price':round(trigger,10)}}
+                            'pending_trigger_price':round(trigger,10),
+                            'adaptive_module':signal.get('module'),
+                            'adaptive_regime':signal.get('regime')}}
                     decisions.append({'timestamp':ts.isoformat(),'kind':'PENDING_ARM',
                         'direction':selected[0],'passed':True,'reason':'STOP_MARKET_ARMED'})
                     continue
@@ -665,8 +693,12 @@ def run_futures_backtest(req, progress=None):
         'settlement_inr_conversion_modelled':False,
         'funding_regime':'PRE_2025_MINUTE_FUNDING_EXCLUDED' if pd.Timestamp(req.start)<pd.Timestamp(EIGHT_HOUR_FUNDING_FROM_UTC) else 'EIGHT_HOUR_SNAPSHOT',
         'symbol':cfg.symbol,'leverage':cfg.leverage,'margin_mode':cfg.margin_mode,
-        'pullback_enabled':bool(pullback),
-        'pullback_execution_mode':pullback.execution_mode if pullback else None,
+        'pullback_enabled':bool(cfg.pullback.enabled),
+        'adaptive_enabled':bool(adaptive),
+        'adaptive_regime_transitions':planner.regime_log if adaptive else [],
+        'adaptive_regime':planner.regime if adaptive else None,
+        'adaptive_trailing_enabled':bool(adaptive and adaptive.trailing.enabled),
+        'pullback_execution_mode':cfg.pullback.execution_mode if cfg.pullback.enabled else None,
         'force_exit_time':cfg.force_exit_time,
         'assumed_extra_half_spread_bps':cfg.extra_half_spread_bps,
         'funding_mode':cfg.funding_mode,'funding_missing_intervals':len(missing_funding),
