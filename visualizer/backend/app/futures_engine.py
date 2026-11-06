@@ -142,7 +142,7 @@ def run_futures_backtest(req, progress=None):
         raise ValueError('Backtest end must exceed start')
     if getattr(req,'dataset_mode','SINGLE')=='ARCHIVE' and getattr(req,'auto_download_missing_data',False):
         from .archive_sync import ensure_archive_data
-        ensure_archive_data(req.start,req.end,progress)
+        ensure_archive_data(req.start,req.end,progress,require_options=False)
         store.close();store=DataStore()
     # Optional 1m mark/index/funding-rate observations are NOT inputs to
     # this OHLC backtest. Preserve BTC archive repair above but never force
