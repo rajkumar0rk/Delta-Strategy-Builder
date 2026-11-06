@@ -1,0 +1,217 @@
+{
+  "schema_version": 15,
+  "app": "BTC Strategy Lab",
+  "strategy": {
+    "name": "BTC Futures 4H EMA200 + 1H Donchian55 ADX25 ATR trend",
+    "market_type": "FUTURES",
+    "timeframe": "1h",
+    "direction_mode": "BOTH",
+    "position_policy": "EXCLUSIVE",
+    "conflict_policy": "SKIP",
+    "call_action": "BUY",
+    "put_action": "BUY",
+    "call_signal_mode": "ORDER_ONLY",
+    "put_signal_mode": "ORDER_ONLY",
+    "futures": {
+      "symbol": "BTCUSD",
+      "contract_btc": 0.001,
+      "quantity_lots": 1,
+      "leverage": 3,
+      "margin_mode": "ISOLATED",
+      "maintenance_margin_percent": 0.25,
+      "taker_fee_percent": 0.05,
+      "gst_percent": 18,
+      "slippage_bps": 2,
+      "tick_size": 0.5,
+      "slippage_ticks": 0,
+      "funding_rate_multiplier": 1,
+      "stop_loss_percent": null,
+      "take_profit_percent": null,
+      "funding_mode": "EXCLUDE_WITH_WARNING",
+      "margin_tier_mode": "FLAT_RESEARCH",
+      "pullback": {
+        "enabled": false
+      },
+      "force_exit_time": null,
+      "extra_half_spread_bps": 0,
+      "trend_risk": {
+        "enabled": true,
+        "atr_indicator_id": "atr14_1h",
+        "initial_stop_atr_multiple": 2,
+        "trailing_stop_atr_multiple": 3,
+        "trail_source": "HIGH_LOW",
+        "size_mode": "RISK_EQUITY",
+        "equity_risk_percent": 0.5,
+        "max_lots": 100000,
+        "max_estimated_risk_multiple": 1
+      }
+    },
+    "indicators": [
+      {
+        "id": "ema200_4h",
+        "kind": "EMA",
+        "params": {
+          "period": 200,
+          "source": "close"
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "4h"
+      },
+      {
+        "id": "close_4h",
+        "kind": "EMA",
+        "params": {
+          "period": 1,
+          "source": "close"
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "4h"
+      },
+      {
+        "id": "donchian55_1h",
+        "kind": "DONCHIAN",
+        "params": {
+          "period": 55
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "adx14_1h",
+        "kind": "ADX_DMI",
+        "params": {
+          "period": 14
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "atr14_1h",
+        "kind": "ATR",
+        "params": {
+          "period": 14
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      }
+    ],
+    "call_entry": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "long_4h_trend",
+          "left": "close_4h",
+          "operator": "GT",
+          "right": "ema200_4h",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        },
+        {
+          "id": "long_adx",
+          "left": "adx14_1h.adx",
+          "operator": "GT",
+          "right": null,
+          "value": 25,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        },
+        {
+          "id": "long_breakout",
+          "left": "close",
+          "operator": "GT",
+          "right": "donchian55_1h.upper",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        }
+      ],
+      "groups": []
+    },
+    "put_entry": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "short_4h_trend",
+          "left": "close_4h",
+          "operator": "LT",
+          "right": "ema200_4h",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        },
+        {
+          "id": "short_adx",
+          "left": "adx14_1h.adx",
+          "operator": "GT",
+          "right": null,
+          "value": 25,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        },
+        {
+          "id": "short_breakout",
+          "left": "close",
+          "operator": "LT",
+          "right": "donchian55_1h.lower",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        }
+      ],
+      "groups": []
+    },
+    "risk": {
+      "starting_balance_usd": 1000,
+      "max_hold_minutes": null,
+      "max_trades_per_day": null,
+      "max_consecutive_losses": null,
+      "max_daily_loss_percent": 1,
+      "stop_trading_after_daily_loss_limit": true,
+      "close_at_session_end": false
+    },
+    "session": {
+      "timezone": "Asia/Kolkata",
+      "start": "00:00",
+      "end": "23:59",
+      "windows": [
+        {
+          "start": "00:00",
+          "end": "23:59"
+        }
+      ],
+      "blocked_weekdays": []
+    },
+    "call_exit": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [],
+      "groups": []
+    },
+    "put_exit": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [],
+      "groups": []
+    }
+  }
+}
