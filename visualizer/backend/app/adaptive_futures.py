@@ -167,14 +167,20 @@ class AdaptiveBreakoutPlanner:
             return
         snapshot={"level":item["level"],"stop_price":item["stop_price"],
                   "setup_time":item.get("setup_time",item["confirmed_time"]),
+                  "setup_index":self.last_index,
                   "module":item["module"],"regime":item["regime"],
                   "reward_r_multiple":item["reward_r_multiple"]}
         self.new_setups[side]=snapshot
         self.setups[side]=snapshot
 
     def step(self,index,timestamp,row):
+        self.last_index=index
         self.new_setups={}
         self._update_hour(timestamp,row)
+        for side,state in tuple(self.setups.items()):
+            if (index-state["setup_index"]>self.config.max_wait_bars or
+                    not self.valid_pending(state)):
+                del self.setups[side]
         if timestamp not in self.completed.index:
             return {}
         self.last_15m=pd.Timestamp(timestamp)
