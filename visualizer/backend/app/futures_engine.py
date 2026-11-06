@@ -642,6 +642,14 @@ def run_futures_backtest(req, progress=None):
             group['wins']+=int(trade['net_pnl_usd']>0)
         streak=streak+1 if trade['net_pnl_usd']<0 else 0
         max_losing_streak=max(max_losing_streak,streak)
+    adaptive_performance={}
+    if adaptive:
+        for trade in trades:
+            module=trade.get('adaptive_module') or 'UNSPECIFIED'
+            item=adaptive_performance.setdefault(module,{'trades':0,'wins':0,'net_pnl_usd':0.0})
+            item['trades']+=1
+            item['wins']+=int(trade['net_pnl_usd']>0)
+            item['net_pnl_usd']+=trade['net_pnl_usd']
     metrics={'trades':len(trades),'wins':wins,'losses':sum(t['net_pnl_usd']<0 for t in trades),
       'win_rate_percent':wins/max(len(trades),1)*100,
       'gross_pnl_usd':sum(t['gross_pnl_usd'] for t in trades),
@@ -675,7 +683,8 @@ def run_futures_backtest(req, progress=None):
                     max(1,sum(t['r_multiple_net'] is not None for t in trades))),
       'average_holding_minutes':(sum(t['holding_minutes'] for t in trades)/len(trades) if trades else 0),
       'max_consecutive_losses':max_losing_streak,
-      'monthly_performance':monthly,'direction_performance':by_direction}
+      'monthly_performance':monthly,'direction_performance':by_direction,
+      'adaptive_module_performance':adaptive_performance if adaptive else {}}
     run_id,out=_new_result_dir(strategy.name)
     result={'run_id':run_id,'result_dir':str(out),'start':req.start,'end':req.end,
       'dataset_id':getattr(req,'dataset_id',None),'dataset_ids':[p.id for p in parts],
@@ -703,6 +712,9 @@ def run_futures_backtest(req, progress=None):
         'pullback_enabled':bool(cfg.pullback.enabled),
         'adaptive_enabled':bool(adaptive),
         'adaptive_regime_transitions':planner.regime_log if adaptive else [],
+        'adaptive_regime_counts':({state:sum(entry[1]==state for entry in planner.regime_log)
+            for state in ('TREND_UP','TREND_DOWN','COMPRESSION','RANGE','TRANSITION','EXTREME_VOLATILITY')}
+            if adaptive else {}),
         'adaptive_regime':planner.regime if adaptive else None,
         'adaptive_trailing_enabled':bool(adaptive and adaptive.trailing.enabled),
         'pullback_execution_mode':cfg.pullback.execution_mode if cfg.pullback.enabled else None,
