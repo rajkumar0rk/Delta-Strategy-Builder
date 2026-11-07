@@ -140,6 +140,24 @@ def test_risk_config_rejects_invalid_values(bad):
         FuturesRuleRiskConfig.model_validate(bad)
 
 
+
+def test_atr_width_cap_must_have_matching_confirmed_atr_indicator():
+    data=_strategy().model_dump()
+    data["indicators"]=[i for i in data["indicators"] if i["id"]!="atr14_1h"]
+    with pytest.raises(ValidationError,match="ATR indicator"):
+        StrategyConfig.model_validate(data)
+
+
+def test_v2_settings_round_trip_without_loss():
+    s=_strategy()
+    parsed=StrategyConfig.model_validate(s.model_dump(mode="json"))
+    assert parsed.futures.rule_risk.max_stop_distance_percent==1.0
+    assert parsed.futures.rule_risk.max_stop_distance_atr==3.0
+    assert parsed.futures.rule_risk.condition_exit_activation_r==0.5
+    assert parsed.futures.rule_risk.breakeven_activation_r==1.0
+    assert parsed.futures.rule_risk.breakeven_offset_ticks==0
+
+
 def test_legacy_defaults_preserved_on_import():
     cfg=FuturesRuleRiskConfig()
     assert cfg.max_stop_distance_percent is None
