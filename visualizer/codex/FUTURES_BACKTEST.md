@@ -1,5 +1,43 @@
 # BTCUSD perpetual futures research — six merged implementation milestones
 
+
+## Opt-in VWAP/EMA rule-tree risk (November 2026)
+
+The indicator catalog supports `VWAP` with four **validated** parameters:
+`reset_mode="LEGACY_IST_CLOSE_DATE"` (backward-compatible original calculation)
+or `"CUSTOM_SESSION_OPEN"`, `timezone` (IANA name, e.g. `Etc/UTC`),
+`reset_time` (HH:MM local session-open) and `price_source="hlc3"|"close"`.
+Custom reset bins use the completed candle's OPEN time; existing VWAP settings
+with no parameters remain unchanged. This is not an arbitrary anchored/event VWAP.
+
+For ordinary FUTURES CALL/LONG and PUT/SHORT rule-tree signals, opt into
+`strategy.futures.rule_risk.enabled=true` to use frozen structure stops,
+fee-aware R sizing and price-based R-multiple targets, independently of pullback
+or adaptive planners. Set `futures.pullback.enabled=false`,
+`futures.adaptive.enabled=false`, `futures.stop_loss_percent=null` and
+`futures.take_profit_percent=null`; `pattern_trade` must remain disabled.
+`rule_risk` fields are `stop_mode="SWING"|"SIGNAL_CANDLE"|"ATR"`,
+`swing_lookback_bars`, `atr_indicator_id`, `stop_atr_multiple`,
+`stop_buffer_atr`, `reward_r_multiple`, `size_mode="RISK_EQUITY"|"FIXED"`,
+`equity_risk_percent`, `max_lots`, and `max_estimated_risk_multiple`.
+Provide a non-chart-only `ATR` indicator with the referenced ID when ATR
+stops or ATR buffers are active. Choose source timeframe equal to the strategy
+timeframe for a same-timeframe stop. The signal-bar snapshot is frozen after
+close and its entry executes NEXT bar OPEN; size is rounded DOWN to full lots,
+using adverse assumed exit slippage and taker fees/GST. A gap may exceed the
+risk budget. Conservative intrabar stop-first logic and approximate margin
+accounting are inherited from the Futures engine. Regular EMA/VWAP exits
+remain separate rule-tree NEXT-OPEN exits.
+
+Reference importable schema-v15 strategy:
+`visualizer/backend/examples/btc-futures-vwap-ema11-rule-risk.strategy.json`.
+It implements 5m VWAP + EMA11, a fresh VWAP price crossover with both close
+filters, optional rule-based EMA/VWAP exits, a three-candle swing stop, 2R
+target, 0.5% equity-risk research sizing and no funding inclusion. These are
+*example assumptions*, not independently verified details of the X video.
+Do not generate win-rate or P&L claims without a completed backtest.
+
+
 Futures is an opt-in market within the existing Strategy Lab UI; OPTIONS remains the default and all existing strategy JSON stays valid. Select **Strategy market → BTCUSD perpetual futures**. Existing bullish CALL conditions act as LONG signals; existing bearish PUT conditions act as SHORT signals. Rule trees, indicators, MTF data, historical warnings, directional no-trade gates, entry lifecycles and score gates are reused. A dedicated `futures` config controls size/fees/funding/price stops, not the option premium controls.
 
 ## Research fidelity and sizing
