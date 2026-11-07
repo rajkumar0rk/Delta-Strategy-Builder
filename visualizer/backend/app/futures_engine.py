@@ -263,6 +263,43 @@ def run_futures_backtest(req, progress=None):
             stop=float(window.low.min() if sign==1 else window.high.max())-sign*rc.stop_buffer_atr*atr
         return stop if math.isfinite(stop) and stop>0 and (close-stop)*sign>0 else None
 
+    def arm_rule_profit_protection(pos, completed_bar):
+        """Use confirmed CLOSE only; protection acts on NEXT candle.
+
+        Never use current high/low to arm an exit or raise a stop before
+        that candle's original protective stop has had a chance to execute.
+        """
+        if not (rule_risk and pos.get('rule_risk_position')):
+            return False
+        initial_stop=pos.get('initial_stop_price')
+        if initial_stop is None:
+            return False
+        sign=1 if pos['direction']=='LONG' else -1
+        initial_r=(pos['entry_price']-initial_stop)*sign
+        if not math.isfinite(initial_r) or initial_r<=0:
+            return False
+        close=float(completed_bar.close)
+        close_r=(close-pos['entry_price'])*sign/initial_r
+        if not pos.get('condition_exit_armed') and close_r>=rule_risk.condition_exit_activation_r:
+            pos['condition_exit_armed']=True
+        threshold=rule_risk.breakeven_activation_r
+        if threshold is None or pos.get('breakeven_armed') or close_r<threshold:
+            return False
+        proposed=pos['entry_price']+sign*rule_risk.breakeven_offset_ticks*cfg.tick_size
+        # Tick-rounded fill is already tick aligned; conservatively snap the
+        # stop *toward* the entry if floating-point arithmetic drifts.
+        units=proposed/cfg.tick_size
+        proposed=(math.floor(units+1e-10) if sign==1 else math.ceil(units-1e-10))*cfg.tick_size
+        proposed=round(proposed,10)
+        if proposed<=0 or (close-proposed)*sign<=0:
+            return False
+        if (proposed-pos['stop_price'])*sign<=1e-10:
+            pos['breakeven_armed']=True
+            return False
+        pos['stop_price']=proposed
+        pos['breakeven_armed']=True
+        return True
+
     def ratchet_rule_trailing(pos, completed_bar):
         """Only completed candle OHLC can tighten a rule-risk stop.
 
@@ -442,6 +479,18 @@ def run_futures_backtest(req, progress=None):
                 if stop_price<=0 or (px-stop_price)*(1 if direction=='LONG' else -1)<=0:
                     entry_rejection='STOP_NOT_PROTECTIVE'
                 else:
+                    if execution_setup.get('rule_risk') and rule_risk:
+                        stop_distance=abs(px-stop_price)
+                        if (rule_risk.max_stop_distance_percent is not None
+                                and stop_distance/px*100>rule_risk.max_stop_distance_percent+1e-12):
+                            entry_rejection='RULE_RISK_STOP_TOO_WIDE_PERCENT'
+                        if rule_risk.max_stop_distance_atr is not None:
+                            frozen_atr=execution_setup.get('signal_atr')
+                            if (frozen_atr is None or not math.isfinite(frozen_atr)
+                                    or frozen_atr<=0):
+                                entry_rejection='RULE_RISK_STOP_ATR_NOT_READY'
+                            elif stop_distance/frozen_atr>rule_risk.max_stop_distance_atr+1e-12:
+                                entry_rejection='RULE_RISK_STOP_TOO_WIDE_ATR'
                     stop_proxy=_slipped(stop_price,direction,False,effective_slippage_bps,cfg.tick_size,cfg.slippage_ticks)
                     remaining_day_risk=remaining_daily_risk(
                         daily['start_balance'],daily['realized'],
@@ -502,6 +551,8 @@ def run_futures_backtest(req, progress=None):
                     'favorable_close':px,'trailing_active':False,'trail_extreme':px,
                     'rule_risk_position':bool(execution_setup and execution_setup.get('rule_risk')),
                     'initial_stop_price':stop_price,
+                    'condition_exit_armed':bool(not rule_risk or rule_risk.condition_exit_activation_r==0),
+                    'breakeven_armed':False,
                     'entry_fill_timing':'INTRABAR_ESTIMATED' if intrabar_candidate is not None else 'OPEN',
                     'mfe':0.0,'mae':0.0,
                     'lifecycle_provenance':dict(lifecycle_snapshot or {})}
@@ -543,12 +594,18 @@ def run_futures_backtest(req, progress=None):
                         target=position.get('target_price') or position['entry_price']*(1+cfg.take_profit_percent/100*sign)
                         if (float(row.low)<=min(stop,target) and float(row.high)>=max(stop,target)):
                             ambiguous+=1
-                    exit_reason=('TRAILING_STOP' if hit[0]=='STOP_LOSS' and position.get('trailing_active') else hit[0])
+                    exit_reason=('BREAKEVEN_STOP' if hit[0]=='STOP_LOSS' and position.get('breakeven_armed')
+                                 else 'TRAILING_STOP' if hit[0]=='STOP_LOSS' and position.get('trailing_active')
+                                 else hit[0])
                     close(position,ts,hit[1],exit_reason);position=None;closed=True
                 else:
                     close(position,ts,worst,'ESTIMATED_MARGIN_BREACH')
                     position=None;closed=True
             else:
+                if arm_rule_profit_protection(position,row):
+                    decisions.append({'timestamp':ts.isoformat(),'kind':'STOP_UPDATE',
+                        'direction':position['direction'],'passed':True,
+                        'reason':'RULE_BREAKEVEN_RATCHET','stop_price':position['stop_price']})
                 if ratchet_rule_trailing(position,row):
                     decisions.append({'timestamp':ts.isoformat(),'kind':'TRAIL_UPDATE',
                         'direction':position['direction'],'passed':True,
@@ -557,8 +614,9 @@ def run_futures_backtest(req, progress=None):
                     pending=('CLOSE','TIME_STOP')
                 elif strategy.risk.close_at_session_end and _session_end_due(ts,strategy.session,tf):
                     pending=('CLOSE','SESSION_END_EXIT')
-                elif ((position['direction']=='LONG' and strategy.call_exit_signal_mode!='ALERT_ONLY' and evaluate_group(frame,i,strategy.call_exit)['passed'] and strategy.call_exit.configured())
-                   or (position['direction']=='SHORT' and strategy.put_exit_signal_mode!='ALERT_ONLY' and evaluate_group(frame,i,strategy.put_exit)['passed'] and strategy.put_exit.configured())):
+                elif (position.get('condition_exit_armed',True)
+                   and ((position['direction']=='LONG' and strategy.call_exit_signal_mode!='ALERT_ONLY' and evaluate_group(frame,i,strategy.call_exit)['passed'] and strategy.call_exit.configured())
+                   or (position['direction']=='SHORT' and strategy.put_exit_signal_mode!='ALERT_ONLY' and evaluate_group(frame,i,strategy.put_exit)['passed'] and strategy.put_exit.configured()))):
                     # Condition known at this candle's close: cannot execute
                     # at this candle's close. Next bar open is required.
                     pending=('CLOSE','CONDITION_EXIT')
