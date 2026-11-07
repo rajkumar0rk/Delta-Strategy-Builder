@@ -48,7 +48,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   onChange={e=>set({[name]:Number(e.target.value)} as Partial<FuturesConfig>)}/></label>
  );
  const optional=(name:'stop_loss_percent'|'take_profit_percent',label:string)=>(
-  <label>{label}<input type="number" min="0.01" step="0.1" placeholder="disabled"
+  <label>{label}<input type="number" min="0.01" step="0.1" placeholder="disabled" disabled={ruleRisk.enabled || pullback.enabled || !!f.adaptive?.enabled}
   value={f[name]??''} onChange={e=>set({[name]:e.target.value===''?null:Number(e.target.value)})}/></label>
  );
  return <><section className="card"><h2>BTCUSD perpetual futures research</h2>
