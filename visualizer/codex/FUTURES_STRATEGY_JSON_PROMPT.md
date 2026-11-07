@@ -5,7 +5,7 @@
 File: `visualizer/backend/examples/btc-futures-1h-bullish-reversal-structure-exit.strategy.json`.
 This is a **LONG-only** strategy, not the former EMA/ADX breakout + fixed 3R preset.
 
-- Bearish setup on the completed candle immediately **preceding** the reversal candle: its high is strictly below the high two candles back, its close is strictly below the open two candles back, and its low is strictly below the low two candles back.
+- Bearish setup on the completed **red candle** immediately preceding the reversal candle: its high is strictly below the high two candles back, its close is strictly below the open two candles back, and its low is strictly below the low two candles back.
 - The current completed 1H candle must confirm one of: (1) bullish body-engulfing of the previous red candle (`open <= previous close` and `close > previous open`); (2) bullish/flat doji (body/range <= 10%, close >= open and close > previous close); or (3) bullish hammer (body/range <= 40%, lower wick >= 50%, upper wick <= 20%, close > previous close). All thresholds are ordinary configurable rule values, and `CANDLE_STRENGTH` is an existing indicator.
 - LONG executes at the next 1H OPEN, subject to existing gap guard and an initial protective stop at the completed reversal signal candle LOW. Fixed R/point profit targets and ATR trailing are disabled. Daily risk, execution costs, margin estimates and one-position-only operation remain enabled.
 - While long, a completed 1H candle sustains bullish structure only if `high > high[1]`, `close > open[1]`, AND `low > low[1]`. The `call_exit` rule is the **OR of their failures**, using `LTE`, so any one failure schedules an exit at the next candle OPEN. Stops can exit earlier inside the research OHLC candle.
