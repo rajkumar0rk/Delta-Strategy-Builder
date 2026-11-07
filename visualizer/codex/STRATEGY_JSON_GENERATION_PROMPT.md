@@ -1,5 +1,10 @@
 # Strategy JSON generation prompt — BTC Strategy Lab (OPTIONS or FUTURES)
 
+## 1h futures preceding-candle stop / next-open entry gap control
+
+For generic opt-in `futures.rule_risk`, use `stop_mode=SIGNAL_CANDLE` and `stop_candle_offset_bars=0` to stop at the completed entry-signal candle low (LONG) or high (SHORT); that candle is the previous candle at next-open entry. Set offset 1 for one candle earlier. A nonzero offset requires SIGNAL_CANDLE; offset range 0..200. `max_entry_gap_percent` is nullable (null preserves legacy behavior), and if configured (0..100), rejects next-open entries whose simulated adverse-slippage-adjusted fill deviates too far from the frozen signal close. Use `reward_r_multiple=3` and `take_profit_points=null` for a 3R target, still subject to conservative tick rounding, fees and OHLC-path uncertainty. Example: `visualizer/backend/examples/btc-futures-1h-previous-candle-3r.strategy.json`. No real exchange tick fills or verified liquidation.
+
+
 ## Optional fixed-point BTCUSD Futures take-profit (November 2026)
 
 The existing opt-in generic `futures.rule_risk` execution supports three **mutually exclusive** target modes:
