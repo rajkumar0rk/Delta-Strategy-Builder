@@ -26,6 +26,12 @@ Do not convert datetimes to integers and assume nanoseconds. Pandas 3 can use mi
 
 Confirmed swing pivots are actionable only after their right-side confirmation bars have completed. Divergence may compare oscillator values at historical pivot bars, but the divergence signal is emitted only at confirmation time.
 
+## Futures previous-candle stops and gap-aware next-open entries (opt-in)
+
+The generic `futures.rule_risk` planner freezes stops from closed strategy-timeframe candles. With `stop_mode=SIGNAL_CANDLE` and `stop_candle_offset_bars=0`, the reference is the just-closed signal candle (the previous candle when the entry opens on the following bar). Offset 1 references one earlier completed candle. No incomplete/future candle values may be consulted; insufficient prior candles block the trade.
+
+With a finite `max_entry_gap_percent` (0..100), reject entries if the absolute distance between the simulated next OPEN fill after adverse slippage/tick rounding and the frozen signal CLOSE exceeds the threshold. Null disables the new guard. Stop levels remain fixed from the signal snapshot, and invalid/nonprotective stops are rejected even if the gap passes. For R-based exits, compute the target from the actual simulated entry fill and the frozen structure stop; keep existing adverse stop-first same-OHLC-bar ordering and conservative stop-gap fills. This model does not establish a historical tick sequence or verify real liquidation/margin.
+
 ## Option execution
 
 - Long BUY entry: ask + configured slippage.
