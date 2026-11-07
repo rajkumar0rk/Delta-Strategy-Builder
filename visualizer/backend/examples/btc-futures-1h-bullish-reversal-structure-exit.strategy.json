@@ -32,6 +32,15 @@
           "min_pass": 1,
           "conditions": [
             {
+              "id": "downtrend-red-candle",
+              "left": "bearish_close",
+              "operator": "GT",
+              "right": null,
+              "value": 0.5,
+              "left_offset": 1,
+              "right_offset": 0
+            },
+            {
               "id": "downtrend-lower-high",
               "left": "high",
               "operator": "LT",
