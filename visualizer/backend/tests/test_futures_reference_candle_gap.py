@@ -79,7 +79,7 @@ def test_reference_candle_example_is_importable_and_uses_3r():
     assert strategy.futures.take_profit_percent is None
 
 
-def _run_reference_backtest(tmp_path, monkeypatch, *, offset: int, gap_limit):
+def _run_reference_backtest(tmp_path, monkeypatch, *, offset: int, gap_limit, conditional_exit=False, **risk_overrides):
     """End-to-end signal-close snapshot, prior-candle offset and next-open fills."""
     import csv
 
@@ -121,6 +121,11 @@ def _run_reference_backtest(tmp_path, monkeypatch, *, offset: int, gap_limit):
     rc.stop_buffer_atr = 0
     rc.max_entry_gap_percent = gap_limit
     rc.reward_r_multiple = 3
+    for key, val in risk_overrides.items():
+        setattr(rc, key, val)
+    if conditional_exit:
+        strategy.call_exit = RuleGroup(conditions=[
+            Condition(id="always-exit", left="close", operator="GT", value=0)])
     strategy.risk.starting_balance_usd = 1000
     strategy.risk.max_daily_loss_percent = None
     return run_backtest(BacktestRequest(
@@ -151,3 +156,37 @@ def test_gap_guard_rejects_next_open_without_affecting_legacy(tmp_path, monkeypa
                                       offset=0, gap_limit=0.01)
     assert baseline["metrics"]["trades"] >= 1
     assert guarded["metrics"]["trades"] == 0
+
+
+def test_new_stop_distance_cap_rejects_oversized_entries(tmp_path, monkeypatch):
+    baseline = _run_reference_backtest(tmp_path / "base", monkeypatch,
+                                       offset=0, gap_limit=None)
+    capped = _run_reference_backtest(tmp_path / "cap", monkeypatch,
+                                     offset=0, gap_limit=None,
+                                     max_stop_distance_percent=0.001)
+    assert baseline["metrics"]["trades"] >= 1
+    assert capped["metrics"]["trades"] == 0
+
+
+def test_rule_profit_activation_delays_discretionary_exit(tmp_path, monkeypatch):
+    eager = _run_reference_backtest(tmp_path / "eager", monkeypatch,
+                                     offset=0, gap_limit=None, conditional_exit=True)
+    protected = _run_reference_backtest(tmp_path / "protected", monkeypatch,
+                                         offset=0, gap_limit=None, conditional_exit=True,
+                                         condition_exit_activation_r=0.5)
+    assert eager["metrics"]["trades"] >= 1
+    assert protected["metrics"]["trades"] >= 1
+    assert protected["trades"][0]["holding_minutes"] > eager["trades"][0]["holding_minutes"]
+
+
+def test_confirmed_close_moves_stop_toward_breakeven(tmp_path, monkeypatch):
+    result = _run_reference_backtest(tmp_path / "breakeven", monkeypatch,
+                                      offset=0, gap_limit=None,
+                                      breakeven_activation_r=1.0,
+                                      breakeven_offset_ticks=0)
+    assert result["metrics"]["trades"] >= 1
+    assert any(t["exit_reason"] == "BREAKEVEN_STOP" for t in result["trades"])
+    for t in result["trades"]:
+        if t["exit_reason"] == "BREAKEVEN_STOP":
+            assert t["stop_price"] >= t["initial_stop_price"]
+            assert t["stop_price"] == pytest.approx(t["entry_price"])
