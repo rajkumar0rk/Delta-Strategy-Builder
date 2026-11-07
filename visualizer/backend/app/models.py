@@ -663,6 +663,9 @@ class FuturesRuleRiskConfig(BaseModel):
     # Backward-compatible: existing rule-risk plans retain their R target.
     # None disables the price target for pure trend-following systems.
     reward_r_multiple: float | None = Field(default=2.0, gt=0, le=100)
+    # Optional absolute BTCUSD move from the executed entry price, not USD P&L.
+    # Explicitly set reward_r_multiple=null when using take_profit_points.
+    take_profit_points: float | None = Field(default=None, gt=0, le=10000000)
     # ATR initial stop may be anchored to the fill instead of signal close.
     # Both modes use only the last confirmed signal-candle ATR.
     atr_stop_anchor: Literal["SIGNAL_CLOSE", "ENTRY_FILL"] = "SIGNAL_CLOSE"
@@ -673,6 +676,15 @@ class FuturesRuleRiskConfig(BaseModel):
     equity_risk_percent: float = Field(default=0.5, gt=0, le=100)
     max_lots: int = Field(default=100000, ge=1, le=100000)
     max_estimated_risk_multiple: float = Field(default=1.0, ge=1, le=10)
+
+    @model_validator(mode="after")
+    def validate_take_profit_mode(self):
+        if self.take_profit_points is not None and self.reward_r_multiple is not None:
+            raise ValueError(
+                "Futures rule_risk take_profit_points requires reward_r_multiple=null; "
+                "use one target mode or set both null for no target"
+            )
+        return self
 
 
 class FuturesConfig(BaseModel):
