@@ -184,6 +184,7 @@ def run_futures_backtest(req, progress=None):
     _prepare_strategy_state(frame,strategy)
     adaptive=cfg.adaptive if cfg.adaptive.enabled else None
     pullback=adaptive if adaptive else (cfg.pullback if cfg.pullback.enabled else None)
+    rule_risk=cfg.rule_risk if cfg.rule_risk.enabled else None
     planner=(AdaptiveBreakoutPlanner(frame,adaptive,strategy.timeframe) if adaptive else
              PullbackBreakoutPlanner(frame,pullback,strategy.timeframe) if pullback else None)
     rates,missing_funding=funding_events(parts,req.start,req.end,
@@ -229,6 +230,28 @@ def run_futures_backtest(req, progress=None):
     cycles={'LONG':_cycle_states(_entry_behaviors(strategy,'CALL')) if call_enabled else {},
             'SHORT':_cycle_states(_entry_behaviors(strategy,'PUT')) if put_enabled else {}}
     tf={'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'1D':1440}[strategy.timeframe]
+    def frozen_rule_stop(index,direction):
+        """Freeze an entry stop from completed bars only (no future OHLC)."""
+        rc=rule_risk
+        window=frame.iloc[max(0,index+1-rc.swing_lookback_bars):index+1]
+        if len(window)<rc.swing_lookback_bars or window[['high','low','close']].isna().any().any():
+            return None
+        signal=frame.iloc[index]
+        atr=0.0
+        if rc.stop_mode=='ATR' or rc.stop_buffer_atr>0:
+            raw=float(signal.get(rc.atr_indicator_id,float('nan')))
+            if not math.isfinite(raw) or raw<=0:return None
+            atr=raw
+        sign=1 if direction=='LONG' else -1
+        close=float(signal.close)
+        if rc.stop_mode=='ATR':
+            stop=close-sign*rc.stop_atr_multiple*atr
+        elif rc.stop_mode=='SIGNAL_CANDLE':
+            stop=float(signal.low if sign==1 else signal.high)-sign*rc.stop_buffer_atr*atr
+        else:
+            stop=float(window.low.min() if sign==1 else window.high.max())-sign*rc.stop_buffer_atr*atr
+        return stop if math.isfinite(stop) and stop>0 and (close-stop)*sign>0 else None
+
     def fee(price,quantity=None):
         return price*(qty if quantity is None else quantity)*cfg.taker_fee_percent/100*(1+cfg.gst_percent/100)
     def close(pos,exit_time,price,reason):
@@ -369,15 +392,15 @@ def run_futures_backtest(req, progress=None):
                     remaining_day_risk=remaining_daily_risk(
                         daily['start_balance'],daily['realized'],
                         strategy.risk.max_daily_loss_percent)
+                    sizing=rule_risk if rule_risk is not None and execution_setup.get('rule_risk') else pullback
                     lots,reason,risk_per_lot=risk_sized_lots(
-                        px,stop_proxy,direction,balance,cfg,pullback,max_risk_usd=remaining_day_risk)
+                        px,stop_proxy,direction,balance,cfg,sizing,max_risk_usd=remaining_day_risk)
                     trade_qty=lots*cfg.contract_btc
                     if not lots:entry_rejection=reason
-                    multiple=(execution_setup.get('reward_r_multiple',pullback.reward_r_multiple)
-                              if adaptive else pullback.reward_r_multiple)
+                    multiple=execution_setup.get('reward_r_multiple',sizing.reward_r_multiple)
                     target_price=target_at_r(px,stop_price,direction,multiple,cfg.tick_size)
                     if target_price is None:entry_rejection='INVALID_R_TARGET'
-                    if lots and pullback.size_mode=='FIXED' and lots*risk_per_lot>balance*pullback.equity_risk_percent/100*pullback.max_estimated_risk_multiple:
+                    if lots and sizing.size_mode=='FIXED' and lots*risk_per_lot>balance*sizing.equity_risk_percent/100*sizing.max_estimated_risk_multiple:
                         entry_rejection='FIXED_SIZE_RISK_EXCEEDED'
             margin=assumed_initial_margin_usd(px,trade_qty,cfg) if trade_qty>0 else float('inf')
             start_fee=fee(px,trade_qty) if trade_qty>0 else 0.0
@@ -592,6 +615,17 @@ def run_futures_backtest(req, progress=None):
                         'direction':selected[0],'passed':True,'reason':'STOP_MARKET_ARMED'})
                     continue
                 pending,pending_lifecycle_id=selected
+                if rule_risk:
+                    frozen=frozen_rule_stop(i,selected[0])
+                    if frozen is None:
+                        rejection_reasons['RULE_RISK_NO_VALID_STOP']=rejection_reasons.get('RULE_RISK_NO_VALID_STOP',0)+1
+                        decisions.append({'timestamp':ts.isoformat(),'kind':'SIGNAL',
+                                          'direction':selected[0],'passed':False,
+                                          'reason':'RULE_RISK_NO_VALID_STOP'})
+                        pending=None;pending_lifecycle_id=None
+                        continue
+                    pending_setup={'stop_price':frozen,'rule_risk':True,
+                                   'reward_r_multiple':rule_risk.reward_r_multiple}
                 if pullback:
                     pending_setup=dict(setup_signals[selected[0]])
                     pending_lifecycle_snapshot={

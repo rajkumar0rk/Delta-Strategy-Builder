@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Any, Literal
 import re
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, Field, model_validator
 from .day_levels import DayLevelParams
 
@@ -33,6 +34,24 @@ class IndicatorInstance(BaseModel):
     def validate_day_levels(self):
         if self.kind == "DAY_LEVELS":
             self.params = DayLevelParams.model_validate(self.params).model_dump()
+        elif self.kind == "VWAP":
+            allowed = {"reset_mode", "timezone", "reset_time", "price_source"}
+            unknown = set(self.params) - allowed
+            if unknown:
+                raise ValueError(f"Unknown VWAP parameters: {sorted(unknown)}")
+            mode = self.params.get("reset_mode", "LEGACY_IST_CLOSE_DATE")
+            if mode not in ("LEGACY_IST_CLOSE_DATE", "CUSTOM_SESSION_OPEN"):
+                raise ValueError("VWAP reset_mode must be LEGACY_IST_CLOSE_DATE or CUSTOM_SESSION_OPEN")
+            source = self.params.get("price_source", "hlc3")
+            if source not in ("hlc3", "close"):
+                raise ValueError("VWAP price_source must be hlc3 or close")
+            clock = str(self.params.get("reset_time", "00:00"))
+            if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", clock):
+                raise ValueError("VWAP reset_time must use 24-hour HH:MM")
+            try:
+                ZoneInfo(str(self.params.get("timezone", "Asia/Kolkata")))
+            except (ZoneInfoNotFoundError, ValueError, TypeError) as exc:
+                raise ValueError("VWAP timezone must be a valid IANA timezone") from exc
         return self
 
 
@@ -629,10 +648,30 @@ class AdaptiveFuturesConfig(BaseModel):
         return self
 
 
+class FuturesRuleRiskConfig(BaseModel):
+    """Optional signal-close structure stop, whole-lot risk sizing and R target.
+
+    Uses ordinary CALL/PUT rule-tree entries rather than the specialized
+    pullback/AMRS planners. Signal snapshots never see the next candle.
+    """
+    enabled: bool = False
+    stop_mode: Literal["SWING", "SIGNAL_CANDLE", "ATR"] = "SWING"
+    swing_lookback_bars: int = Field(default=3, ge=1, le=200)
+    atr_indicator_id: str = "atr14_5m"
+    stop_atr_multiple: float = Field(default=1.5, gt=0, le=20)
+    stop_buffer_atr: float = Field(default=0.1, ge=0, le=20)
+    reward_r_multiple: float = Field(default=2.0, gt=0, le=100)
+    size_mode: Literal["RISK_EQUITY", "FIXED"] = "RISK_EQUITY"
+    equity_risk_percent: float = Field(default=0.5, gt=0, le=100)
+    max_lots: int = Field(default=100000, ge=1, le=100000)
+    max_estimated_risk_multiple: float = Field(default=1.0, ge=1, le=10)
+
+
 class FuturesConfig(BaseModel):
     """BTCUSD perpetual research assumptions, never an exchange-margin oracle."""
     pullback: FuturesPullbackConfig = Field(default_factory=FuturesPullbackConfig)
     adaptive: AdaptiveFuturesConfig = Field(default_factory=AdaptiveFuturesConfig)
+    rule_risk: FuturesRuleRiskConfig = Field(default_factory=FuturesRuleRiskConfig)
     symbol: Literal["BTCUSD"] = "BTCUSD"
     contract_btc: float = Field(default=0.001, gt=0)
     quantity_lots: int = Field(default=1, ge=1, le=100000)
@@ -815,6 +854,18 @@ class StrategyConfig(BaseModel):
             if cfg.max_wait_bars*5>({"15m":15,"30m":30,"1h":60}[cfg.setup_timeframe])*2:
                 raise ValueError("Options pullback expiry cannot exceed two setup candles")
 
+        if self.futures.rule_risk.enabled:
+            if self.market_type != "FUTURES":
+                raise ValueError("Futures rule_risk requires market_type FUTURES")
+            if self.futures.pullback.enabled or self.futures.adaptive.enabled or self.pattern_trade.enabled:
+                raise ValueError("Futures rule_risk cannot be combined with pullback, adaptive or options pattern execution")
+            if self.futures.stop_loss_percent is not None or self.futures.take_profit_percent is not None:
+                raise ValueError("Futures rule_risk uses dynamic stops; both fixed-percent fields must be null")
+            rcfg = self.futures.rule_risk
+            if rcfg.stop_mode == "ATR" or rcfg.stop_buffer_atr > 0:
+                found = next((item for item in self.indicators if item.id == rcfg.atr_indicator_id), None)
+                if found is None or found.kind != "ATR" or found.chart_only:
+                    raise ValueError("Futures rule_risk requires a non-chart-only ATR indicator with matching atr_indicator_id")
         if self.market_type != "FUTURES" and self.futures.adaptive.enabled:
             raise ValueError("AMRS only supports market_type FUTURES")
         if self.market_type == "FUTURES" and self.futures.adaptive.enabled:

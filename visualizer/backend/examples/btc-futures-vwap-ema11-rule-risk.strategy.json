@@ -1,0 +1,189 @@
+{
+  "schema_version": 15,
+  "app": "BTC Strategy Lab",
+  "strategy": {
+    "name": "BTC Futures VWAP + EMA11 — rule-tree dynamic 2R research",
+    "market_type": "FUTURES",
+    "timeframe": "5m",
+    "direction_mode": "BOTH",
+    "position_policy": "EXCLUSIVE",
+    "conflict_policy": "SKIP",
+    "call_action": "BUY",
+    "put_action": "BUY",
+    "call_signal_mode": "ORDER_ONLY",
+    "put_signal_mode": "ORDER_ONLY",
+    "futures": {
+      "symbol": "BTCUSD",
+      "contract_btc": 0.001,
+      "quantity_lots": 1,
+      "leverage": 5,
+      "margin_mode": "ISOLATED",
+      "maintenance_margin_percent": 0.25,
+      "taker_fee_percent": 0.05,
+      "gst_percent": 18,
+      "slippage_bps": 2,
+      "tick_size": 0.5,
+      "slippage_ticks": 0,
+      "funding_rate_multiplier": 1,
+      "stop_loss_percent": null,
+      "take_profit_percent": null,
+      "funding_mode": "EXCLUDE_WITH_WARNING",
+      "margin_tier_mode": "FLAT_RESEARCH",
+      "pullback": {
+        "enabled": false
+      },
+      "adaptive": {
+        "enabled": false
+      },
+      "rule_risk": {
+        "enabled": true,
+        "stop_mode": "SWING",
+        "swing_lookback_bars": 3,
+        "atr_indicator_id": "atr14_5m",
+        "stop_atr_multiple": 1.5,
+        "stop_buffer_atr": 0.1,
+        "reward_r_multiple": 2,
+        "size_mode": "RISK_EQUITY",
+        "equity_risk_percent": 0.5,
+        "max_lots": 100000,
+        "max_estimated_risk_multiple": 1
+      }
+    },
+    "indicators": [
+      {
+        "id": "vwap_5m",
+        "kind": "VWAP",
+        "params": {
+          "reset_mode": "CUSTOM_SESSION_OPEN",
+          "timezone": "Etc/UTC",
+          "reset_time": "00:00",
+          "price_source": "hlc3"
+        },
+        "timeframe": "5m",
+        "chart_only": false,
+        "visible": true
+      },
+      {
+        "id": "ema11_5m",
+        "kind": "EMA",
+        "params": {
+          "period": 11,
+          "source": "close"
+        },
+        "timeframe": "5m",
+        "chart_only": false,
+        "visible": true
+      },
+      {
+        "id": "atr14_5m",
+        "kind": "ATR",
+        "params": {
+          "period": 14
+        },
+        "timeframe": "5m",
+        "chart_only": false,
+        "visible": false
+      }
+    ],
+    "call_entry": {
+      "mode": "ALL",
+      "conditions": [
+        {
+          "id": "price_vs_vwap",
+          "left": "close",
+          "operator": "GT",
+          "right": "vwap_5m"
+        },
+        {
+          "id": "price_vs_ema",
+          "left": "close",
+          "operator": "GT",
+          "right": "ema11_5m"
+        },
+        {
+          "id": "fresh_vwap_cross",
+          "left": "close",
+          "operator": "CROSSES_ABOVE",
+          "right": "vwap_5m"
+        }
+      ]
+    },
+    "put_entry": {
+      "mode": "ALL",
+      "conditions": [
+        {
+          "id": "price_vs_vwap",
+          "left": "close",
+          "operator": "LT",
+          "right": "vwap_5m"
+        },
+        {
+          "id": "price_vs_ema",
+          "left": "close",
+          "operator": "LT",
+          "right": "ema11_5m"
+        },
+        {
+          "id": "fresh_vwap_cross",
+          "left": "close",
+          "operator": "CROSSES_BELOW",
+          "right": "vwap_5m"
+        }
+      ]
+    },
+    "risk": {
+      "starting_balance_usd": 100,
+      "max_hold_minutes": null,
+      "max_trades_per_day": null,
+      "max_consecutive_losses": 2,
+      "max_daily_loss_percent": 1,
+      "stop_trading_after_daily_loss_limit": true
+    },
+    "session": {
+      "timezone": "Asia/Kolkata",
+      "start": "00:00",
+      "end": "23:59",
+      "windows": [
+        {
+          "start": "00:00",
+          "end": "23:59"
+        }
+      ],
+      "blocked_weekdays": []
+    },
+    "call_exit": {
+      "mode": "ANY",
+      "conditions": [
+        {
+          "id": "ema_exit",
+          "left": "close",
+          "operator": "LT",
+          "right": "ema11_5m"
+        },
+        {
+          "id": "vwap_exit",
+          "left": "close",
+          "operator": "LT",
+          "right": "vwap_5m"
+        }
+      ]
+    },
+    "put_exit": {
+      "mode": "ANY",
+      "conditions": [
+        {
+          "id": "ema_exit",
+          "left": "close",
+          "operator": "GT",
+          "right": "ema11_5m"
+        },
+        {
+          "id": "vwap_exit",
+          "left": "close",
+          "operator": "GT",
+          "right": "vwap_5m"
+        }
+      ]
+    }
+  }
+}

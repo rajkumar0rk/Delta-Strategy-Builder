@@ -17,10 +17,24 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   swing_lookback_bars:3,stop_buffer_atr:0.1,breakout_buffer_points:0,reward_r_multiple:2,
   size_mode:'RISK_EQUITY' as const,equity_risk_percent:0.5,max_lots:100000,
   max_estimated_risk_multiple:1};
+ const ruleDefaults={enabled:false,stop_mode:'SWING' as const,swing_lookback_bars:3,
+  atr_indicator_id:'atr14_5m',stop_atr_multiple:1.5,stop_buffer_atr:0.1,
+  reward_r_multiple:2,size_mode:'RISK_EQUITY' as const,equity_risk_percent:0.5,
+  max_lots:100000,max_estimated_risk_multiple:1};
+ const ruleRisk={...ruleDefaults,...f.rule_risk};
+ const setRuleRisk=(patch:Partial<typeof ruleRisk>)=>onChange({...value,futures:{...f,
+  ...(patch.enabled===true?{stop_loss_percent:null,take_profit_percent:null,
+    ...(f.pullback?{pullback:{...f.pullback,enabled:false}}:{}),
+    ...(f.adaptive?{adaptive:{...f.adaptive,enabled:false}}:{})}:{} ),
+  rule_risk:{...ruleRisk,...patch}}});
+ const ruleNumber=(key:keyof typeof ruleDefaults,label:string,min:number,step:number)=>(
+  <label key={key}>{label}<input type="number" min={min} step={step}
+   value={Number(ruleRisk[key])} onChange={e=>setRuleRisk({[key]:Number(e.target.value)})}/></label>);
  const pullback={...setupDefaults,...f.pullback};
  const setup=(patch:Partial<typeof pullback>)=>onChange({...value,futures:{...f,
    ...(patch.enabled===true?{stop_loss_percent:null,take_profit_percent:null}:{}),
-   pullback:{...pullback,...patch},...(patch.enabled===true&&f.adaptive?{adaptive:{...f.adaptive,enabled:false}}:{})}});
+   pullback:{...pullback,...patch},...(patch.enabled===true&&f.adaptive?{adaptive:{...f.adaptive,enabled:false}}:{}),
+   ...(patch.enabled===true?{rule_risk:{...ruleRisk,enabled:false}}:{})}});
  const setupNumber=(key:keyof typeof setupDefaults,label:string,step:string,min:number)=>(
   <label key={key}>{label}<input type="number" step={step} min={min}
    value={Number(pullback[key])} onChange={e=>setup({[key]:Number(e.target.value)})}/></label>);
@@ -34,7 +48,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   onChange={e=>set({[name]:Number(e.target.value)} as Partial<FuturesConfig>)}/></label>
  );
  const optional=(name:'stop_loss_percent'|'take_profit_percent',label:string)=>(
-  <label>{label}<input type="number" min="0.01" step="0.1" placeholder="disabled"
+  <label>{label}<input type="number" min="0.01" step="0.1" placeholder="disabled" disabled={ruleRisk.enabled || pullback.enabled || !!f.adaptive?.enabled}
   value={f[name]??''} onChange={e=>set({[name]:e.target.value===''?null:Number(e.target.value)})}/></label>
  );
  return <><section className="card"><h2>BTCUSD perpetual futures research</h2>
@@ -79,7 +93,25 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
  </div>
  <div className="warning-box"><b>Accuracy limitations:</b> Futures fills use historical 5m-derived OHLC and assumed slippage, not recorded futures order-book quotes. Funding requires <code>futures_funding.csv</code> with timestamp, symbol and decimal funding_rate. Collateral and liquidation are approximations; no Delta exchange liquidation precision is claimed. Current published snapshot supports size-dependent margins above $100,000 notional; INR conversion, historical collateral tiers, and genuine liquidation remain unmodeled. Pre-8-Sep-2025 minute-by-minute funding is not supported by the 8-hour funding importer. Backtests never place orders.</div>
  </section>
- <section className="card"><h2>Stateful futures trend / pullback / breakout</h2>
+ <section className="card"><h2>Rule-tree futures dynamic risk</h2>
+  <p>Opt-in swing/signal/ATR stops for ordinary CALL=LONG and PUT=SHORT rules, including VWAP strategies. Signal extremes and ATR are frozen at candle close; entry fills at the next open. Size estimates include fees and adverse stop slippage.</p>
+  <label className="switch"><input type="checkbox" checked={ruleRisk.enabled}
+   onChange={e=>setRuleRisk({enabled:e.target.checked})}/>Enable dynamic stop, R target and risk sizing</label>
+  {ruleRisk.enabled&&<div className="form-grid">
+   <label>Stop source<select value={ruleRisk.stop_mode} onChange={e=>setRuleRisk({stop_mode:e.target.value as typeof ruleRisk.stop_mode})}>
+    <option value="SWING">Swing extreme</option><option value="SIGNAL_CANDLE">Signal candle</option><option value="ATR">ATR distance</option></select></label>
+   {ruleNumber('swing_lookback_bars','Completed candles in stop window',1,1)}
+   <label>ATR indicator ID<input value={ruleRisk.atr_indicator_id} onChange={e=>setRuleRisk({atr_indicator_id:e.target.value})}/></label>
+   {ruleNumber('stop_atr_multiple','ATR stop distance (ATR mode)',0.01,0.1)}
+   {ruleNumber('stop_buffer_atr','Structure stop ATR buffer',0,0.1)}
+   {ruleNumber('reward_r_multiple','Target multiple of entry-stop price distance',0.01,0.1)}
+   <label>Position size<select value={ruleRisk.size_mode} onChange={e=>setRuleRisk({size_mode:e.target.value as typeof ruleRisk.size_mode})}><option value="RISK_EQUITY">Equity risk (whole lots)</option><option value="FIXED">Fixed lots with risk guard</option></select></label>
+   {ruleNumber('equity_risk_percent','Equity risk % per trade',0.01,0.1)}
+   {ruleNumber('max_lots','Maximum futures lots',1,1)}
+   {ruleNumber('max_estimated_risk_multiple','Fixed size risk guard multiple',1,0.1)}
+  </div>}
+  </section>
+  <section className="card"><h2>Stateful futures trend / pullback / breakout</h2>
  <p>Opt-in: freeze a completed setup candle and simulate either the original next-open confirmation or a stop-market trigger from subsequent 5m OHLC. Stop-market mode uses conservative same-bar ordering; no historical tick sequence or real BBO is available. Set one open position and one pending order at a time.</p>
  <label className="switch"><input type="checkbox" checked={pullback.enabled}
   onChange={e=>setup({enabled:e.target.checked})}/><span>Enable stateful futures pullback engine</span></label>
