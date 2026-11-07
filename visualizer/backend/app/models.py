@@ -46,7 +46,7 @@ class IndicatorInstance(BaseModel):
             if source not in ("hlc3", "close"):
                 raise ValueError("VWAP price_source must be hlc3 or close")
             clock = str(self.params.get("reset_time", "00:00"))
-            if not re.fullmatch(r"(?:[01]\\d|2[0-3]):[0-5]\\d", clock):
+            if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", clock):
                 raise ValueError("VWAP reset_time must use 24-hour HH:MM")
             try:
                 ZoneInfo(str(self.params.get("timezone", "Asia/Kolkata")))
