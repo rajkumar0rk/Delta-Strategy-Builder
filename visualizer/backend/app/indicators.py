@@ -30,6 +30,7 @@ CATALOG: dict[str, IndicatorDefinition] = {
     "ATR": IndicatorDefinition("ATR", "Average True Range", "Volatility", "pane", ("value",), {"period":{"type":"int","default":14,"min":2,"max":200}}, "Wilder ATR."),
     "ADX_DMI": IndicatorDefinition("ADX_DMI", "ADX / DMI", "Trend strength", "pane", ("adx","plus_di","minus_di"), {"period":{"type":"int","default":14,"min":2,"max":200}}, "Wilder ADX with +DI and -DI. Useful for separating directional expansion from chop."),
     "CANDLE_STRENGTH": IndicatorDefinition("CANDLE_STRENGTH", "Candle Strength", "Price action", "pane", ("body_size","range_size","body_range_percent","body_atr","upper_wick_ratio","lower_wick_ratio","bullish","bearish"), {"atr_period":{"type":"int","default":14,"min":2,"max":200}}, "Candle body/range/ATR strength plus upper/lower wick ratios and bullish/bearish flags.", ("body_range_percent","body_atr")),
+    "ATR_PERCENTILE": IndicatorDefinition("ATR_PERCENTILE", "Rolling ATR percentile rank", "Volatility", "pane", ("value",), {"atr_period":{"type":"int","default":14,"min":2,"max":200},"lookback_bars":{"type":"int","default":720,"min":20,"max":5000}}, "Closed-candle ATR percentile rank against preceding bars only; 0-100 scale, no forward information."),
     "ATR_EXPANSION": IndicatorDefinition("ATR_EXPANSION", "ATR Expansion", "Volatility", "pane", ("atr","atr_sma","atr_ratio","atr_slope","atr_rising"), {"atr_period":{"type":"int","default":14,"min":2,"max":200},"sma_period":{"type":"int","default":20,"min":2,"max":500},"slope_bars":{"type":"int","default":5,"min":1,"max":200}}, "ATR relative to its own average, with multi-bar slope and rising flag.", ("atr_ratio","atr_slope")),
     "OVEREXTENSION": IndicatorDefinition("OVEREXTENSION", "EMA / ATR Overextension", "Trend", "pane", ("distance_atr","abs_distance_atr","ema","atr"), {"ema_period":{"type":"int","default":20,"min":1,"max":500},"atr_period":{"type":"int","default":14,"min":2,"max":200},"source":{"type":"select","default":"close","options":["open","high","low","close"]}}, "Signed and absolute distance from EMA normalized by ATR. Use it to avoid chasing an already-extended trend.", ("distance_atr",)),
     "FORMULA": IndicatorDefinition("FORMULA", "Derived Formula", "Derived", "pane", ("value",), {"expression":{"type":"text","default":"(close - ema20) / atr14"}}, "Safe arithmetic formula over raw OHLCV and previously calculated indicator operands. Supports + - * / parentheses and abs(...)."),
@@ -531,6 +532,25 @@ def compute_indicators(frame: pd.DataFrame, instances: list[IndicatorInstance], 
             adx,plus,minus=_adx_dmi(calc,int(p['period'])); outputs={"adx":adx,"plus_di":plus,"minus_di":minus}
         elif inst.kind=="CANDLE_STRENGTH": outputs=_candle_strength(calc,int(p['atr_period']))
         elif inst.kind=="ATR_EXPANSION": outputs=_atr_expansion(calc,int(p['atr_period']),int(p['sma_period']),int(p['slope_bars']))
+        elif inst.kind=="ATR_PERCENTILE":
+            atr=_atr(calc,int(p['atr_period']))
+            n=int(p['lookback_bars'])
+            # Exclude the current ATR from its reference distribution.
+            # O(n log n) per full window is bounded by the user-configured lookback.
+            # Blockwise NumPy comparisons avoid a slow per-bar Python loop.
+            from numpy.lib.stride_tricks import sliding_window_view
+            arr=atr.to_numpy(dtype=float)
+            values=np.full(len(arr),np.nan)
+            if len(arr)>n:
+                past=sliding_window_view(arr,n+1)
+                # Streaming-size blocks avoid creating a huge comparison matrix.
+                for off in range(0,len(past),512):
+                    block=past[off:off+512]
+                    old=block[:,:-1];now=block[:,-1]
+                    valid=np.isfinite(old).all(axis=1)&np.isfinite(now)
+                    rank=np.sum(old<=now[:,None],axis=1)/n*100.0
+                    values[n+off:n+off+len(block)]=np.where(valid,rank,np.nan)
+            outputs["value"]=pd.Series(values,index=calc.index)
         elif inst.kind=="OVEREXTENSION": outputs=_overextension(calc,int(p['ema_period']),int(p['atr_period']),str(p['source']))
         elif inst.kind=="FORMULA": outputs['value']=_formula(calc,str(p['expression']))
         elif inst.kind=="MACD":

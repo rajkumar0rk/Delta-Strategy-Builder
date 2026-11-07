@@ -1,0 +1,240 @@
+"""AMRS closed-candle regime, breakout, retest, trailing and schema checks."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pandas as pd
+import pytest
+from pydantic import ValidationError
+
+from app.adaptive_futures import AdaptiveBreakoutPlanner, trail_stop
+from app.models import AdaptiveFuturesConfig, StrategyConfig
+
+
+def _frame(kind="trend"):
+    idx = pd.date_range("2026-01-01T00:05:00Z", periods=48, freq="5min")
+    frame = pd.DataFrame(
+        dict(open=[100.0]*len(idx), high=[102.0]*len(idx),
+             low=[99.0]*len(idx), close=[100.0]*len(idx),
+             volume=[100.0]*len(idx)), index=idx)
+    # Two fully completed 1h observations and then one 15m breakout.
+    frame.loc[idx[24:27], "high"] = 111.0
+    frame.loc[idx[24:27], "close"] = 110.0
+    frame.loc[idx[24:27], "open"] = 100.0
+    frame["amrs_ema50_1h"] = 200.0
+    frame["amrs_ema200_1h"] = 100.0
+    frame["amrs_close_1h"] = 205.0
+    frame["amrs_adx_1h.adx"] = 30.0 if kind=="trend" else 16.0
+    frame["amrs_adx_1h.plus_di"] = 30.0
+    frame["amrs_adx_1h.minus_di"] = 10.0
+    frame["amrs_atr_percentile_1h"] = 50.0 if kind=="trend" else 10.0
+    frame["amrs_donchian_15m.upper"] = 105.0
+    frame["amrs_donchian_15m.lower"] = 95.0
+    frame["amrs_atr_15m"] = 2.0
+    frame["amrs_volume_ratio_15m"] = 1.8
+    return frame
+
+
+def _config():
+    cfg = AdaptiveFuturesConfig()
+    cfg.regime.require_ema_slope = False
+    cfg.compression.require_retest = True
+    return cfg
+
+
+def test_adaptive_strategy_reference_imports_and_rejects_missing_dependencies():
+    path=Path(__file__).resolve().parents[1]/"examples"/"btc-futures-adaptive-regimes-v1.strategy.json"
+    strategy=StrategyConfig.model_validate(json.loads(path.read_text())["strategy"])
+    assert strategy.futures.adaptive.enabled
+    assert strategy.futures.pullback.enabled is False
+    assert strategy.futures.stop_loss_percent is None
+    assert strategy.futures.take_profit_percent is None
+    assert strategy.futures.adaptive.regime.confirmations==2
+    assert strategy.timeframe=="5m"
+    missing=strategy.model_dump()
+    missing["indicators"]=[i for i in missing["indicators"] if i["id"]!="amrs_adx_1h"]
+    with pytest.raises(ValidationError,match="AMRS requires"):
+        StrategyConfig.model_validate(missing)
+
+
+def test_new_schema_is_opt_in_and_existing_futures_unchanged():
+    old=StrategyConfig(market_type="FUTURES")
+    assert old.futures.adaptive.enabled is False
+    assert old.futures.stop_loss_percent==1
+    assert old.futures.take_profit_percent==2
+    with pytest.raises(ValidationError,match="AMRS uses its own ATR stops"):
+        StrategyConfig.model_validate({"market_type":"FUTURES","futures":{"adaptive":{"enabled":True}}})
+
+
+def test_1h_regime_persistence_before_breakout_and_no_same_bar_lookahead():
+    cfg=_config()
+    frame=_frame()
+    planner=AdaptiveBreakoutPlanner(frame,cfg)
+    found=[]
+    for idx,(ts,row) in enumerate(frame.iterrows()):
+        planner.step(idx,ts,row)
+        if planner.new_setups:
+            found.append((ts,dict(planner.new_setups)))
+    assert planner.regime=="TREND_UP"
+    assert any(event[0]==frame.index[26] for event in found)
+    assert all(event[0]>=frame.index[23] for event in found)
+    assert all("SHORT" not in payload for _,payload in found)
+    assert found[0][1]["LONG"]["module"]=="TREND"
+
+
+def test_compression_waits_for_subsequent_15m_retest_then_arms():
+    cfg=_config()
+    frame=_frame("compression")
+    # Completed breakout at 02:15 followed by a later candle that
+    # touches the frozen level and closes above it.
+    frame.loc[frame.index[27:30],["open","high","low","close"]]=[108,109,104,107]
+    planner=AdaptiveBreakoutPlanner(frame,cfg)
+    seen=[]
+    for i,(ts,row) in enumerate(frame.iterrows()):
+        planner.step(i,ts,row)
+        if planner.new_setups:
+            seen.append((ts,dict(planner.new_setups)))
+    assert planner.regime=="COMPRESSION"
+    assert seen and seen[0][0]==frame.index[29]
+    assert seen[0][1]["LONG"]["module"]=="COMPRESSION"
+
+
+def test_volatile_1h_regime_forces_no_trade_without_waiting_confirmation():
+    cfg=_config()
+    frame=_frame()
+    planner=AdaptiveBreakoutPlanner(frame,cfg)
+    for i,(ts,row) in enumerate(frame.iterrows()):
+        if ts >= pd.Timestamp("2026-01-01T02:00:00Z"):
+            row=row.copy()
+            row["amrs_atr_percentile_1h"]=99
+        planner.step(i,ts,row)
+    assert planner.regime=="EXTREME_VOLATILITY"
+    assert not planner.new_setups
+
+
+def test_stop_trails_only_in_profitable_direction_and_never_loosened():
+    cfg=_config().trailing
+    long=dict(direction="LONG",entry_price=100.0,stop_price=95.0,
+              initial_r=5.0,adaptive_module="TREND",favorable_close=100)
+    bar=pd.Series({"close":112.0,"amrs_atr_15m":2.0})
+    assert trail_stop(long,bar,cfg,0.5)==108.0
+    assert trail_stop(long,pd.Series({"close":101.0,"amrs_atr_15m":8.0}),
+                      cfg,0.5) is None
+    assert long["stop_price"]==108.0
+    short=dict(direction="SHORT",entry_price=100.0,stop_price=105.0,
+               initial_r=5.0,adaptive_module="COMPRESSION",favorable_close=100)
+    assert trail_stop(short,pd.Series({"close":88.0,"amrs_atr_15m":2.0}),
+                      cfg,0.5)==92.0
+    assert trail_stop(short,pd.Series({"close":99.0,"amrs_atr_15m":10.0}),
+                      cfg,0.5) is None
+    assert short["stop_price"]==92.0
+
+def test_adaptive_futures_end_to_end_uses_shared_risk_fee_and_exclusive_engine(
+    tmp_path, monkeypatch,
+):
+    import csv
+    from app.engine import run_backtest
+    from app import futures_engine
+
+    root=tmp_path/"datasets"
+    source=root/"sample"
+    source.mkdir(parents=True)
+    monkeypatch.setenv("STRATEGY_LAB_DATA_ROOT",str(root))
+    monkeypatch.setenv("STRATEGY_LAB_RESULT_ROOT",str(tmp_path/"results"))
+    monkeypatch.setenv("STRATEGY_LAB_CACHE_ROOT",str(tmp_path/"cache"))
+    timestamps=pd.date_range("2026-01-01T00:05:00Z",periods=72,freq="5min")
+    candle_rows=[]
+    for i,ts in enumerate(timestamps):
+        candle={"timestamp":ts.isoformat(),"open":100,"high":102,"low":99,
+                "close":100,"volume":100}
+        if i in (24,25):
+            candle.update(high=110,close=108)
+        if i==26:
+            candle.update(open=106,high=112,low=100,close=110)
+        if i==27:
+            candle.update(open=110,high=114,low=109,close=112)
+        if i==28:
+            candle.update(open=112,high=180,low=110,close=170)
+        candle_rows.append(candle)
+    with (source/"underlying_bars.csv").open("w",newline="") as out:
+        writer=csv.DictWriter(out,fieldnames=list(candle_rows[0]))
+        writer.writeheader()
+        writer.writerows(candle_rows)
+
+    example=Path(__file__).resolve().parents[1]/"examples"/"btc-futures-adaptive-regimes-v1.strategy.json"
+    strategy=StrategyConfig.model_validate(json.loads(example.read_text())["strategy"])
+    strategy.session.blocked_weekdays=[]
+    from app.models import SessionWindow
+    strategy.session.windows=[SessionWindow(start="00:00",end="23:59")]
+    strategy.futures.adaptive.size_mode="FIXED"
+    strategy.futures.adaptive.regime.require_ema_slope=False
+
+    def synthetic_indicators(frame,indicators,tf,**kwargs):
+        frame=frame.copy()
+        frame["amrs_ema50_1h"]=200.0
+        frame["amrs_ema200_1h"]=100.0
+        frame["amrs_close_1h"]=205.0
+        frame["amrs_adx_1h.adx"]=31.0
+        frame["amrs_adx_1h.plus_di"]=40.0
+        frame["amrs_adx_1h.minus_di"]=12.0
+        frame["amrs_atr_percentile_1h"]=55.0
+        frame["amrs_donchian_15m.upper"]=105.0
+        frame["amrs_donchian_15m.lower"]=95.0
+        frame["amrs_atr_15m"]=2.0
+        frame["amrs_volume_ratio_15m"]=2.0
+        return frame,[]
+    monkeypatch.setattr(futures_engine,"compute_indicators",synthetic_indicators)
+    from app.models import BacktestRequest
+    result=run_backtest(BacktestRequest(
+        dataset_id="sample",dataset_mode="SINGLE",
+        start=timestamps[0].isoformat(),
+        end=(timestamps[-1]+pd.Timedelta(minutes=5)).isoformat(),
+        warmup_candles=0,strategy=strategy))
+    assert result["futures_research"]["adaptive_enabled"] is True
+    assert result["metrics"]["trades"]>=1, result["metrics"]
+    for trade in result["trades"]:
+        assert trade["entry_lifecycle_id"]=="ADAPTIVE_BREAKOUT"
+        assert trade["fees_usd"]==pytest.approx(
+            trade["entry_fee_usd"]+trade["exit_fee_usd"])
+        assert trade["net_pnl_usd"]==pytest.approx(
+            trade["gross_pnl_usd"]-trade["fees_usd"]+trade["funding_usd"])
+    assert result["metrics"]["cash_reconciliation_residual_usd"]==pytest.approx(0)
+
+def test_rolling_atr_percentile_uses_prior_bars_only_and_exact_warmup():
+    from app.indicators import compute_indicators
+    from app.models import IndicatorInstance
+    from app.warmup import required_warmup_candles
+
+    idx=pd.date_range("2026-01-01T01:00:00Z",periods=180,freq="1h")
+    close=[100+i*.03+(i%5)*.5 for i in range(180)]
+    frame=pd.DataFrame({
+        "open":close,"close":close,
+        "high":[v+1+i%4*.1 for i,v in enumerate(close)],
+        "low":[v-1-i%3*.1 for i,v in enumerate(close)],
+        "volume":[100.0]*180},index=idx)
+    indicator=IndicatorInstance(id="atr_pct",kind="ATR_PERCENTILE",
+                                timeframe="1h",params={"atr_period":14,"lookback_bars":30})
+    before,_=compute_indicators(frame,[indicator],strategy_timeframe="1h")
+    assert before["atr_pct"].dropna().between(0,100).all()
+    assert before["atr_pct"].iloc[:40].isna().all()
+    assert pd.notna(before["atr_pct"].iloc[-1])
+    changed=frame.copy()
+    changed.loc[idx[120]:,"high"]+=500
+    after,_=compute_indicators(changed,[indicator],strategy_timeframe="1h")
+    pd.testing.assert_series_equal(before["atr_pct"].iloc[:120],
+                                   after["atr_pct"].iloc[:120])
+    assert required_warmup_candles([indicator],"1h",minimum=0)==102
+
+
+def test_invalid_adaptive_modules_and_legacy_pullback_cannot_be_enabled_together():
+    from app.models import FuturesPullbackConfig
+    path=Path(__file__).resolve().parents[1]/"examples"/"btc-futures-adaptive-regimes-v1.strategy.json"
+    data=json.loads(path.read_text())["strategy"]
+    data["futures"].setdefault("pullback",{})["enabled"]=True
+    with pytest.raises(ValidationError,match="cannot share an execution engine"):
+        StrategyConfig.model_validate(data)
+    data["futures"]["pullback"]["enabled"]=False
+    data["futures"]["adaptive"]["regime"]["adx_range_max"]=26
+    with pytest.raises(ValidationError,match="below trend"):
+        StrategyConfig.model_validate(data)

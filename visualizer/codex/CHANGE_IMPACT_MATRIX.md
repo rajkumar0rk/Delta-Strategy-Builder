@@ -77,3 +77,12 @@ Do **not** claim "all related files updated" without inspecting the consumers an
 | Change | Companion files | Mandatory validation |
 |---|---|---|
 | Physical BTC 5m candle cache repair / additional missing catalog intervals | `backtest/candle_repair.py`, `backtest/history_archive.py`, `backtest/providers/delta_india.py`, `visualizer/backend/app/archive_sync.py`, `visualizer/backend/app/futures_engine.py`, `visualizer/backend/app/engine.py`, `visualizer/backend/app/main.py`, `visualizer/backend/app/models.py`, `visualizer/frontend/src/App.tsx`, `visualizer/codex/FUTURES_BACKTEST.md` | `tests/test_candle_repair.py`, `visualizer/backend/tests/test_cache_first_archive.py`, `test_futures_optional_sync.py`, `test_v14_archive_sessions.py`, full backend/frontend/legacy suites, no-network cache-hit, atomic partial-failure behavior, true 5m grid and catalog correctness, OPTIONS quote preservation |
+
+## Adaptive Futures market regime companion map
+
+| Feature | Implementation paths | Required regression |
+|---|---|---|
+| Adaptive state machine, Donchian breakout / 15m retest / 5m pending stop | `backend/app/adaptive_futures.py`, `backend/app/futures_engine.py`, `backend/app/models.py`, `backend/app/futures_setups.py`, `backend/examples/btc-futures-adaptive-regimes-v1.strategy.json` | No future-bar dependence, no entry during ambiguous regime, persistence, expiration, exclusive pending/position, unmodified legacy Futures/Options |
+| Rolling ATR percentile rank | `backend/app/indicators.py`, `backend/app/warmup.py`, indicator catalog & schema | Prior-window-only percentile, full warmup, boundary/alignment, chunked performance |
+| ATR trailing + adaptive reporting | `backend/app/adaptive_futures.py`, `backend/app/futures_engine.py`, `backend/tests/test_adaptive_futures.py` | Stop never loosens, next-open timing, stop-first fill, closed trade reconciles fees and margin |
+| Strategy JSON/prompt/frontend | `backend/app/ai_prompt.py`, `backend/app/models.py`, `frontend/src/types.ts`, `frontend/src/components/AdaptiveFuturesEditor.tsx`, `frontend/src/components/FuturesSettings.tsx`, `codex/STRATEGY_JSON_GENERATION_PROMPT.md`, `codex/FUTURES_BACKTEST.md` | Schema JSON validation, no invented keys, import/export roundtrip, frontend test/build |

@@ -1,4 +1,5 @@
 import type {FuturesConfig,Strategy} from '../types';
+import {AdaptiveFuturesEditor} from './AdaptiveFuturesEditor';
 
 const defaults:FuturesConfig={symbol:'BTCUSD',contract_btc:0.001,quantity_lots:1,leverage:5,
  margin_mode:'ISOLATED',maintenance_margin_percent:.25,taker_fee_percent:.05,
@@ -27,14 +28,15 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
      pullback:{...pullback,enabled:false}}:{}),
    ...(patch.enabled===false?{stop_loss_percent:f.stop_loss_percent??1,
      take_profit_percent:f.take_profit_percent}:{}),
-   trend_risk:{...trend,...patch}}});
+   trend_risk:{...trend,...patch},
+   ...(patch.enabled===true&&f.adaptive?{adaptive:{...f.adaptive,enabled:false}}:{})}});
  const trendNumber=(key:keyof typeof trendDefaults,label:string,step:string,min:number)=>(
   <label key={key}>{label}<input type="number" step={step} min={min}
    value={Number(trend[key])} onChange={e=>setTrend({[key]:Number(e.target.value)})}/></label>);
 
  const setup=(patch:Partial<typeof pullback>)=>onChange({...value,futures:{...f,
    ...(patch.enabled===true?{stop_loss_percent:null,take_profit_percent:null,trend_risk:{...trend,enabled:false}}:{}),
-   pullback:{...pullback,...patch}}});
+   pullback:{...pullback,...patch},...(patch.enabled===true&&f.adaptive?{adaptive:{...f.adaptive,enabled:false}}:{})}});
  const setupNumber=(key:keyof typeof setupDefaults,label:string,step:string,min:number)=>(
   <label key={key}>{label}<input type="number" step={step} min={min}
    value={Number(pullback[key])} onChange={e=>setup({[key]:Number(e.target.value)})}/></label>);
@@ -72,8 +74,8 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
     onChange={e=>set({force_exit_time:e.target.value||null})}/></label>
    {number('tick_size','Assumed futures price tick ($)','0.5',0.000001)}
    {number('slippage_ticks','Additional adverse execution ticks','1',0)}
-  {!trend.enabled&&optional('stop_loss_percent','Price-based stop-loss %')}
-  {!trend.enabled&&optional('take_profit_percent','Price-based take-profit %')}
+  {!trend.enabled&&!f.adaptive?.enabled&&optional('stop_loss_percent','Price-based stop-loss %')}
+  {!trend.enabled&&!f.adaptive?.enabled&&optional('take_profit_percent','Price-based take-profit %')}
   <label>Funding history<select value={f.funding_mode} onChange={e=>set({funding_mode:e.target.value as FuturesConfig['funding_mode']})}><option value="REQUIRE_CSV">Require historical funding CSV</option><option value="EXCLUDE_WITH_WARNING">Exclude funding (research only)</option></select></label>
  </div>
  <div className="form-grid">
@@ -164,6 +166,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
  </div>}
  <p>Research only: account equity risk is an estimate, not a hard guarantee. Stop gaps, spread, funding, and exchange liquidation can cause larger losses. Configure each indicator ID/timeframe in the indicator builder; the server validates them before running.</p>
  </section>
+ <AdaptiveFuturesEditor value={value} onChange={onChange}/>
  <section className="card"><h2>Futures risk and entry sessions</h2>
  <div className="form-grid">
   <label>Starting balance (USD)<input type="number" min="1" step="10" value={value.risk.starting_balance_usd} onChange={e=>risk({starting_balance_usd:Number(e.target.value)})}/></label>

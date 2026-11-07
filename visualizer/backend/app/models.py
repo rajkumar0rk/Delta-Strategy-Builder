@@ -550,6 +550,85 @@ class OptionsPullbackConfig(FuturesPullbackConfig):
     underlying_tick_size: float = Field(default=0.5, gt=0, le=10000)
 
 
+
+class AdaptiveRegimeConfig(BaseModel):
+    """Closed 1H classification with explicit persistence and no-trade states."""
+    timeframe: Literal["1h"] = "1h"
+    fast_ema_id: str = "amrs_ema50_1h"
+    slow_ema_id: str = "amrs_ema200_1h"
+    close_ema_id: str = "amrs_close_1h"
+    adx_id: str = "amrs_adx_1h"
+    atr_percentile_id: str = "amrs_atr_percentile_1h"
+    adx_trend_min: float = Field(default=25.0, ge=0, le=100)
+    adx_range_max: float = Field(default=20.0, ge=0, le=100)
+    atr_compression_max: float = Field(default=30.0, ge=0, le=100)
+    atr_extreme_min: float = Field(default=90.0, ge=0, le=100)
+    confirmations: int = Field(default=2, ge=1, le=24)
+    ema_slope_bars: int = Field(default=2, ge=1, le=24)
+    require_ema_slope: bool = True
+
+    @model_validator(mode="after")
+    def validate_ranges(self):
+        if self.adx_range_max >= self.adx_trend_min:
+            raise ValueError("AMRS range ADX maximum must be below trend ADX minimum")
+        if self.atr_compression_max >= self.atr_extreme_min:
+            raise ValueError("AMRS compression percentile must be below extreme percentile")
+        return self
+
+
+class AdaptiveBreakoutModule(BaseModel):
+    enabled: bool = True
+    setup_timeframe: Literal["15m"] = "15m"
+    donchian_id: str = "amrs_donchian_15m"
+    atr_id: str = "amrs_atr_15m"
+    volume_ratio_id: str = "amrs_volume_ratio_15m"
+    volume_ratio_min: float = Field(default=1.2, ge=0, le=100)
+    stop_lookback_bars: int = Field(default=3, ge=1, le=200)
+    stop_atr_multiple: float = Field(default=1.5, gt=0, le=20)
+    breakout_buffer_points: float = Field(default=0, ge=0, le=100000)
+    require_confirmation_color: bool = True
+    require_retest: bool = False
+    retest_max_wait_bars: int = Field(default=12, ge=1, le=500)
+    retest_tolerance_atr: float = Field(default=0.25, ge=0, le=10)
+    reward_r_multiple: float = Field(default=3.0, gt=0, le=100)
+
+
+class AdaptiveTrailingStop(BaseModel):
+    enabled: bool = True
+    atr_id: str = "amrs_atr_15m"
+    activation_r: float = Field(default=2.0, gt=0, le=100)
+    atr_multiple: float = Field(default=2.0, gt=0, le=20)
+    # Always update using the PREVIOUS completed 5m bar at the next 5m open.
+    update_mode: Literal["PRIOR_COMPLETED_BAR"] = "PRIOR_COMPLETED_BAR"
+
+
+class AdaptiveFuturesConfig(BaseModel):
+    """Opt-in multi-module futures routing; legacy pullback remains independent."""
+    enabled: bool = False
+    regime: AdaptiveRegimeConfig = Field(default_factory=AdaptiveRegimeConfig)
+    trend: AdaptiveBreakoutModule = Field(default_factory=AdaptiveBreakoutModule)
+    compression: AdaptiveBreakoutModule = Field(default_factory=lambda: AdaptiveBreakoutModule(
+        volume_ratio_min=1.5, require_retest=True))
+    trailing: AdaptiveTrailingStop = Field(default_factory=AdaptiveTrailingStop)
+    execution_mode: Literal["STOP_MARKET_INTRABAR"] = "STOP_MARKET_INTRABAR"
+    breakout_buffer_ticks: int = Field(default=1, ge=1, le=1000)
+    breakout_buffer_points: float = Field(default=0.0, ge=0, le=100000)
+    max_wait_bars: int = Field(default=3, ge=1, le=288)
+    cancel_on_trend_invalidation: bool = True
+    size_mode: Literal["RISK_EQUITY", "FIXED"] = "RISK_EQUITY"
+    equity_risk_percent: float = Field(default=0.5, gt=0, le=100)
+    max_lots: int = Field(default=100000, ge=1, le=100000)
+    max_estimated_risk_multiple: float = Field(default=1.0, ge=1, le=10)
+    # Individual modules keep their own 3R price target.
+    reward_r_multiple: float = Field(default=3.0, gt=0, le=100)
+
+    @model_validator(mode="after")
+    def validate_modules(self):
+        if not (self.trend.enabled or self.compression.enabled):
+            raise ValueError("AMRS requires at least one enabled execution module")
+        return self
+
+
 class FuturesTrendRiskConfig(BaseModel):
     """Opt-in ATR-based protection for ordinary futures directional entry rules."""
     enabled: bool = False
@@ -566,6 +645,7 @@ class FuturesTrendRiskConfig(BaseModel):
 class FuturesConfig(BaseModel):
     """BTCUSD perpetual research assumptions, never an exchange-margin oracle."""
     pullback: FuturesPullbackConfig = Field(default_factory=FuturesPullbackConfig)
+    adaptive: AdaptiveFuturesConfig = Field(default_factory=AdaptiveFuturesConfig)
     trend_risk: FuturesTrendRiskConfig = Field(default_factory=FuturesTrendRiskConfig)
     symbol: Literal["BTCUSD"] = "BTCUSD"
     contract_btc: float = Field(default=0.001, gt=0)
@@ -748,9 +828,10 @@ class StrategyConfig(BaseModel):
                     raise ValueError("Options pullback close proxy requires 1h EMA period 1")
             if cfg.max_wait_bars*5>({"15m":15,"30m":30,"1h":60}[cfg.setup_timeframe])*2:
                 raise ValueError("Options pullback expiry cannot exceed two setup candles")
+
         if self.futures.trend_risk.enabled:
-            if self.market_type != "FUTURES" or self.futures.pullback.enabled:
-                raise ValueError("Futures ATR trend mode requires ordinary FUTURES rules, not pullback")
+            if self.market_type != "FUTURES" or self.futures.pullback.enabled or self.futures.adaptive.enabled:
+                raise ValueError("Futures ATR trend mode requires ordinary FUTURES rules, not pullback or adaptive")
             if self.futures.stop_loss_percent is not None or self.futures.take_profit_percent is not None:
                 raise ValueError("Disable fixed-percent stop/target when futures.trend_risk.enabled")
             cfg = self.futures.trend_risk
@@ -758,6 +839,41 @@ class StrategyConfig(BaseModel):
             if (operand is None or operand.kind != "ATR" or operand.chart_only
                     or operand.timeframe not in ("strategy", self.timeframe)):
                 raise ValueError("Futures trend ATR must reference a non-chart-only strategy-timeframe ATR indicator")
+        if self.market_type != "FUTURES" and self.futures.adaptive.enabled:
+            raise ValueError("AMRS only supports market_type FUTURES")
+        if self.market_type == "FUTURES" and self.futures.adaptive.enabled:
+            adaptive = self.futures.adaptive
+            if self.timeframe != "5m":
+                raise ValueError("AMRS requires a 5m strategy timeframe")
+            if self.futures.pullback.enabled or self.pattern_trade.enabled:
+                raise ValueError("AMRS cannot share an execution engine with pullback or Options patterns")
+            if self.futures.stop_loss_percent is not None or self.futures.take_profit_percent is not None:
+                raise ValueError("AMRS uses its own ATR stops; both legacy Futures percent stops must be null")
+            if any(x.enabled and x.require_retest_for_entry
+                   for x in (self.call_breakout_retest, self.put_breakout_retest)):
+                raise ValueError("AMRS uses its own Futures retest manager, not legacy breakout_retest")
+            by_id = {item.id: item for item in self.indicators}
+            deps = [
+                (adaptive.regime.fast_ema_id, "EMA", "1h"),
+                (adaptive.regime.slow_ema_id, "EMA", "1h"),
+                (adaptive.regime.close_ema_id, "EMA", "1h"),
+                (adaptive.regime.adx_id, "ADX_DMI", "1h"),
+                (adaptive.regime.atr_percentile_id, "ATR_PERCENTILE", "1h"),
+            ]
+            for module in (adaptive.trend, adaptive.compression):
+                if module.enabled:
+                    deps += [(module.donchian_id, "DONCHIAN", module.setup_timeframe),
+                             (module.atr_id, "ATR", module.setup_timeframe),
+                             (module.volume_ratio_id, "VOLUME_RATIO", module.setup_timeframe)]
+            if adaptive.trailing.enabled:
+                deps.append((adaptive.trailing.atr_id, "ATR", "15m"))
+            for identifier, kind, timeframe in deps:
+                item = by_id.get(identifier)
+                if item is None or item.kind != kind or item.chart_only or item.timeframe != timeframe:
+                    raise ValueError(f"AMRS requires a non-chart-only {kind} indicator {identifier!r} on {timeframe}")
+            if by_id[adaptive.regime.close_ema_id].params.get("period") != 1:
+                raise ValueError("AMRS 1h close context must be an EMA with period=1")
+
         if self.market_type == "FUTURES" and self.futures.pullback.enabled:
             cfg = self.futures.pullback
             if self.timeframe != "5m":
