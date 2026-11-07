@@ -24,7 +24,8 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
  const ruleRisk={...ruleDefaults,...f.rule_risk};
  const setRuleRisk=(patch:Partial<typeof ruleRisk>)=>onChange({...value,futures:{...f,
   ...(patch.enabled===true?{stop_loss_percent:null,take_profit_percent:null,
-    pullback:{...f.pullback,enabled:false},adaptive:{...f.adaptive,enabled:false}}:{}),
+    ...(f.pullback?{pullback:{...f.pullback,enabled:false}}:{}),
+    ...(f.adaptive?{adaptive:{...f.adaptive,enabled:false}}:{})}:{} ),
   rule_risk:{...ruleRisk,...patch}}});
  const ruleNumber=(key:keyof typeof ruleDefaults,label:string,min:number,step:number)=>(
   <label key={key}>{label}<input type="number" min={min} step={step}
