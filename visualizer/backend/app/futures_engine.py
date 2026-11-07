@@ -16,7 +16,7 @@ from .warmup import required_warmup_candles, historical_bar_sources, warmup_diag
 from .indicators import compute_indicators
 from .alerts import alert_markers
 from .rules import evaluate_group
-from .futures_setups import PullbackBreakoutPlanner, risk_sized_lots, target_at_r
+from .futures_setups import PullbackBreakoutPlanner, risk_sized_lots, target_at_r, target_at_points
 from .adaptive_futures import AdaptiveBreakoutPlanner, trail_stop
 from .shared_execution import (
     CompletedHourlyTrendGate, clock_due, remaining_daily_risk,
@@ -165,7 +165,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':14,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':15,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
@@ -436,9 +436,14 @@ def run_futures_backtest(req, progress=None):
                     trade_qty=lots*cfg.contract_btc
                     if not lots:entry_rejection=reason
                     multiple=execution_setup.get('reward_r_multiple',sizing.reward_r_multiple)
-                    target_price=(target_at_r(px,stop_price,direction,multiple,cfg.tick_size)
-                                  if multiple is not None else None)
-                    if multiple is not None and target_price is None:entry_rejection='INVALID_R_TARGET'
+                    target_points=execution_setup.get('take_profit_points')
+                    if target_points is not None:
+                        target_price=target_at_points(px,target_points,direction,cfg.tick_size)
+                        if target_price is None:entry_rejection='INVALID_POINT_TARGET'
+                    else:
+                        target_price=(target_at_r(px,stop_price,direction,multiple,cfg.tick_size)
+                                      if multiple is not None else None)
+                        if multiple is not None and target_price is None:entry_rejection='INVALID_R_TARGET'
                     if lots and sizing.size_mode=='FIXED' and lots*risk_per_lot>balance*sizing.equity_risk_percent/100*sizing.max_estimated_risk_multiple:
                         entry_rejection='FIXED_SIZE_RISK_EXCEEDED'
             margin=assumed_initial_margin_usd(px,trade_qty,cfg) if trade_qty>0 else float('inf')
@@ -672,7 +677,8 @@ def run_futures_backtest(req, progress=None):
                     snapshot=frame.iloc[i].get(rule_risk.atr_indicator_id)
                     pending_setup={'stop_price':frozen,'rule_risk':True,
                                    'signal_atr':float(snapshot) if snapshot is not None else float('nan'),
-                                   'reward_r_multiple':rule_risk.reward_r_multiple}
+                                   'reward_r_multiple':rule_risk.reward_r_multiple,
+                                   'take_profit_points':rule_risk.take_profit_points}
                 if pullback:
                     pending_setup=dict(setup_signals[selected[0]])
                     pending_lifecycle_snapshot={
