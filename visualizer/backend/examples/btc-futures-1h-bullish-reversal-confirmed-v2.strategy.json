@@ -1,0 +1,603 @@
+{
+  "schema_version": 15,
+  "app": "BTC Strategy Lab",
+  "strategy": {
+    "name": "BTC Futures 1H Confirmed Bullish Reversal v2 | Multi-bar Trend, Protected Structure Exit",
+    "market_type": "FUTURES",
+    "timeframe": "1h",
+    "direction_mode": "CALL",
+    "call_action": "BUY",
+    "put_action": "BUY",
+    "call_signal_mode": "ORDER_ONLY",
+    "put_signal_mode": "ORDER_ONLY",
+    "indicators": [
+      {
+        "id": "candle_reversal_1h",
+        "kind": "CANDLE_STRENGTH",
+        "timeframe": "1h",
+        "params": {
+          "atr_period": 14
+        },
+        "visible": false,
+        "chart_only": false
+      },
+      {
+        "id": "atr14_1h",
+        "kind": "ATR",
+        "timeframe": "1h",
+        "params": {
+          "period": 14
+        },
+        "visible": false,
+        "chart_only": false
+      }
+    ],
+    "call_entry": {
+      "mode": "ANY",
+      "min_pass": 1,
+      "conditions": [],
+      "groups": [
+        {
+          "mode": "ALL",
+          "min_pass": 1,
+          "conditions": [],
+          "groups": [
+            {
+              "mode": "ALL",
+              "min_pass": 1,
+              "conditions": [
+                {
+                  "id": "eng-down-lower-high-1",
+                  "left": "high",
+                  "operator": "LT",
+                  "right": "high",
+                  "value": null,
+                  "left_offset": 1,
+                  "right_offset": 2
+                },
+                {
+                  "id": "eng-down-lower-low-1",
+                  "left": "low",
+                  "operator": "LT",
+                  "right": "low",
+                  "value": null,
+                  "left_offset": 1,
+                  "right_offset": 2
+                },
+                {
+                  "id": "eng-down-lower-high-2",
+                  "left": "high",
+                  "operator": "LT",
+                  "right": "high",
+                  "value": null,
+                  "left_offset": 2,
+                  "right_offset": 3
+                },
+                {
+                  "id": "eng-down-lower-low-2",
+                  "left": "low",
+                  "operator": "LT",
+                  "right": "low",
+                  "value": null,
+                  "left_offset": 2,
+                  "right_offset": 3
+                },
+                {
+                  "id": "eng-down-lower-high-3",
+                  "left": "high",
+                  "operator": "LT",
+                  "right": "high",
+                  "value": null,
+                  "left_offset": 3,
+                  "right_offset": 4
+                },
+                {
+                  "id": "eng-down-lower-low-3",
+                  "left": "low",
+                  "operator": "LT",
+                  "right": "low",
+                  "value": null,
+                  "left_offset": 3,
+                  "right_offset": 4
+                },
+                {
+                  "id": "eng-down-red-setup",
+                  "left": "bearish_close",
+                  "operator": "GT",
+                  "right": null,
+                  "value": 0.5,
+                  "left_offset": 1,
+                  "right_offset": 0
+                },
+                {
+                  "id": "eng-down-weak-close",
+                  "left": "close",
+                  "operator": "LT",
+                  "right": "open",
+                  "value": null,
+                  "left_offset": 1,
+                  "right_offset": 2
+                }
+              ],
+              "groups": [
+                {
+                  "mode": "AT_LEAST",
+                  "min_pass": 2,
+                  "conditions": [
+                    {
+                      "id": "eng-down-red-1",
+                      "left": "bearish_close",
+                      "operator": "GT",
+                      "right": null,
+                      "value": 0.5,
+                      "left_offset": 1,
+                      "right_offset": 0
+                    },
+                    {
+                      "id": "eng-down-red-2",
+                      "left": "bearish_close",
+                      "operator": "GT",
+                      "right": null,
+                      "value": 0.5,
+                      "left_offset": 2,
+                      "right_offset": 0
+                    },
+                    {
+                      "id": "eng-down-red-3",
+                      "left": "bearish_close",
+                      "operator": "GT",
+                      "right": null,
+                      "value": 0.5,
+                      "left_offset": 3,
+                      "right_offset": 0
+                    }
+                  ],
+                  "groups": []
+                }
+              ]
+            },
+            {
+              "mode": "ALL",
+              "min_pass": 1,
+              "conditions": [
+                {
+                  "id": "eng-prev-red",
+                  "left": "bearish_close",
+                  "operator": "GT",
+                  "right": null,
+                  "value": 0.5,
+                  "left_offset": 1,
+                  "right_offset": 0
+                },
+                {
+                  "id": "eng-green",
+                  "left": "bullish_close",
+                  "operator": "GT",
+                  "right": null,
+                  "value": 0.5,
+                  "left_offset": 0,
+                  "right_offset": 0
+                },
+                {
+                  "id": "eng-open-below-prior-close",
+                  "left": "open",
+                  "operator": "LTE",
+                  "right": "close",
+                  "value": null,
+                  "left_offset": 0,
+                  "right_offset": 1
+                },
+                {
+                  "id": "eng-close-over-prior-open",
+                  "left": "close",
+                  "operator": "GT",
+                  "right": "open",
+                  "value": null,
+                  "left_offset": 0,
+                  "right_offset": 1
+                }
+              ],
+              "groups": []
+            }
+          ]
+        },
+        {
+          "mode": "ALL",
+          "min_pass": 1,
+          "conditions": [],
+          "groups": [
+            {
+              "mode": "ALL",
+              "min_pass": 1,
+              "conditions": [
+                {
+                  "id": "confirmed-down-lower-high-2",
+                  "left": "high",
+                  "operator": "LT",
+                  "right": "high",
+                  "value": null,
+                  "left_offset": 2,
+                  "right_offset": 3
+                },
+                {
+                  "id": "confirmed-down-lower-low-2",
+                  "left": "low",
+                  "operator": "LT",
+                  "right": "low",
+                  "value": null,
+                  "left_offset": 2,
+                  "right_offset": 3
+                },
+                {
+                  "id": "confirmed-down-lower-high-3",
+                  "left": "high",
+                  "operator": "LT",
+                  "right": "high",
+                  "value": null,
+                  "left_offset": 3,
+                  "right_offset": 4
+                },
+                {
+                  "id": "confirmed-down-lower-low-3",
+                  "left": "low",
+                  "operator": "LT",
+                  "right": "low",
+                  "value": null,
+                  "left_offset": 3,
+                  "right_offset": 4
+                },
+                {
+                  "id": "confirmed-down-lower-high-4",
+                  "left": "high",
+                  "operator": "LT",
+                  "right": "high",
+                  "value": null,
+                  "left_offset": 4,
+                  "right_offset": 5
+                },
+                {
+                  "id": "confirmed-down-lower-low-4",
+                  "left": "low",
+                  "operator": "LT",
+                  "right": "low",
+                  "value": null,
+                  "left_offset": 4,
+                  "right_offset": 5
+                },
+                {
+                  "id": "confirmed-down-red-setup",
+                  "left": "bearish_close",
+                  "operator": "GT",
+                  "right": null,
+                  "value": 0.5,
+                  "left_offset": 2,
+                  "right_offset": 0
+                },
+                {
+                  "id": "confirmed-down-weak-close",
+                  "left": "close",
+                  "operator": "LT",
+                  "right": "open",
+                  "value": null,
+                  "left_offset": 2,
+                  "right_offset": 3
+                }
+              ],
+              "groups": [
+                {
+                  "mode": "AT_LEAST",
+                  "min_pass": 2,
+                  "conditions": [
+                    {
+                      "id": "confirmed-down-red-2",
+                      "left": "bearish_close",
+                      "operator": "GT",
+                      "right": null,
+                      "value": 0.5,
+                      "left_offset": 2,
+                      "right_offset": 0
+                    },
+                    {
+                      "id": "confirmed-down-red-3",
+                      "left": "bearish_close",
+                      "operator": "GT",
+                      "right": null,
+                      "value": 0.5,
+                      "left_offset": 3,
+                      "right_offset": 0
+                    },
+                    {
+                      "id": "confirmed-down-red-4",
+                      "left": "bearish_close",
+                      "operator": "GT",
+                      "right": null,
+                      "value": 0.5,
+                      "left_offset": 4,
+                      "right_offset": 0
+                    }
+                  ],
+                  "groups": []
+                }
+              ]
+            },
+            {
+              "mode": "ALL",
+              "min_pass": 1,
+              "conditions": [
+                {
+                  "id": "confirm-green",
+                  "left": "bullish_close",
+                  "operator": "GT",
+                  "right": null,
+                  "value": 0.5,
+                  "left_offset": 0,
+                  "right_offset": 0
+                },
+                {
+                  "id": "confirm-close-above-pattern-high",
+                  "left": "close",
+                  "operator": "GT",
+                  "right": "high",
+                  "value": null,
+                  "left_offset": 0,
+                  "right_offset": 1
+                }
+              ],
+              "groups": [
+                {
+                  "mode": "ANY",
+                  "min_pass": 1,
+                  "conditions": [],
+                  "groups": [
+                    {
+                      "mode": "ALL",
+                      "min_pass": 1,
+                      "conditions": [
+                        {
+                          "id": "doji-body-pct",
+                          "left": "candle_reversal_1h.body_range_percent",
+                          "operator": "LTE",
+                          "right": null,
+                          "value": 10,
+                          "left_offset": 1,
+                          "right_offset": 0
+                        },
+                        {
+                          "id": "doji-not-red",
+                          "left": "close",
+                          "operator": "GTE",
+                          "right": "open",
+                          "value": null,
+                          "left_offset": 1,
+                          "right_offset": 1
+                        },
+                        {
+                          "id": "doji-higher-close",
+                          "left": "close",
+                          "operator": "GT",
+                          "right": "close",
+                          "value": null,
+                          "left_offset": 1,
+                          "right_offset": 2
+                        }
+                      ],
+                      "groups": []
+                    },
+                    {
+                      "mode": "ALL",
+                      "min_pass": 1,
+                      "conditions": [
+                        {
+                          "id": "hammer-green",
+                          "left": "bullish_close",
+                          "operator": "GT",
+                          "right": null,
+                          "value": 0.5,
+                          "left_offset": 1,
+                          "right_offset": 0
+                        },
+                        {
+                          "id": "hammer-body-pct",
+                          "left": "candle_reversal_1h.body_range_percent",
+                          "operator": "LTE",
+                          "right": null,
+                          "value": 40,
+                          "left_offset": 1,
+                          "right_offset": 0
+                        },
+                        {
+                          "id": "hammer-lower-wick",
+                          "left": "candle_reversal_1h.lower_wick_ratio",
+                          "operator": "GTE",
+                          "right": null,
+                          "value": 50,
+                          "left_offset": 1,
+                          "right_offset": 0
+                        },
+                        {
+                          "id": "hammer-upper-wick",
+                          "left": "candle_reversal_1h.upper_wick_ratio",
+                          "operator": "LTE",
+                          "right": null,
+                          "value": 20,
+                          "left_offset": 1,
+                          "right_offset": 0
+                        },
+                        {
+                          "id": "hammer-higher-close",
+                          "left": "close",
+                          "operator": "GT",
+                          "right": "close",
+                          "value": null,
+                          "left_offset": 1,
+                          "right_offset": 2
+                        }
+                      ],
+                      "groups": []
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "put_entry": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [],
+      "groups": []
+    },
+    "call_entry_lifecycles": [
+      {
+        "id": "confirmed-bullish-reversal",
+        "name": "Confirmed reversal and fresh bearish sequence",
+        "enabled": true,
+        "trigger_condition_id": null,
+        "delay_bars": 0,
+        "max_wait_bars": 0,
+        "max_entries_per_activation": 1,
+        "cooldown_bars": 2
+      }
+    ],
+    "put_entry_lifecycles": [],
+    "futures": {
+      "symbol": "BTCUSD",
+      "contract_btc": 0.001,
+      "quantity_lots": 1,
+      "leverage": 5,
+      "margin_mode": "ISOLATED",
+      "maintenance_margin_percent": 0.25,
+      "taker_fee_percent": 0.05,
+      "gst_percent": 18,
+      "slippage_bps": 2,
+      "extra_half_spread_bps": 0,
+      "tick_size": 0.5,
+      "slippage_ticks": 0,
+      "funding_mode": "EXCLUDE_WITH_WARNING",
+      "margin_tier_mode": "FLAT_RESEARCH",
+      "stop_loss_percent": null,
+      "take_profit_percent": null,
+      "pullback": {
+        "enabled": false
+      },
+      "adaptive": {
+        "enabled": false
+      },
+      "rule_risk": {
+        "enabled": true,
+        "stop_mode": "SWING",
+        "stop_candle_offset_bars": 0,
+        "max_entry_gap_percent": 0.5,
+        "swing_lookback_bars": 2,
+        "atr_indicator_id": "atr14_1h",
+        "stop_atr_multiple": 1.5,
+        "stop_buffer_atr": 0,
+        "reward_r_multiple": null,
+        "take_profit_points": null,
+        "atr_stop_anchor": "SIGNAL_CLOSE",
+        "trailing_enabled": false,
+        "size_mode": "RISK_EQUITY",
+        "equity_risk_percent": 0.5,
+        "max_lots": 100000,
+        "max_estimated_risk_multiple": 1,
+        "max_stop_distance_percent": 1,
+        "max_stop_distance_atr": 3,
+        "condition_exit_activation_r": 0.5,
+        "breakeven_activation_r": 1,
+        "breakeven_offset_ticks": 0
+      }
+    },
+    "risk": {
+      "starting_balance_usd": 1000,
+      "enforce_cash": true,
+      "max_daily_loss_percent": 3,
+      "stop_trading_after_daily_loss_limit": true,
+      "max_hold_minutes": 4320,
+      "close_at_session_end": false
+    },
+    "session": {
+      "timezone": "Asia/Kolkata",
+      "start": "00:00",
+      "end": "23:59",
+      "windows": [
+        {
+          "start": "00:00",
+          "end": "23:59"
+        }
+      ],
+      "blocked_weekdays": []
+    },
+    "conflict_policy": "SKIP",
+    "position_policy": "EXCLUSIVE",
+    "call_exit": {
+      "mode": "ANY",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "hard-close-below-prior-low",
+          "left": "close",
+          "operator": "LT",
+          "right": "low",
+          "value": null,
+          "left_offset": 0,
+          "right_offset": 1
+        }
+      ],
+      "groups": [
+        {
+          "mode": "ALL",
+          "min_pass": 1,
+          "conditions": [
+            {
+              "id": "weak-hh-1",
+              "left": "high",
+              "operator": "LTE",
+              "right": "high",
+              "value": null,
+              "left_offset": 0,
+              "right_offset": 1
+            },
+            {
+              "id": "weak-ll-1",
+              "left": "low",
+              "operator": "LTE",
+              "right": "low",
+              "value": null,
+              "left_offset": 0,
+              "right_offset": 1
+            },
+            {
+              "id": "weak-hh-2",
+              "left": "high",
+              "operator": "LTE",
+              "right": "high",
+              "value": null,
+              "left_offset": 1,
+              "right_offset": 2
+            },
+            {
+              "id": "weak-ll-2",
+              "left": "low",
+              "operator": "LTE",
+              "right": "low",
+              "value": null,
+              "left_offset": 1,
+              "right_offset": 2
+            }
+          ],
+          "groups": []
+        }
+      ]
+    },
+    "put_exit": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [],
+      "groups": []
+    },
+    "call_alert_message": "1H multi-bar downtrend reversed: engulfing or confirmed doji/hammer",
+    "call_exit_alert_message": "1H bullish structure break: close below previous low or two consecutive lower highs/lows"
+  }
+}
