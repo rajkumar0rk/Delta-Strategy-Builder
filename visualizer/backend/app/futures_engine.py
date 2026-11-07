@@ -165,7 +165,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':13,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':14,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
@@ -229,7 +229,7 @@ def run_futures_backtest(req, progress=None):
     put_enabled=strategy.direction_mode in ('PUT','BOTH') and strategy.put_signal_mode!='ALERT_ONLY'
     cycles={'LONG':_cycle_states(_entry_behaviors(strategy,'CALL')) if call_enabled else {},
             'SHORT':_cycle_states(_entry_behaviors(strategy,'PUT')) if put_enabled else {}}
-    tf={'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'1D':1440}[strategy.timeframe]
+    tf={'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'4h':240,'1D':1440}[strategy.timeframe]
     def frozen_rule_stop(index,direction):
         """Freeze an entry stop from completed bars only (no future OHLC)."""
         rc=rule_risk
@@ -251,6 +251,36 @@ def run_futures_backtest(req, progress=None):
         else:
             stop=float(window.low.min() if sign==1 else window.high.max())-sign*rc.stop_buffer_atr*atr
         return stop if math.isfinite(stop) and stop>0 and (close-stop)*sign>0 else None
+
+    def ratchet_rule_trailing(pos, completed_bar):
+        """Only completed candle OHLC can tighten a rule-risk stop.
+
+        Invoked after this candle's original stop has been evaluated; the
+        new stop is effective from the NEXT candle. Never loosen stops.
+        """
+        if not (rule_risk and rule_risk.trailing_enabled and pos.get('rule_risk_position')):
+            return False
+        value=completed_bar.get(rule_risk.atr_indicator_id)
+        try:
+            atr=float(value)
+        except (ValueError,TypeError):
+            return False
+        if not math.isfinite(atr) or atr<=0:
+            return False
+        sign=1 if pos['direction']=='LONG' else -1
+        point=(float(completed_bar.close) if rule_risk.trailing_source=='CLOSE'
+               else float(completed_bar.high) if sign==1 else float(completed_bar.low))
+        extreme=pos.get('trail_extreme',pos['entry_price'])
+        extreme=max(extreme,point) if sign==1 else min(extreme,point)
+        pos['trail_extreme']=extreme
+        proposed=extreme-sign*rule_risk.trailing_atr_multiple*atr
+        units=proposed/cfg.tick_size
+        tick_stop=round((math.floor(units+1e-10) if sign==1 else math.ceil(units-1e-10))*cfg.tick_size,10)
+        if tick_stop<=0 or (tick_stop-pos['stop_price'])*sign<=0:
+            return False
+        pos['stop_price']=tick_stop
+        pos['trailing_active']=True
+        return True
 
     def fee(price,quantity=None):
         return price*(qty if quantity is None else quantity)*cfg.taker_fee_percent/100*(1+cfg.gst_percent/100)
@@ -278,6 +308,7 @@ def run_futures_backtest(req, progress=None):
           'mfe_percent':pos['mfe']*100,'mae_percent':pos['mae']*100,
           'stop_price':pos.get('stop_price'),'target_price':pos.get('target_price'),
           'risk_per_lot_usd':pos.get('risk_per_lot_usd'),
+          'initial_stop_price':pos.get('initial_stop_price'),
           'r_multiple_net':net/r_at_risk if r_at_risk>0 else None,
           'entry_fill_timing':pos.get('entry_fill_timing','OPEN'),
           'exit_reason':reason,'entry_execution_side':'ASK_PROXY' if sign==1 else 'BID_PROXY',
@@ -381,6 +412,13 @@ def run_futures_backtest(req, progress=None):
             px=_slipped(intrabar_candidate if intrabar_candidate is not None else float(row.open),
                         direction,True,effective_slippage_bps,cfg.tick_size,cfg.slippage_ticks)
             trade_qty=qty; stop_price=None; target_price=None; risk_per_lot=None; entry_rejection=None
+            if execution_setup and execution_setup.get('rule_risk') and rule_risk and rule_risk.stop_mode=='ATR' and rule_risk.atr_stop_anchor=='ENTRY_FILL':
+                frozen_atr=execution_setup['signal_atr']
+                if not (math.isfinite(frozen_atr) and frozen_atr>0):
+                    entry_rejection='ATR_NOT_READY'
+                else:
+                    sign=1 if direction=='LONG' else -1
+                    execution_setup['stop_price']=px-sign*rule_risk.stop_atr_multiple*frozen_atr
             if execution_setup:
                 raw_stop=float(execution_setup['stop_price'])
                 units=raw_stop/cfg.tick_size
@@ -398,8 +436,9 @@ def run_futures_backtest(req, progress=None):
                     trade_qty=lots*cfg.contract_btc
                     if not lots:entry_rejection=reason
                     multiple=execution_setup.get('reward_r_multiple',sizing.reward_r_multiple)
-                    target_price=target_at_r(px,stop_price,direction,multiple,cfg.tick_size)
-                    if target_price is None:entry_rejection='INVALID_R_TARGET'
+                    target_price=(target_at_r(px,stop_price,direction,multiple,cfg.tick_size)
+                                  if multiple is not None else None)
+                    if multiple is not None and target_price is None:entry_rejection='INVALID_R_TARGET'
                     if lots and sizing.size_mode=='FIXED' and lots*risk_per_lot>balance*sizing.equity_risk_percent/100*sizing.max_estimated_risk_multiple:
                         entry_rejection='FIXED_SIZE_RISK_EXCEEDED'
             margin=assumed_initial_margin_usd(px,trade_qty,cfg) if trade_qty>0 else float('inf')
@@ -439,7 +478,9 @@ def run_futures_backtest(req, progress=None):
                     'adaptive_module':execution_setup.get('module') if adaptive and execution_setup else None,
                     'adaptive_regime':execution_setup.get('regime') if adaptive and execution_setup else None,
                     'initial_r':abs(px-stop_price) if adaptive and stop_price is not None else None,
-                    'favorable_close':px,'trailing_active':False,
+                    'favorable_close':px,'trailing_active':False,'trail_extreme':px,
+                    'rule_risk_position':bool(execution_setup and execution_setup.get('rule_risk')),
+                    'initial_stop_price':stop_price,
                     'entry_fill_timing':'INTRABAR_ESTIMATED' if intrabar_candidate is not None else 'OPEN',
                     'mfe':0.0,'mae':0.0,
                     'lifecycle_provenance':dict(lifecycle_snapshot or {})}
@@ -487,6 +528,10 @@ def run_futures_backtest(req, progress=None):
                     close(position,ts,worst,'ESTIMATED_MARGIN_BREACH')
                     position=None;closed=True
             else:
+                if ratchet_rule_trailing(position,row):
+                    decisions.append({'timestamp':ts.isoformat(),'kind':'TRAIL_UPDATE',
+                        'direction':position['direction'],'passed':True,
+                        'reason':'RULE_ATR_RATCHET','stop_price':position['stop_price']})
                 if strategy.risk.max_hold_minutes is not None and (ts-pd.Timestamp(position['entry_time'])).total_seconds()/60>=strategy.risk.max_hold_minutes:
                     pending=('CLOSE','TIME_STOP')
                 elif strategy.risk.close_at_session_end and _session_end_due(ts,strategy.session,tf):
@@ -624,7 +669,9 @@ def run_futures_backtest(req, progress=None):
                                           'reason':'RULE_RISK_NO_VALID_STOP'})
                         pending=None;pending_lifecycle_id=None
                         continue
+                    snapshot=frame.iloc[i].get(rule_risk.atr_indicator_id)
                     pending_setup={'stop_price':frozen,'rule_risk':True,
+                                   'signal_atr':float(snapshot) if snapshot is not None else float('nan'),
                                    'reward_r_multiple':rule_risk.reward_r_multiple}
                 if pullback:
                     pending_setup=dict(setup_signals[selected[0]])
@@ -657,7 +704,7 @@ def run_futures_backtest(req, progress=None):
             'entry_fee_usd':position['entry_fee'],'funding_usd':position['funding_usd'],
             'quantity':position.get('quantity',qty),'stop_price':position.get('stop_price'),
             'target_price':position.get('target_price'),**position['lifecycle_provenance'],'marked_not_realized':True,'last_candle_close':last_close,
-            'estimated_unrealized_pnl_usd':(last_close-position['entry_price'])*qty*
+            'estimated_unrealized_pnl_usd':(last_close-position['entry_price'])*position.get('quantity',qty)*
                 (1 if position['direction']=='LONG' else -1),
             'estimated_exit_fee_usd':fee(last_close,position.get('quantity',qty))}
     wins=sum(t['net_pnl_usd']>0 for t in trades)
@@ -745,6 +792,7 @@ def run_futures_backtest(req, progress=None):
         'symbol':cfg.symbol,'leverage':cfg.leverage,'margin_mode':cfg.margin_mode,
         'pullback_enabled':bool(cfg.pullback.enabled),
         'adaptive_enabled':bool(adaptive),
+        'rule_risk_atr_trailing_enabled':bool(rule_risk and rule_risk.trailing_enabled),
         'adaptive_regime_transitions':planner.regime_log if adaptive else [],
         'adaptive_regime_counts':({state:sum(entry[1]==state for entry in planner.regime_log)
             for state in ('TREND_UP','TREND_DOWN','COMPRESSION','RANGE','TRANSITION','EXTREME_VOLATILITY')}
