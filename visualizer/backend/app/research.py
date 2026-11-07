@@ -9,6 +9,7 @@ from .engine import run_backtest
 from .config import result_root
 from .robustness_v163 import analyze_trade_robustness
 from .trade_positions import closed_positions
+from .parameter_stability import parameter_neighborhoods
 
 UTC = timezone.utc
 
@@ -243,6 +244,7 @@ def run_sweep(req: ResearchSweepRequest, progress: Callable[[str], None] | None 
     return {
         'kind': 'PARAMETER_SWEEP',
         'parameter_stability':stability,
+        'parameter_neighborhoods':parameter_neighborhoods(req.dimensions, rows, min_trades=req.stability_min_trades),
         'count': len(rows),
         'dimensions': [d.model_dump() for d in req.dimensions],
         'rows': rows,
