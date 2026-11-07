@@ -1483,7 +1483,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 option_force_exit_missed_quotes+=1
 
         if pos is not None and strategy.risk.close_at_session_end and _session_end_due(
-                ts, strategy.session, {'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'1D':1440}[strategy.timeframe]):
+                ts, strategy.session, {'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'4h':240,'1D':1440}[strategy.timeframe]):
             q = first_valid_exit_quote(pos, ts.isoformat())
             if q is not None:
                 close_position(q['timestamp'], _executable_exit_price(pos, q, strategy), 'SESSION_END_EXIT')
@@ -1603,7 +1603,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         # Opt-in forced end exit: never enter on the very last in-session
         # completed candle; an entry here could not be closed at this boundary.
         if strategy.risk.close_at_session_end and _session_end_due(
-                ts, strategy.session, {'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'1D':1440}[strategy.timeframe]):
+                ts, strategy.session, {'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'4h':240,'1D':1440}[strategy.timeframe]):
             continue
 
         # V12: shared NO-TRADE applies to both directions; directional NO-TRADE

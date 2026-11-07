@@ -28,7 +28,7 @@ class IndicatorInstance(BaseModel):
     # `strategy` means calculate on the strategy timeframe. Higher-timeframe
     # indicators are calculated only from fully completed aggregated candles and
     # forward-filled onto later lower-timeframe candles (no look-ahead).
-    timeframe: Literal["strategy", "5m", "10m", "15m", "30m", "1h", "1D"] = "strategy"
+    timeframe: Literal["strategy", "5m", "10m", "15m", "30m", "1h", "4h", "1D"] = "strategy"
 
     @model_validator(mode="after")
     def validate_day_levels(self):
@@ -660,7 +660,15 @@ class FuturesRuleRiskConfig(BaseModel):
     atr_indicator_id: str = "atr14_5m"
     stop_atr_multiple: float = Field(default=1.5, gt=0, le=20)
     stop_buffer_atr: float = Field(default=0.1, ge=0, le=20)
-    reward_r_multiple: float = Field(default=2.0, gt=0, le=100)
+    # Backward-compatible: existing rule-risk plans retain their R target.
+    # None disables the price target for pure trend-following systems.
+    reward_r_multiple: float | None = Field(default=2.0, gt=0, le=100)
+    # ATR initial stop may be anchored to the fill instead of signal close.
+    # Both modes use only the last confirmed signal-candle ATR.
+    atr_stop_anchor: Literal["SIGNAL_CLOSE", "ENTRY_FILL"] = "SIGNAL_CLOSE"
+    trailing_enabled: bool = False
+    trailing_atr_multiple: float = Field(default=3.0, gt=0, le=100)
+    trailing_source: Literal["HIGH_LOW", "CLOSE"] = "HIGH_LOW"
     size_mode: Literal["RISK_EQUITY", "FIXED"] = "RISK_EQUITY"
     equity_risk_percent: float = Field(default=0.5, gt=0, le=100)
     max_lots: int = Field(default=100000, ge=1, le=100000)
@@ -710,7 +718,7 @@ class StrategyConfig(BaseModel):
     # Local-clock option close, opt-in and independently configurable from entry sessions.
     options_force_exit_time: str | None = None
     pattern_trade: PatternTradeConfig = Field(default_factory=PatternTradeConfig)
-    timeframe: Literal["5m", "10m", "15m", "30m", "1h", "1D"] = "5m"
+    timeframe: Literal["5m", "10m", "15m", "30m", "1h", "4h", "1D"] = "5m"
     direction_mode: Literal["CALL", "PUT", "BOTH"] = "BOTH"
     call_action: Literal["BUY", "SELL"] = "BUY"
     put_action: Literal["BUY", "SELL"] = "BUY"
@@ -801,7 +809,7 @@ class StrategyConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_strategy_references(self):
-        tf_minutes = {"5m":5,"10m":10,"15m":15,"30m":30,"1h":60,"1D":1440}
+        tf_minutes = {"5m":5,"10m":10,"15m":15,"30m":30,"1h":60,"4h":240,"1D":1440}
         base = tf_minutes[self.timeframe]
         for indicator in self.indicators:
             if indicator.timeframe == "strategy":
@@ -862,10 +870,13 @@ class StrategyConfig(BaseModel):
             if self.futures.stop_loss_percent is not None or self.futures.take_profit_percent is not None:
                 raise ValueError("Futures rule_risk uses dynamic stops; both fixed-percent fields must be null")
             rcfg = self.futures.rule_risk
-            if rcfg.stop_mode == "ATR" or rcfg.stop_buffer_atr > 0:
+            if rcfg.atr_stop_anchor == "ENTRY_FILL" and rcfg.stop_mode != "ATR":
+                raise ValueError("ENTRY_FILL ATR stop anchor requires stop_mode ATR")
+            if rcfg.stop_mode == "ATR" or rcfg.stop_buffer_atr > 0 or rcfg.trailing_enabled:
                 found = next((item for item in self.indicators if item.id == rcfg.atr_indicator_id), None)
-                if found is None or found.kind != "ATR" or found.chart_only:
-                    raise ValueError("Futures rule_risk requires a non-chart-only ATR indicator with matching atr_indicator_id")
+                if (found is None or found.kind != "ATR" or found.chart_only
+                        or found.timeframe not in ("strategy", self.timeframe)):
+                    raise ValueError("Futures rule_risk requires a non-chart-only strategy-timeframe ATR indicator with matching atr_indicator_id")
         if self.market_type != "FUTURES" and self.futures.adaptive.enabled:
             raise ValueError("AMRS only supports market_type FUTURES")
         if self.market_type == "FUTURES" and self.futures.adaptive.enabled:
@@ -1081,7 +1092,7 @@ class BacktestRequest(DatasetSelection):
 class PreviewRequest(DatasetSelection):
     start: str
     end: str
-    timeframe: Literal["5m", "10m", "15m", "30m", "1h", "1D"] = "5m"
+    timeframe: Literal["5m", "10m", "15m", "30m", "1h", "4h", "1D"] = "5m"
     indicators: list[IndicatorInstance] = Field(default_factory=list)
     strategy: StrategyConfig | None = None
 

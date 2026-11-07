@@ -277,7 +277,7 @@ def _formula(frame: pd.DataFrame, expression: str) -> pd.Series:
     return pd.Series(float(value), index=frame.index)
 
 
-_TF_MINUTES = {'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'1D':1440}
+_TF_MINUTES = {'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'4h':240,'1D':1440}
 
 def _aggregate_completed(frame: pd.DataFrame, base_tf: str, target_tf: str) -> pd.DataFrame:
     """Aggregate completed candles on fixed UTC clock boundaries.

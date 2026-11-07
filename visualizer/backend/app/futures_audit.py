@@ -31,7 +31,7 @@ def audit_futures_parity(result:dict, chart:dict, *, timeframe_minutes:int) -> d
     """
     if result.get("strategy",{}).get("market_type")!="FUTURES":
         raise ValueError("Futures parity audit only accepts market_type=FUTURES")
-    if timeframe_minutes not in (5,10,15,30,60,1440):
+    if timeframe_minutes not in (5,10,15,30,60,240,1440):
         raise ValueError("Unsupported futures timeframe")
     trades=result.get("trades") or []
     from .futures_engine import _slipped
