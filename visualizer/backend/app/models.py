@@ -870,9 +870,6 @@ class StrategyConfig(BaseModel):
             if self.futures.stop_loss_percent is not None or self.futures.take_profit_percent is not None:
                 raise ValueError("Futures rule_risk uses dynamic stops; both fixed-percent fields must be null")
             rcfg = self.futures.rule_risk
-            if rcfg.trailing_enabled and rcfg.stop_mode != "ATR" and rcfg.stop_buffer_atr == 0:
-                # ATR is still required when the starting stop is structural.
-                pass
             if rcfg.atr_stop_anchor == "ENTRY_FILL" and rcfg.stop_mode != "ATR":
                 raise ValueError("ENTRY_FILL ATR stop anchor requires stop_mode ATR")
             if rcfg.stop_mode == "ATR" or rcfg.stop_buffer_atr > 0 or rcfg.trailing_enabled:
