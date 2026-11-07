@@ -657,9 +657,15 @@ class FuturesRuleRiskConfig(BaseModel):
     enabled: bool = False
     stop_mode: Literal["SWING", "SIGNAL_CANDLE", "ATR"] = "SWING"
     swing_lookback_bars: int = Field(default=3, ge=1, le=200)
+    # 0 = completed signal candle, i.e. the previous candle at NEXT-OPEN entry;
+    # 1 = the candle immediately preceding that signal, etc.
+    stop_candle_offset_bars: int = Field(default=0, ge=0, le=200)
     atr_indicator_id: str = "atr14_5m"
     stop_atr_multiple: float = Field(default=1.5, gt=0, le=20)
     stop_buffer_atr: float = Field(default=0.1, ge=0, le=20)
+    # Reject excessive moves from the frozen signal close to the next bar OPEN.
+    # None preserves legacy behavior (protective-stop validation still applies).
+    max_entry_gap_percent: float | None = Field(default=None, ge=0, le=100)
     # Backward-compatible: existing rule-risk plans retain their R target.
     # None disables the price target for pure trend-following systems.
     reward_r_multiple: float | None = Field(default=2.0, gt=0, le=100)
@@ -679,6 +685,8 @@ class FuturesRuleRiskConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_take_profit_mode(self):
+        if self.stop_candle_offset_bars and self.stop_mode != "SIGNAL_CANDLE":
+            raise ValueError("stop_candle_offset_bars requires stop_mode=SIGNAL_CANDLE")
         if self.take_profit_points is not None and self.reward_r_multiple is not None:
             raise ValueError(
                 "Futures rule_risk take_profit_points requires reward_r_multiple=null; "
