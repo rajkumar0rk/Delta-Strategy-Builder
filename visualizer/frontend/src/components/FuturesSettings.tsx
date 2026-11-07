@@ -19,7 +19,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   max_estimated_risk_multiple:1};
  const ruleDefaults={enabled:false,stop_mode:'SWING' as const,swing_lookback_bars:3,
   atr_indicator_id:'atr14_5m',stop_atr_multiple:1.5,stop_buffer_atr:0.1,
-  reward_r_multiple:2,atr_stop_anchor:'SIGNAL_CLOSE' as const,
+  reward_r_multiple:2,take_profit_points:null as number|null,atr_stop_anchor:'SIGNAL_CLOSE' as const,
   trailing_enabled:false,trailing_atr_multiple:3,trailing_source:'HIGH_LOW' as const,
   size_mode:'RISK_EQUITY' as const,equity_risk_percent:0.5,
   max_lots:100000,max_estimated_risk_multiple:1};
@@ -112,11 +112,21 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
      <option value="SIGNAL_CLOSE">Completed signal close (legacy)</option>
      <option value="ENTRY_FILL">Executed entry price</option>
    </select></label>
-   <label className="switch"><input type="checkbox" checked={ruleRisk.reward_r_multiple!=null}
-     onChange={e=>setRuleRisk({reward_r_multiple:e.target.checked?2:null})}/>Enable fixed R target</label>
-   {ruleRisk.reward_r_multiple!=null&&<label>Target multiple of entry-stop distance
-    <input type="number" min="0.01" step="0.1" value={ruleRisk.reward_r_multiple}
-      onChange={e=>setRuleRisk({reward_r_multiple:Number(e.target.value)})}/></label>}
+   <label>Take profit mode<select value={ruleRisk.take_profit_points!=null?'POINTS':ruleRisk.reward_r_multiple!=null?'R_MULTIPLE':'NONE'}
+    onChange={e=>{const mode=e.target.value;setRuleRisk({
+      reward_r_multiple:mode==='R_MULTIPLE'?2:null,
+      take_profit_points:mode==='POINTS'?200:null
+    });}}>
+    <option value="R_MULTIPLE">Target as R multiple (legacy)</option>
+    <option value="POINTS">Fixed BTCUSD price points</option>
+    <option value="NONE">No take profit target</option>
+   </select></label>
+   {ruleRisk.take_profit_points!=null&&<label>Fixed target distance (BTCUSD points)
+     <input type="number" min="0.01" step="0.5" value={ruleRisk.take_profit_points}
+       onChange={e=>setRuleRisk({take_profit_points:Number(e.target.value)})}/></label>}
+   {ruleRisk.take_profit_points==null&&ruleRisk.reward_r_multiple!=null&&<label>Target multiple of entry-stop distance
+     <input type="number" min="0.01" step="0.1" value={ruleRisk.reward_r_multiple}
+       onChange={e=>setRuleRisk({reward_r_multiple:Number(e.target.value)})}/></label>}
    <label className="switch"><input type="checkbox" checked={ruleRisk.trailing_enabled}
      onChange={e=>setRuleRisk({trailing_enabled:e.target.checked})}/>Enable dynamic ATR trailing stop</label>
    {ruleRisk.trailing_enabled&&<>

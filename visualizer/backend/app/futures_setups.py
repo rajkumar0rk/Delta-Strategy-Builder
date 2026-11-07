@@ -163,6 +163,30 @@ def risk_sized_lots(entry_price, stop_fill_price, direction, equity, futures_cfg
     return (lo, '', per_lot_loss)
 
 
+
+def target_at_points(entry_price, points, direction, tick_size):
+    """A fixed BTCUSD price-distance target from the actual execution fill.
+
+    Round conservatively toward the entry. Reject invalid/tick-incompatible
+    targets rather than treating them as already satisfied.
+    """
+    if not all(math.isfinite(float(v)) and float(v) > 0
+               for v in (entry_price, points, tick_size)):
+        return None
+    sign = 1 if direction == 'LONG' else -1 if direction == 'SHORT' else 0
+    if not sign:
+        return None
+    raw = entry_price + sign * points
+    if raw <= 0:
+        return None
+    units = raw / tick_size
+    rounded = (math.floor(units + 1e-10) if sign == 1
+               else math.ceil(units - 1e-10)) * tick_size
+    if (rounded - entry_price) * sign <= 0:
+        return None
+    return round(rounded, 10)
+
+
 def target_at_r(entry_price, stop_price, direction, r_multiple, tick_size):
     """Round the target toward entry so the result never exaggerates reward."""
     distance = (entry_price - stop_price) if direction == 'LONG' else (stop_price - entry_price)
