@@ -77,3 +77,77 @@ def test_reference_candle_example_is_importable_and_uses_3r():
     assert strategy.futures.rule_risk.take_profit_points is None
     assert strategy.futures.stop_loss_percent is None
     assert strategy.futures.take_profit_percent is None
+
+
+def _run_reference_backtest(tmp_path, monkeypatch, *, offset: int, gap_limit):
+    """End-to-end signal-close snapshot, prior-candle offset and next-open fills."""
+    import csv
+
+    import pandas as pd
+
+    from app.engine import run_backtest
+    from app.models import BacktestRequest, Condition, RuleGroup
+
+    data = tmp_path / "data" / "sample"
+    data.mkdir(parents=True)
+    monkeypatch.setenv("STRATEGY_LAB_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("STRATEGY_LAB_RESULT_ROOT", str(tmp_path / "results"))
+    monkeypatch.setenv("STRATEGY_LAB_CACHE_ROOT", str(tmp_path / "cache"))
+    idx = pd.date_range("2026-01-01T00:05:00Z", periods=140, freq="5min")
+    rows = []
+    for i, timestamp in enumerate(idx):
+        price = 10000 + (i * 3 if i < 100 else 300 - (i - 100) * 18)
+        rows.append({"timestamp": timestamp.isoformat(), "open": price,
+                     "high": price + 9, "low": price - 9, "close": price + 1,
+                     "volume": 100})
+    with (data / "underlying_bars.csv").open("w", newline="", encoding="utf-8") as out:
+        writer = csv.DictWriter(out, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+    strategy = StrategyConfig(
+        market_type="FUTURES", direction_mode="CALL", timeframe="5m",
+        call_entry=RuleGroup(conditions=[
+            Condition(id="entry", left="close", operator="GT", value=10040)]))
+    strategy.futures.funding_mode = "EXCLUDE_WITH_WARNING"
+    strategy.futures.stop_loss_percent = None
+    strategy.futures.take_profit_percent = None
+    strategy.futures.slippage_bps = 0
+    strategy.futures.slippage_ticks = 0
+    rc = strategy.futures.rule_risk
+    rc.enabled = True
+    rc.stop_mode = "SIGNAL_CANDLE"
+    rc.stop_candle_offset_bars = offset
+    rc.stop_buffer_atr = 0
+    rc.max_entry_gap_percent = gap_limit
+    rc.reward_r_multiple = 3
+    strategy.risk.starting_balance_usd = 1000
+    strategy.risk.max_daily_loss_percent = None
+    return run_backtest(BacktestRequest(
+        dataset_id="sample", start="2026-01-01T00:05:00Z",
+        end="2026-01-01T11:40:00Z", strategy=strategy))
+
+
+def test_preceding_candle_changes_frozen_stop_and_3r(tmp_path, monkeypatch):
+    current = _run_reference_backtest(tmp_path / "current", monkeypatch,
+                                      offset=0, gap_limit=None)
+    earlier = _run_reference_backtest(tmp_path / "earlier", monkeypatch,
+                                      offset=1, gap_limit=None)
+    assert current["metrics"]["trades"] >= 1
+    assert earlier["metrics"]["trades"] >= 1
+    a, b = current["trades"][0], earlier["trades"][0]
+    assert a["entry_price"] == b["entry_price"]
+    assert a["initial_stop_price"] - b["initial_stop_price"] == pytest.approx(3)
+    assert a["target_price"] == pytest.approx(
+        a["entry_price"] + 3 * (a["entry_price"] - a["initial_stop_price"]))
+    assert b["target_price"] == pytest.approx(
+        b["entry_price"] + 3 * (b["entry_price"] - b["initial_stop_price"]))
+
+
+def test_gap_guard_rejects_next_open_without_affecting_legacy(tmp_path, monkeypatch):
+    baseline = _run_reference_backtest(tmp_path / "baseline", monkeypatch,
+                                       offset=0, gap_limit=None)
+    guarded = _run_reference_backtest(tmp_path / "guarded", monkeypatch,
+                                      offset=0, gap_limit=0.01)
+    assert baseline["metrics"]["trades"] >= 1
+    assert guarded["metrics"]["trades"] == 0
