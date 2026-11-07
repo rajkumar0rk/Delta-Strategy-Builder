@@ -1,5 +1,15 @@
 # Copy-paste prompt — BTCUSD Futures Strategy Lab JSON
 
+## Completed reference-candle stop and entry-gap guard (November 2026)
+
+Use the opt-in existing `futures.rule_risk` planner; do not invent another futures mode.
+- `stop_mode=SIGNAL_CANDLE`, `stop_candle_offset_bars=0`: the completed entry signal candle (the **previous** candle when the subsequent candle OPEN fills the entry). Offset 1 selects the completed candle immediately before that signal. Valid offsets: 0..200, available history required. Nonzero offset with SWING or ATR mode is invalid.
+- `max_entry_gap_percent=null`: legacy no-gap-limit behavior. Otherwise 0..100 is the maximum absolute distance in percent between the frozen signal CLOSE and adverse-slippage-adjusted next OPEN fill. Reject larger gaps. Stop-protectiveness, risk budget, whole-lot sizing, margin, fees, and funding checks still apply.
+- `reward_r_multiple=3`, `take_profit_points=null`: target three times the **actual executed entry-to-frozen-stop** price difference, with conservative tick rounding. No guarantee of net 3R after fees, GST, slippage, stop gaps or liquidation. Existing stop-first same-candle convention applies.
+- Example: `visualizer/backend/examples/btc-futures-1h-previous-candle-3r.strategy.json`. A 1h EMA50/200 + ADX14/DMI trend filter and preceding-high/low close breakout is evaluated on completed 1h bars. Entry is next 1h OPEN; long SL at previous 1h candle low, short SL at its high; 3R target. Uses one-position-only and optional 0.5% next-open gap guard.
+- This is a deterministic OHLC simulation, not actual tick-sequenced exchange execution. Gap-fill limits do **not** cap stop losses. Existing serialized strategies default the new fields to `0` and `null` and keep their original behavior. Backtest cache version bumped to 179.
+
+
 ## Optional fixed-point BTCUSD Futures take-profit (November 2026)
 
 The existing opt-in generic `futures.rule_risk` execution supports three **mutually exclusive** target modes:
