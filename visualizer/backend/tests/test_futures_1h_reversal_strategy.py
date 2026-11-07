@@ -84,6 +84,14 @@ def test_downtrend_structure_is_mandatory():
     assert not evaluate_group(frame, 2, s.call_entry)["passed"]
 
 
+def test_previous_candle_must_be_red_even_if_structural_levels_decline():
+    s, frame = _evaluate(
+        _bar(98, 105, 95, 99),
+        down=_bar(94, 108, 90, 95),  # green candle despite lower highs/lows
+    )
+    assert not evaluate_group(frame, 2, s.call_entry)["passed"]
+
+
 def test_missing_previous_candles_cannot_enter():
     s = strategy()
     frame = pd.DataFrame([_bar(94, 109, 93, 107)], index=pd.date_range(
