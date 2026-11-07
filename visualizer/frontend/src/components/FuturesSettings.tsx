@@ -17,7 +17,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   swing_lookback_bars:3,stop_buffer_atr:0.1,breakout_buffer_points:0,reward_r_multiple:2,
   size_mode:'RISK_EQUITY' as const,equity_risk_percent:0.5,max_lots:100000,
   max_estimated_risk_multiple:1};
- const ruleDefaults={enabled:false,stop_mode:'SWING' as const,swing_lookback_bars:3,
+ const ruleDefaults={enabled:false,stop_mode:'SWING' as const,swing_lookback_bars:3,stop_candle_offset_bars:0,max_entry_gap_percent:null as number|null,
   atr_indicator_id:'atr14_5m',stop_atr_multiple:1.5,stop_buffer_atr:0.1,
   reward_r_multiple:2,take_profit_points:null as number|null,atr_stop_anchor:'SIGNAL_CLOSE' as const,
   trailing_enabled:false,trailing_atr_multiple:3,trailing_source:'HIGH_LOW' as const,
@@ -100,9 +100,22 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   <label className="switch"><input type="checkbox" checked={ruleRisk.enabled}
    onChange={e=>setRuleRisk({enabled:e.target.checked})}/>Enable dynamic stop, R target and risk sizing</label>
   {ruleRisk.enabled&&<div className="form-grid">
-   <label>Stop source<select value={ruleRisk.stop_mode} onChange={e=>setRuleRisk({stop_mode:e.target.value as typeof ruleRisk.stop_mode})}>
+   <label>Stop source<select value={ruleRisk.stop_mode} onChange={e=>setRuleRisk({stop_mode:e.target.value as typeof ruleRisk.stop_mode,stop_candle_offset_bars:0})}>
     <option value="SWING">Swing extreme</option><option value="SIGNAL_CANDLE">Signal candle</option><option value="ATR">ATR distance</option></select></label>
-   {ruleNumber('swing_lookback_bars','Completed candles in stop window',1,1)}
+   {ruleRisk.stop_mode==='SWING'&&ruleNumber('swing_lookback_bars','Completed candles in stop window',1,1)}
+   {ruleRisk.stop_mode==='SIGNAL_CANDLE'&&<label>Stop candle reference<select
+     value={ruleRisk.stop_candle_offset_bars||0}
+     onChange={e=>setRuleRisk({stop_candle_offset_bars:Number(e.target.value)})}>
+     <option value={0}>Signal candle (previous candle at entry)</option>
+     <option value={1}>One candle before signal (two candles before entry)</option>
+     <option value={2}>Two candles before signal</option>
+     <option value={3}>Three candles before signal</option>
+   </select></label>}
+   <label>Max next-open gap from signal close (%) — blank disables
+     <input type="number" min="0" max="100" step="0.1" placeholder="No gap limit"
+       value={ruleRisk.max_entry_gap_percent??''}
+       onChange={e=>setRuleRisk({max_entry_gap_percent:e.target.value===''?null:Number(e.target.value)})}/>
+   </label>
    <label>ATR indicator ID<input value={ruleRisk.atr_indicator_id} onChange={e=>setRuleRisk({atr_indicator_id:e.target.value})}/></label>
    {ruleNumber('stop_atr_multiple','ATR stop distance (ATR mode)',0.01,0.1)}
    {ruleNumber('stop_buffer_atr','Structure stop ATR buffer',0,0.1)}
