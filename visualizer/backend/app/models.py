@@ -717,6 +717,9 @@ class FuturesConfig(BaseModel):
             raise ValueError("Futures force_exit_time must be a local 24-hour HH:MM clock")
         if self.take_profit_percent is not None and self.take_profit_percent>=100:
             raise ValueError("Futures short take-profit must be below 100% of entry price")
+        if (self.rule_risk.enabled and self.rule_risk.take_profit_points is not None
+                and self.rule_risk.take_profit_points + 1e-12 < self.tick_size):
+            raise ValueError("Futures rule_risk take_profit_points must be at least one tick_size")
         if self.maintenance_margin_percent >= 100 / self.leverage:
             raise ValueError("Futures maintenance margin must be below 100 / leverage")
         return self
