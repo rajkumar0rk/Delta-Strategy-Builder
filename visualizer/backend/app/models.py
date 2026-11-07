@@ -666,6 +666,17 @@ class FuturesRuleRiskConfig(BaseModel):
     # Reject excessive moves from the frozen signal close to the next bar OPEN.
     # None preserves legacy behavior (protective-stop validation still applies).
     max_entry_gap_percent: float | None = Field(default=None, ge=0, le=100)
+    # Optional entry-to-stop distance caps. Both are measured from the
+    # simulated entry fill and rounded protective stop, before fees/slippage.
+    max_stop_distance_percent: float | None = Field(default=None, gt=0, le=100)
+    max_stop_distance_atr: float | None = Field(default=None, gt=0, le=100)
+    # Arm structural/condition exits only once a *completed candle CLOSE*
+    # has achieved the given initial price-risk multiple. Zero = legacy.
+    condition_exit_activation_r: float = Field(default=0.0, ge=0, le=100)
+    # Ratchet to entry +/- offset ticks after a completed CLOSE reaches R.
+    # None means disabled. The adjusted stop becomes active next candle.
+    breakeven_activation_r: float | None = Field(default=None, gt=0, le=100)
+    breakeven_offset_ticks: int = Field(default=0, ge=0, le=1000)
     # Backward-compatible: existing rule-risk plans retain their R target.
     # None disables the price target for pure trend-following systems.
     reward_r_multiple: float | None = Field(default=2.0, gt=0, le=100)
@@ -687,6 +698,8 @@ class FuturesRuleRiskConfig(BaseModel):
     def validate_take_profit_mode(self):
         if self.stop_candle_offset_bars and self.stop_mode != "SIGNAL_CANDLE":
             raise ValueError("stop_candle_offset_bars requires stop_mode=SIGNAL_CANDLE")
+        if self.breakeven_offset_ticks and self.breakeven_activation_r is None:
+            raise ValueError("breakeven_offset_ticks requires breakeven_activation_r")
         if self.take_profit_points is not None and self.reward_r_multiple is not None:
             raise ValueError(
                 "Futures rule_risk take_profit_points requires reward_r_multiple=null; "
@@ -895,7 +908,8 @@ class StrategyConfig(BaseModel):
             rcfg = self.futures.rule_risk
             if rcfg.atr_stop_anchor == "ENTRY_FILL" and rcfg.stop_mode != "ATR":
                 raise ValueError("ENTRY_FILL ATR stop anchor requires stop_mode ATR")
-            if rcfg.stop_mode == "ATR" or rcfg.stop_buffer_atr > 0 or rcfg.trailing_enabled:
+            if (rcfg.stop_mode == "ATR" or rcfg.stop_buffer_atr > 0
+                    or rcfg.trailing_enabled or rcfg.max_stop_distance_atr is not None):
                 found = next((item for item in self.indicators if item.id == rcfg.atr_indicator_id), None)
                 if (found is None or found.kind != "ATR" or found.chart_only
                         or found.timeframe not in ("strategy", self.timeframe)):
