@@ -2,7 +2,7 @@
   "schema_version": 15,
   "app": "BTC Strategy Lab",
   "strategy": {
-    "name": "BTC Futures 4H EMA200 / 1H Donchian55 ADX25 — Rule ATR Trend",
+    "name": "BTCUSD Futures 4H EMA200 1H Donchian55 — Fixed TP 200 points",
     "market_type": "FUTURES",
     "timeframe": "1h",
     "direction_mode": "BOTH",
@@ -49,7 +49,8 @@
         "size_mode": "RISK_EQUITY",
         "equity_risk_percent": 0.5,
         "max_lots": 100000,
-        "max_estimated_risk_multiple": 1
+        "max_estimated_risk_multiple": 1,
+        "take_profit_points": 200
       }
     },
     "indicators": [
