@@ -491,26 +491,27 @@ def run_futures_backtest(req, progress=None):
                                 entry_rejection='RULE_RISK_STOP_ATR_NOT_READY'
                             elif stop_distance/frozen_atr>rule_risk.max_stop_distance_atr+1e-12:
                                 entry_rejection='RULE_RISK_STOP_TOO_WIDE_ATR'
-                    stop_proxy=_slipped(stop_price,direction,False,effective_slippage_bps,cfg.tick_size,cfg.slippage_ticks)
-                    remaining_day_risk=remaining_daily_risk(
-                        daily['start_balance'],daily['realized'],
-                        strategy.risk.max_daily_loss_percent)
-                    sizing=rule_risk if rule_risk is not None and execution_setup.get('rule_risk') else pullback
-                    lots,reason,risk_per_lot=risk_sized_lots(
-                        px,stop_proxy,direction,balance,cfg,sizing,max_risk_usd=remaining_day_risk)
-                    trade_qty=lots*cfg.contract_btc
-                    if not lots:entry_rejection=reason
-                    multiple=execution_setup.get('reward_r_multiple',sizing.reward_r_multiple)
-                    target_points=execution_setup.get('take_profit_points')
-                    if target_points is not None:
-                        target_price=target_at_points(px,target_points,direction,cfg.tick_size)
-                        if target_price is None:entry_rejection='INVALID_POINT_TARGET'
-                    else:
-                        target_price=(target_at_r(px,stop_price,direction,multiple,cfg.tick_size)
-                                      if multiple is not None else None)
-                        if multiple is not None and target_price is None:entry_rejection='INVALID_R_TARGET'
-                    if lots and sizing.size_mode=='FIXED' and lots*risk_per_lot>balance*sizing.equity_risk_percent/100*sizing.max_estimated_risk_multiple:
-                        entry_rejection='FIXED_SIZE_RISK_EXCEEDED'
+                    if entry_rejection is None:
+                        stop_proxy=_slipped(stop_price,direction,False,effective_slippage_bps,cfg.tick_size,cfg.slippage_ticks)
+                        remaining_day_risk=remaining_daily_risk(
+                            daily['start_balance'],daily['realized'],
+                            strategy.risk.max_daily_loss_percent)
+                        sizing=rule_risk if rule_risk is not None and execution_setup.get('rule_risk') else pullback
+                        lots,reason,risk_per_lot=risk_sized_lots(
+                            px,stop_proxy,direction,balance,cfg,sizing,max_risk_usd=remaining_day_risk)
+                        trade_qty=lots*cfg.contract_btc
+                        if not lots:entry_rejection=reason
+                        multiple=execution_setup.get('reward_r_multiple',sizing.reward_r_multiple)
+                        target_points=execution_setup.get('take_profit_points')
+                        if target_points is not None:
+                            target_price=target_at_points(px,target_points,direction,cfg.tick_size)
+                            if target_price is None:entry_rejection='INVALID_POINT_TARGET'
+                        else:
+                            target_price=(target_at_r(px,stop_price,direction,multiple,cfg.tick_size)
+                                          if multiple is not None else None)
+                            if multiple is not None and target_price is None:entry_rejection='INVALID_R_TARGET'
+                        if lots and sizing.size_mode=='FIXED' and lots*risk_per_lot>balance*sizing.equity_risk_percent/100*sizing.max_estimated_risk_multiple:
+                            entry_rejection='FIXED_SIZE_RISK_EXCEEDED'
             margin=assumed_initial_margin_usd(px,trade_qty,cfg) if trade_qty>0 else float('inf')
             start_fee=fee(px,trade_qty) if trade_qty>0 else 0.0
             if entry_rejection:
