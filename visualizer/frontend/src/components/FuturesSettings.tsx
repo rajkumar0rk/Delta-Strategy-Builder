@@ -18,6 +18,8 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   size_mode:'RISK_EQUITY' as const,equity_risk_percent:0.5,max_lots:100000,
   max_estimated_risk_multiple:1};
  const ruleDefaults={enabled:false,stop_mode:'SWING' as const,swing_lookback_bars:3,stop_candle_offset_bars:0,max_entry_gap_percent:null as number|null,
+  max_stop_distance_percent:null as number|null,max_stop_distance_atr:null as number|null,
+  condition_exit_activation_r:0,breakeven_activation_r:null as number|null,breakeven_offset_ticks:0,
   atr_indicator_id:'atr14_5m',stop_atr_multiple:1.5,stop_buffer_atr:0.1,
   reward_r_multiple:2,take_profit_points:null as number|null,atr_stop_anchor:'SIGNAL_CLOSE' as const,
   trailing_enabled:false,trailing_atr_multiple:3,trailing_source:'HIGH_LOW' as const,
@@ -116,6 +118,21 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
        value={ruleRisk.max_entry_gap_percent??''}
        onChange={e=>setRuleRisk({max_entry_gap_percent:e.target.value===''?null:Number(e.target.value)})}/>
    </label>
+   <label>Max initial stop distance (% of fill) — blank disables
+     <input type="number" min="0.01" max="100" step="0.1" value={ruleRisk.max_stop_distance_percent??''}
+       onChange={e=>setRuleRisk({max_stop_distance_percent:e.target.value===''?null:Number(e.target.value)})}/></label>
+   <label>Max initial stop distance (× frozen ATR) — blank disables
+     <input type="number" min="0.01" max="100" step="0.25" value={ruleRisk.max_stop_distance_atr??''}
+       onChange={e=>setRuleRisk({max_stop_distance_atr:e.target.value===''?null:Number(e.target.value)})}/></label>
+   <label>Condition exit activation (completed-close R; 0 = immediate)
+     <input type="number" min="0" max="100" step="0.25" value={ruleRisk.condition_exit_activation_r}
+       onChange={e=>setRuleRisk({condition_exit_activation_r:Number(e.target.value)})}/></label>
+   <label>Move stop to breakeven after completed close reaches R — blank disables
+     <input type="number" min="0.01" max="100" step="0.25" value={ruleRisk.breakeven_activation_r??''}
+       onChange={e=>setRuleRisk({breakeven_activation_r:e.target.value===''?null:Number(e.target.value)})}/></label>
+   <label>Breakeven stop offset (favorable ticks)
+     <input type="number" min="0" max="1000" step="1" disabled={ruleRisk.breakeven_activation_r==null}
+       value={ruleRisk.breakeven_offset_ticks} onChange={e=>setRuleRisk({breakeven_offset_ticks:Number(e.target.value)})}/></label>
    <label>ATR indicator ID<input value={ruleRisk.atr_indicator_id} onChange={e=>setRuleRisk({atr_indicator_id:e.target.value})}/></label>
    {ruleNumber('stop_atr_multiple','ATR stop distance (ATR mode)',0.01,0.1)}
    {ruleNumber('stop_buffer_atr','Structure stop ATR buffer',0,0.1)}
