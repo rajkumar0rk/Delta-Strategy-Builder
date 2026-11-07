@@ -1166,6 +1166,7 @@ class ResearchSweepRequest(BaseModel):
     strategy: StrategyConfig
     dimensions: list[SweepDimension] = Field(min_length=1, max_length=3)
     max_combinations: int = Field(default=40, ge=1, le=200)
+    stability_min_trades: int = Field(default=10, ge=1, le=10000)
     walk_forward_folds: int = Field(default=0, ge=0, le=4)
     walk_forward_embargo_bars: int = Field(default=0, ge=0, le=288)
 
