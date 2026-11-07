@@ -28,6 +28,21 @@ describe('BTCUSD perpetual futures market editor',()=>{
    expect(html).toContain('Funding history');
    expect(html).not.toContain('auto_sync_futures_observations');
  });
+ it('shows configurable prior-entry candle stop and gap controls',()=>{
+  const s=defaultStrategy();s.market_type='FUTURES';
+  s.futures={...s.futures!,rule_risk:{
+   enabled:true,stop_mode:'SIGNAL_CANDLE',swing_lookback_bars:1,
+   atr_indicator_id:'atr14_5m',stop_atr_multiple:1.5,stop_buffer_atr:0,
+   reward_r_multiple:3,take_profit_points:null,
+   stop_candle_offset_bars:0,max_entry_gap_percent:0.5,
+   size_mode:'RISK_EQUITY',equity_risk_percent:1,max_lots:100000,
+   max_estimated_risk_multiple:1}};
+  const html=renderToStaticMarkup(<FuturesSettings value={s} onChange={()=>{}}/>);
+  expect(html).toContain('Stop candle reference');
+  expect(html).toContain('Signal candle (previous candle at entry)');
+  expect(html).toContain('Max next-open gap from signal close');
+  expect(html).toContain('Target multiple of entry-stop distance');
+ });
  it('clearly labels simulated futures fills in result report',()=>{
   const s=defaultStrategy();s.market_type='FUTURES';
   const result:BacktestResult={run_id:'test',result_dir:'test',storage_mode:'COMPACT',strategy:s,
