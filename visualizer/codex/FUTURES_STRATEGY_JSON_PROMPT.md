@@ -1,5 +1,20 @@
 # Copy-paste prompt — BTCUSD Futures Strategy Lab JSON
 
+## v2: stronger 1H BTC Futures bullish reversal with adaptive structure exit (November 2026)
+
+Import `visualizer/backend/examples/btc-futures-1h-bullish-reversal-confirmed-v2.strategy.json`. The older `btc-futures-1h-bullish-reversal-structure-exit.strategy.json` is retained as an unchanged baseline.
+
+- Long only. Require three consecutive completed lower highs AND lower lows, including a bearish last setup candle, close below its predecessor's open, and at least two bearish candles in the three-bar down sequence.
+- Entry alternative A: immediately completed bullish engulfing of previous red body; fill next 1H open.
+- Entry alternative B: prior completed doji (body/range <= 10%) or bullish hammer (body/range <= 40%, lower wick >=50%, upper wick <=20%) after the bearish sequence, plus a **later** completed bullish candle closing strictly ABOVE the pattern HIGH; fill next 1H open. All thresholds and historical offsets are editable via ordinary nested JSON rules. Never use a still-forming candle or a later bar for pattern detection.
+- Initial stop: lowest low of the last two completed bars (reversal/confirmation window), using existing `rule_risk.stop_mode=SWING`, `swing_lookback_bars=2`. Includes next-open gap protection and estimated fees in risk sizing.
+- New opt-in `rule_risk.max_stop_distance_percent` and `max_stop_distance_atr` reject entries where the executed entry-to-initial-stop price distance exceeds either cap. ATR caps require a non-chart-only strategy-timeframe ATR indicator; validated on import.
+- Exit: close below the immediately preceding 1H LOW, OR two consecutive lower highs **and** lower lows. A single non-higher-high is not sufficient.
+- `rule_risk.condition_exit_activation_r=0.5` arms the exit tree after a completed close reaches +0.5 times initial price risk; before arming the initial protective stop and margin/time exits still apply. Arming stays active afterward. `breakeven_activation_r=1.0` ratchets stop to entry (plus `breakeven_offset_ticks`) **only** after a completed close reaches +1R. Protective stop remains active intrabar, ratchet applies to next bar; stop gaps and fees mean realized net loss remains possible.
+- `reward_r_multiple=null`, `take_profit_points=null`, trailing disabled. Example starting defaults: 0.5% equity risk, max stop distance 1% of fill and 3× frozen ATR, 72-hour time exit. No fixed take-profit; this is not guaranteed to outperform the previous strategy.
+- Existing saved strategies retain null/zero defaults for every new field, and old execution behavior remains unchanged. Futures research remains OHLC-proxy only. Cache version 180.
+
+
 ## Example: 1H bearish continuation to bullish reversal, then exit on failure
 
 File: `visualizer/backend/examples/btc-futures-1h-bullish-reversal-structure-exit.strategy.json`.
