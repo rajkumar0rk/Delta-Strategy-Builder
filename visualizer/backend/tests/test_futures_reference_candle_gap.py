@@ -79,7 +79,7 @@ def test_reference_candle_example_is_importable_and_uses_3r():
     assert strategy.futures.take_profit_percent is None
 
 
-def _run_reference_backtest(tmp_path, monkeypatch, *, offset: int, gap_limit, conditional_exit=False, **risk_overrides):
+def _run_reference_backtest(tmp_path, monkeypatch, *, offset: int, gap_limit, conditional_exit=False, no_time_exit=False, **risk_overrides):
     """End-to-end signal-close snapshot, prior-candle offset and next-open fills."""
     import csv
 
@@ -128,6 +128,8 @@ def _run_reference_backtest(tmp_path, monkeypatch, *, offset: int, gap_limit, co
             Condition(id="always-exit", left="close", operator="GT", value=0)])
     strategy.risk.starting_balance_usd = 1000
     strategy.risk.max_daily_loss_percent = None
+    if no_time_exit:
+        strategy.risk.max_hold_minutes = None
     return run_backtest(BacktestRequest(
         dataset_id="sample", start="2026-01-01T00:05:00Z",
         end="2026-01-01T11:40:00Z", strategy=strategy))
@@ -183,7 +185,8 @@ def test_confirmed_close_moves_stop_toward_breakeven(tmp_path, monkeypatch):
     result = _run_reference_backtest(tmp_path / "breakeven", monkeypatch,
                                       offset=0, gap_limit=None,
                                       breakeven_activation_r=1.0,
-                                      breakeven_offset_ticks=0)
+                                      breakeven_offset_ticks=0,
+                                      reward_r_multiple=None, no_time_exit=True)
     assert result["metrics"]["trades"] >= 1
     assert any(t["exit_reason"] == "BREAKEVEN_STOP" for t in result["trades"])
     for t in result["trades"]:
