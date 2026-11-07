@@ -24,6 +24,32 @@ def _frame(n=48*5):
     },index=index)
 
 
+def test_importable_donchian_strategy_example_is_valid():
+    import json
+    from pathlib import Path
+
+    example = (Path(__file__).resolve().parents[1] / "examples" /
+               "btc-futures-4h-donchian-atr-trend.strategy.json")
+    payload = json.loads(example.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 15
+    assert payload["app"] == "BTC Strategy Lab"
+    strategy = StrategyConfig.model_validate(payload["strategy"])
+    assert strategy.market_type == "FUTURES"
+    assert strategy.timeframe == "1h"
+    assert strategy.futures.trend_risk.enabled
+    assert strategy.futures.trend_risk.atr_indicator_id == "atr14_1h"
+    assert strategy.futures.stop_loss_percent is None
+    assert strategy.futures.take_profit_percent is None
+    assert any(i.kind == "EMA" and i.timeframe == "4h" and
+               i.params.get("period") == 200 for i in strategy.indicators)
+    assert any(i.kind == "DONCHIAN" and i.params.get("period") == 55
+               for i in strategy.indicators)
+    assert len(strategy.call_entry.conditions) == 3
+    assert len(strategy.put_entry.conditions) == 3
+    assert len(strategy.call_entry_lifecycles) >= 1
+    assert len(strategy.put_entry_lifecycles) >= 1
+
+
 def test_four_hour_completed_only_and_no_lookahead():
     raw=_frame()
     bars=_aggregate_completed(raw,"5m","4h")
