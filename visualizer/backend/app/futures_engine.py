@@ -233,10 +233,21 @@ def run_futures_backtest(req, progress=None):
     def frozen_rule_stop(index,direction):
         """Freeze an entry stop from completed bars only (no future OHLC)."""
         rc=rule_risk
-        window=frame.iloc[max(0,index+1-rc.swing_lookback_bars):index+1]
-        if len(window)<rc.swing_lookback_bars or window[['high','low','close']].isna().any().any():
-            return None
         signal=frame.iloc[index]
+        if rc.stop_mode=='SWING':
+            window=frame.iloc[max(0,index+1-rc.swing_lookback_bars):index+1]
+            if len(window)<rc.swing_lookback_bars or window[['high','low','close']].isna().any().any():
+                return None
+        else:
+            window=None
+        reference=None
+        if rc.stop_mode=='SIGNAL_CANDLE':
+            reference_index=index-rc.stop_candle_offset_bars
+            if reference_index<0:
+                return None
+            reference=frame.iloc[reference_index]
+            if not (math.isfinite(float(reference.high)) and math.isfinite(float(reference.low))):
+                return None
         atr=0.0
         if rc.stop_mode=='ATR' or rc.stop_buffer_atr>0:
             raw=float(signal.get(rc.atr_indicator_id,float('nan')))
@@ -247,7 +258,7 @@ def run_futures_backtest(req, progress=None):
         if rc.stop_mode=='ATR':
             stop=close-sign*rc.stop_atr_multiple*atr
         elif rc.stop_mode=='SIGNAL_CANDLE':
-            stop=float(signal.low if sign==1 else signal.high)-sign*rc.stop_buffer_atr*atr
+            stop=float(reference.low if sign==1 else reference.high)-sign*rc.stop_buffer_atr*atr
         else:
             stop=float(window.low.min() if sign==1 else window.high.max())-sign*rc.stop_buffer_atr*atr
         return stop if math.isfinite(stop) and stop>0 and (close-stop)*sign>0 else None
@@ -412,6 +423,11 @@ def run_futures_backtest(req, progress=None):
             px=_slipped(intrabar_candidate if intrabar_candidate is not None else float(row.open),
                         direction,True,effective_slippage_bps,cfg.tick_size,cfg.slippage_ticks)
             trade_qty=qty; stop_price=None; target_price=None; risk_per_lot=None; entry_rejection=None
+            if execution_setup and execution_setup.get('rule_risk') and rule_risk and rule_risk.max_entry_gap_percent is not None:
+                signal_close=execution_setup.get('signal_close')
+                if (signal_close is None or not math.isfinite(signal_close) or signal_close<=0
+                        or abs(px-signal_close)/signal_close*100>rule_risk.max_entry_gap_percent+1e-12):
+                    entry_rejection='RULE_RISK_ENTRY_GAP_EXCEEDED'
             if execution_setup and execution_setup.get('rule_risk') and rule_risk and rule_risk.stop_mode=='ATR' and rule_risk.atr_stop_anchor=='ENTRY_FILL':
                 frozen_atr=execution_setup['signal_atr']
                 if not (math.isfinite(frozen_atr) and frozen_atr>0):
@@ -676,6 +692,7 @@ def run_futures_backtest(req, progress=None):
                         continue
                     snapshot=frame.iloc[i].get(rule_risk.atr_indicator_id)
                     pending_setup={'stop_price':frozen,'rule_risk':True,
+                                   'signal_close':float(row.close),
                                    'signal_atr':float(snapshot) if snapshot is not None else float('nan'),
                                    'reward_r_multiple':rule_risk.reward_r_multiple,
                                    'take_profit_points':rule_risk.take_profit_points}
