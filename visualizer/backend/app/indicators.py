@@ -25,7 +25,12 @@ class IndicatorDefinition:
 CATALOG: dict[str, IndicatorDefinition] = {
     "EMA": IndicatorDefinition("EMA", "Exponential Moving Average", "Trend", "overlay", ("value",), {"period":{"type":"int","default":9,"min":1,"max":500},"source":{"type":"select","default":"close","options":["open","high","low","close"]}}, "EMA with an SMA seed."),
     "SMA": IndicatorDefinition("SMA", "Simple Moving Average", "Trend", "overlay", ("value",), {"period":{"type":"int","default":20,"min":1,"max":1000},"source":{"type":"select","default":"close","options":["open","high","low","close"]}}, "Rolling arithmetic mean."),
-    "VWAP": IndicatorDefinition("VWAP", "Session VWAP", "Trend", "overlay", ("value",), {}, "HLC3 volume-weighted average reset each IST session."),
+    "VWAP": IndicatorDefinition("VWAP", "Session VWAP", "Trend", "overlay", ("value",), {
+        "reset_mode":{"type":"select","default":"LEGACY_IST_CLOSE_DATE","options":["LEGACY_IST_CLOSE_DATE","CUSTOM_SESSION_OPEN"]},
+        "timezone":{"type":"text","default":"Asia/Kolkata"},
+        "reset_time":{"type":"text","default":"00:00"},
+        "price_source":{"type":"select","default":"hlc3","options":["hlc3","close"]}
+    }, "Volume-weighted average. Legacy IST close-date reset or custom timezone/session-open anchor."),
     "RSI": IndicatorDefinition("RSI", "Relative Strength Index", "Momentum", "pane", ("value",), {"period":{"type":"int","default":14,"min":2,"max":200}}, "Wilder RSI."),
     "ATR": IndicatorDefinition("ATR", "Average True Range", "Volatility", "pane", ("value",), {"period":{"type":"int","default":14,"min":2,"max":200}}, "Wilder ATR."),
     "ADX_DMI": IndicatorDefinition("ADX_DMI", "ADX / DMI", "Trend strength", "pane", ("adx","plus_di","minus_di"), {"period":{"type":"int","default":14,"min":2,"max":200}}, "Wilder ADX with +DI and -DI. Useful for separating directional expansion from chop."),
@@ -469,7 +474,9 @@ def _instance_label(inst: IndicatorInstance, params: dict[str, Any]) -> str:
     if inst.kind == "STOCHASTIC": return f"Stochastic {params.get('k_period')}/{params.get('smooth_k')}/{params.get('d_period')}"
     if inst.kind == "STOCH_RSI": return f"Stoch RSI {params.get('rsi_period')}/{params.get('stoch_period')}/{params.get('k')}/{params.get('d')}"
     if inst.kind == "BOLLINGER": return f"Bollinger {params.get('period')} × {params.get('stddev')}"
-    if inst.kind == "VWAP": return "Session VWAP"
+    if inst.kind == "VWAP":
+        return ("Session VWAP" if params.get("reset_mode") == "LEGACY_IST_CLOSE_DATE" else
+                f"VWAP {params.get('timezone')} @ {params.get('reset_time')}")
     if inst.kind == "DAY_LEVELS":
         boundary = params.get('day_boundary_mode', 'CALENDAR')
         day_label = (params.get('timezone') if boundary == 'CALENDAR'
@@ -525,7 +532,23 @@ def compute_indicators(frame: pd.DataFrame, instances: list[IndicatorInstance], 
         elif inst.kind=="EMA": outputs["value"]=_ema(calc[str(p['source'])],int(p['period']))
         elif inst.kind=="SMA": outputs["value"]=calc[str(p['source'])].rolling(int(p['period']),min_periods=int(p['period'])).mean()
         elif inst.kind=="VWAP":
-            local_dates=pd.Series(calc.index.tz_convert(IST).date,index=calc.index); typical=(calc.high+calc.low+calc.close)/3.0; cv=(typical*calc.volume).groupby(local_dates).cumsum(); vv=calc.volume.groupby(local_dates).cumsum().replace(0,np.nan); outputs["value"]=cv/vv
+            if p["reset_mode"] == "CUSTOM_SESSION_OPEN":
+                # Timestamp denotes completed candle CLOSE; assign the candle
+                # to the session that contains its OPEN to avoid reset drift
+                # at the exact boundary. Pandas vector operations are O(N).
+                tz=ZoneInfo(str(p["timezone"]))
+                hh,mm=map(int,str(p["reset_time"]).split(":"))
+                begin=calc.index-pd.Timedelta(minutes=_TF_MINUTES[tf])
+                local=begin.tz_convert(tz)
+                reset=pd.Timedelta(hours=hh,minutes=mm)
+                session_key=(local-pd.Timedelta(minutes=hh*60+mm)).date
+            else:
+                session_key=calc.index.tz_convert(IST).date
+            labels=pd.Series(session_key,index=calc.index)
+            price=(calc.high+calc.low+calc.close)/3.0 if p["price_source"]=="hlc3" else calc.close
+            pv=(price*calc.volume).groupby(labels,sort=False).cumsum()
+            total=calc.volume.groupby(labels,sort=False).cumsum().replace(0,np.nan)
+            outputs["value"]=pv/total
         elif inst.kind=="RSI": outputs["value"]=_rsi(calc.close,int(p['period']))
         elif inst.kind=="ATR": outputs["value"]=_atr(calc,int(p['period']))
         elif inst.kind=="ADX_DMI":
