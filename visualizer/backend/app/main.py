@@ -13,6 +13,7 @@ from .config import project_root, result_root
 from .analysis import build_analysis, build_analysis_package
 from .ai_prompt import build_strategy_prompt
 from .futures_validation import run_futures_validation
+from .portfolio_research import PortfolioResearchRequest, run_portfolio_research
 from .futures_audit import audit_futures_parity
 from .research import run_sweep, run_ablation, list_results, run_execution_replay, run_holdout
 from .trend_discovery import run_trend_discovery
@@ -254,6 +255,12 @@ def futures_parity_audit(req: BacktestRequest):
         timeframe={'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'4h':240,'1D':1440}[req.strategy.timeframe]
         return audit_futures_parity(result,chart,timeframe_minutes=timeframe)
     return {'job_id': _enqueue(work)}
+
+
+@app.post('/api/research/portfolio-futures')
+def portfolio_futures(req: PortfolioResearchRequest):
+    """Opt-in shared-cash research replay of saved FUTURES runs; no live orders."""
+    return {'job_id': _enqueue(lambda progress: run_portfolio_research(req, progress))}
 
 
 @app.post('/api/research/futures-validation')
