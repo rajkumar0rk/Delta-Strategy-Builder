@@ -233,10 +233,21 @@ def run_futures_backtest(req, progress=None):
     def frozen_rule_stop(index,direction):
         """Freeze an entry stop from completed bars only (no future OHLC)."""
         rc=rule_risk
-        window=frame.iloc[max(0,index+1-rc.swing_lookback_bars):index+1]
-        if len(window)<rc.swing_lookback_bars or window[['high','low','close']].isna().any().any():
-            return None
         signal=frame.iloc[index]
+        if rc.stop_mode=='SWING':
+            window=frame.iloc[max(0,index+1-rc.swing_lookback_bars):index+1]
+            if len(window)<rc.swing_lookback_bars or window[['high','low','close']].isna().any().any():
+                return None
+        else:
+            window=None
+        reference=None
+        if rc.stop_mode=='SIGNAL_CANDLE':
+            reference_index=index-rc.stop_candle_offset_bars
+            if reference_index<0:
+                return None
+            reference=frame.iloc[reference_index]
+            if not (math.isfinite(float(reference.high)) and math.isfinite(float(reference.low))):
+                return None
         atr=0.0
         if rc.stop_mode=='ATR' or rc.stop_buffer_atr>0:
             raw=float(signal.get(rc.atr_indicator_id,float('nan')))
@@ -247,10 +258,47 @@ def run_futures_backtest(req, progress=None):
         if rc.stop_mode=='ATR':
             stop=close-sign*rc.stop_atr_multiple*atr
         elif rc.stop_mode=='SIGNAL_CANDLE':
-            stop=float(signal.low if sign==1 else signal.high)-sign*rc.stop_buffer_atr*atr
+            stop=float(reference.low if sign==1 else reference.high)-sign*rc.stop_buffer_atr*atr
         else:
             stop=float(window.low.min() if sign==1 else window.high.max())-sign*rc.stop_buffer_atr*atr
         return stop if math.isfinite(stop) and stop>0 and (close-stop)*sign>0 else None
+
+    def arm_rule_profit_protection(pos, completed_bar):
+        """Use confirmed CLOSE only; protection acts on NEXT candle.
+
+        Never use current high/low to arm an exit or raise a stop before
+        that candle's original protective stop has had a chance to execute.
+        """
+        if not (rule_risk and pos.get('rule_risk_position')):
+            return False
+        initial_stop=pos.get('initial_stop_price')
+        if initial_stop is None:
+            return False
+        sign=1 if pos['direction']=='LONG' else -1
+        initial_r=(pos['entry_price']-initial_stop)*sign
+        if not math.isfinite(initial_r) or initial_r<=0:
+            return False
+        close=float(completed_bar.close)
+        close_r=(close-pos['entry_price'])*sign/initial_r
+        if not pos.get('condition_exit_armed') and close_r>=rule_risk.condition_exit_activation_r:
+            pos['condition_exit_armed']=True
+        threshold=rule_risk.breakeven_activation_r
+        if threshold is None or pos.get('breakeven_armed') or close_r<threshold:
+            return False
+        proposed=pos['entry_price']+sign*rule_risk.breakeven_offset_ticks*cfg.tick_size
+        # Tick-rounded fill is already tick aligned; conservatively snap the
+        # stop *toward* the entry if floating-point arithmetic drifts.
+        units=proposed/cfg.tick_size
+        proposed=(math.floor(units+1e-10) if sign==1 else math.ceil(units-1e-10))*cfg.tick_size
+        proposed=round(proposed,10)
+        if proposed<=0 or (close-proposed)*sign<=0:
+            return False
+        if (proposed-pos['stop_price'])*sign<=1e-10:
+            pos['breakeven_armed']=True
+            return False
+        pos['stop_price']=proposed
+        pos['breakeven_armed']=True
+        return True
 
     def ratchet_rule_trailing(pos, completed_bar):
         """Only completed candle OHLC can tighten a rule-risk stop.
@@ -412,6 +460,11 @@ def run_futures_backtest(req, progress=None):
             px=_slipped(intrabar_candidate if intrabar_candidate is not None else float(row.open),
                         direction,True,effective_slippage_bps,cfg.tick_size,cfg.slippage_ticks)
             trade_qty=qty; stop_price=None; target_price=None; risk_per_lot=None; entry_rejection=None
+            if execution_setup and execution_setup.get('rule_risk') and rule_risk and rule_risk.max_entry_gap_percent is not None:
+                signal_close=execution_setup.get('signal_close')
+                if (signal_close is None or not math.isfinite(signal_close) or signal_close<=0
+                        or abs(px-signal_close)/signal_close*100>rule_risk.max_entry_gap_percent+1e-12):
+                    entry_rejection='RULE_RISK_ENTRY_GAP_EXCEEDED'
             if execution_setup and execution_setup.get('rule_risk') and rule_risk and rule_risk.stop_mode=='ATR' and rule_risk.atr_stop_anchor=='ENTRY_FILL':
                 frozen_atr=execution_setup['signal_atr']
                 if not (math.isfinite(frozen_atr) and frozen_atr>0):
@@ -426,26 +479,39 @@ def run_futures_backtest(req, progress=None):
                 if stop_price<=0 or (px-stop_price)*(1 if direction=='LONG' else -1)<=0:
                     entry_rejection='STOP_NOT_PROTECTIVE'
                 else:
-                    stop_proxy=_slipped(stop_price,direction,False,effective_slippage_bps,cfg.tick_size,cfg.slippage_ticks)
-                    remaining_day_risk=remaining_daily_risk(
-                        daily['start_balance'],daily['realized'],
-                        strategy.risk.max_daily_loss_percent)
-                    sizing=rule_risk if rule_risk is not None and execution_setup.get('rule_risk') else pullback
-                    lots,reason,risk_per_lot=risk_sized_lots(
-                        px,stop_proxy,direction,balance,cfg,sizing,max_risk_usd=remaining_day_risk)
-                    trade_qty=lots*cfg.contract_btc
-                    if not lots:entry_rejection=reason
-                    multiple=execution_setup.get('reward_r_multiple',sizing.reward_r_multiple)
-                    target_points=execution_setup.get('take_profit_points')
-                    if target_points is not None:
-                        target_price=target_at_points(px,target_points,direction,cfg.tick_size)
-                        if target_price is None:entry_rejection='INVALID_POINT_TARGET'
-                    else:
-                        target_price=(target_at_r(px,stop_price,direction,multiple,cfg.tick_size)
-                                      if multiple is not None else None)
-                        if multiple is not None and target_price is None:entry_rejection='INVALID_R_TARGET'
-                    if lots and sizing.size_mode=='FIXED' and lots*risk_per_lot>balance*sizing.equity_risk_percent/100*sizing.max_estimated_risk_multiple:
-                        entry_rejection='FIXED_SIZE_RISK_EXCEEDED'
+                    if execution_setup.get('rule_risk') and rule_risk:
+                        stop_distance=abs(px-stop_price)
+                        if (rule_risk.max_stop_distance_percent is not None
+                                and stop_distance/px*100>rule_risk.max_stop_distance_percent+1e-12):
+                            entry_rejection='RULE_RISK_STOP_TOO_WIDE_PERCENT'
+                        if rule_risk.max_stop_distance_atr is not None:
+                            frozen_atr=execution_setup.get('signal_atr')
+                            if (frozen_atr is None or not math.isfinite(frozen_atr)
+                                    or frozen_atr<=0):
+                                entry_rejection='RULE_RISK_STOP_ATR_NOT_READY'
+                            elif stop_distance/frozen_atr>rule_risk.max_stop_distance_atr+1e-12:
+                                entry_rejection='RULE_RISK_STOP_TOO_WIDE_ATR'
+                    if entry_rejection is None:
+                        stop_proxy=_slipped(stop_price,direction,False,effective_slippage_bps,cfg.tick_size,cfg.slippage_ticks)
+                        remaining_day_risk=remaining_daily_risk(
+                            daily['start_balance'],daily['realized'],
+                            strategy.risk.max_daily_loss_percent)
+                        sizing=rule_risk if rule_risk is not None and execution_setup.get('rule_risk') else pullback
+                        lots,reason,risk_per_lot=risk_sized_lots(
+                            px,stop_proxy,direction,balance,cfg,sizing,max_risk_usd=remaining_day_risk)
+                        trade_qty=lots*cfg.contract_btc
+                        if not lots:entry_rejection=reason
+                        multiple=execution_setup.get('reward_r_multiple',sizing.reward_r_multiple)
+                        target_points=execution_setup.get('take_profit_points')
+                        if target_points is not None:
+                            target_price=target_at_points(px,target_points,direction,cfg.tick_size)
+                            if target_price is None:entry_rejection='INVALID_POINT_TARGET'
+                        else:
+                            target_price=(target_at_r(px,stop_price,direction,multiple,cfg.tick_size)
+                                          if multiple is not None else None)
+                            if multiple is not None and target_price is None:entry_rejection='INVALID_R_TARGET'
+                        if lots and sizing.size_mode=='FIXED' and lots*risk_per_lot>balance*sizing.equity_risk_percent/100*sizing.max_estimated_risk_multiple:
+                            entry_rejection='FIXED_SIZE_RISK_EXCEEDED'
             margin=assumed_initial_margin_usd(px,trade_qty,cfg) if trade_qty>0 else float('inf')
             start_fee=fee(px,trade_qty) if trade_qty>0 else 0.0
             if entry_rejection:
@@ -486,6 +552,8 @@ def run_futures_backtest(req, progress=None):
                     'favorable_close':px,'trailing_active':False,'trail_extreme':px,
                     'rule_risk_position':bool(execution_setup and execution_setup.get('rule_risk')),
                     'initial_stop_price':stop_price,
+                    'condition_exit_armed':bool(not rule_risk or rule_risk.condition_exit_activation_r==0),
+                    'breakeven_armed':False,
                     'entry_fill_timing':'INTRABAR_ESTIMATED' if intrabar_candidate is not None else 'OPEN',
                     'mfe':0.0,'mae':0.0,
                     'lifecycle_provenance':dict(lifecycle_snapshot or {})}
@@ -527,12 +595,18 @@ def run_futures_backtest(req, progress=None):
                         target=position.get('target_price') or position['entry_price']*(1+cfg.take_profit_percent/100*sign)
                         if (float(row.low)<=min(stop,target) and float(row.high)>=max(stop,target)):
                             ambiguous+=1
-                    exit_reason=('TRAILING_STOP' if hit[0]=='STOP_LOSS' and position.get('trailing_active') else hit[0])
+                    exit_reason=('BREAKEVEN_STOP' if hit[0]=='STOP_LOSS' and position.get('breakeven_armed')
+                                 else 'TRAILING_STOP' if hit[0]=='STOP_LOSS' and position.get('trailing_active')
+                                 else hit[0])
                     close(position,ts,hit[1],exit_reason);position=None;closed=True
                 else:
                     close(position,ts,worst,'ESTIMATED_MARGIN_BREACH')
                     position=None;closed=True
             else:
+                if arm_rule_profit_protection(position,row):
+                    decisions.append({'timestamp':ts.isoformat(),'kind':'STOP_UPDATE',
+                        'direction':position['direction'],'passed':True,
+                        'reason':'RULE_BREAKEVEN_RATCHET','stop_price':position['stop_price']})
                 if ratchet_rule_trailing(position,row):
                     decisions.append({'timestamp':ts.isoformat(),'kind':'TRAIL_UPDATE',
                         'direction':position['direction'],'passed':True,
@@ -541,8 +615,9 @@ def run_futures_backtest(req, progress=None):
                     pending=('CLOSE','TIME_STOP')
                 elif strategy.risk.close_at_session_end and _session_end_due(ts,strategy.session,tf):
                     pending=('CLOSE','SESSION_END_EXIT')
-                elif ((position['direction']=='LONG' and strategy.call_exit_signal_mode!='ALERT_ONLY' and evaluate_group(frame,i,strategy.call_exit)['passed'] and strategy.call_exit.configured())
-                   or (position['direction']=='SHORT' and strategy.put_exit_signal_mode!='ALERT_ONLY' and evaluate_group(frame,i,strategy.put_exit)['passed'] and strategy.put_exit.configured())):
+                elif (position.get('condition_exit_armed',True)
+                   and ((position['direction']=='LONG' and strategy.call_exit_signal_mode!='ALERT_ONLY' and evaluate_group(frame,i,strategy.call_exit)['passed'] and strategy.call_exit.configured())
+                   or (position['direction']=='SHORT' and strategy.put_exit_signal_mode!='ALERT_ONLY' and evaluate_group(frame,i,strategy.put_exit)['passed'] and strategy.put_exit.configured()))):
                     # Condition known at this candle's close: cannot execute
                     # at this candle's close. Next bar open is required.
                     pending=('CLOSE','CONDITION_EXIT')
@@ -676,6 +751,7 @@ def run_futures_backtest(req, progress=None):
                         continue
                     snapshot=frame.iloc[i].get(rule_risk.atr_indicator_id)
                     pending_setup={'stop_price':frozen,'rule_risk':True,
+                                   'signal_close':float(row.close),
                                    'signal_atr':float(snapshot) if snapshot is not None else float('nan'),
                                    'reward_r_multiple':rule_risk.reward_r_multiple,
                                    'take_profit_points':rule_risk.take_profit_points}

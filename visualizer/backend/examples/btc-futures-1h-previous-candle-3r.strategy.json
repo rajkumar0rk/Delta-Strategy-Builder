@@ -1,0 +1,256 @@
+{
+  "schema_version": 15,
+  "app": "BTC Strategy Lab",
+  "strategy": {
+    "name": "BTC Futures 1H EMA/ADX Breakout | Prior Entry Candle Stop | 3R",
+    "market_type": "FUTURES",
+    "timeframe": "1h",
+    "direction_mode": "BOTH",
+    "call_action": "BUY",
+    "put_action": "BUY",
+    "call_signal_mode": "ORDER_ONLY",
+    "put_signal_mode": "ORDER_ONLY",
+    "indicators": [
+      {
+        "id": "ema50_1h",
+        "kind": "EMA",
+        "timeframe": "1h",
+        "params": {
+          "period": 50,
+          "source": "close"
+        },
+        "visible": true,
+        "chart_only": false
+      },
+      {
+        "id": "ema200_1h",
+        "kind": "EMA",
+        "timeframe": "1h",
+        "params": {
+          "period": 200,
+          "source": "close"
+        },
+        "visible": true,
+        "chart_only": false
+      },
+      {
+        "id": "adx14_1h",
+        "kind": "ADX_DMI",
+        "timeframe": "1h",
+        "params": {
+          "period": 14
+        },
+        "visible": false,
+        "chart_only": false
+      }
+    ],
+    "call_entry": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "long-ema",
+          "left": "ema50_1h",
+          "operator": "GT",
+          "right": "ema200_1h",
+          "value": null,
+          "left_offset": 0,
+          "right_offset": 0
+        },
+        {
+          "id": "long-slope",
+          "left": "ema50_1h",
+          "operator": "RISING",
+          "right": null,
+          "value": null,
+          "left_offset": 0,
+          "right_offset": 0
+        },
+        {
+          "id": "long-close",
+          "left": "close",
+          "operator": "GT",
+          "right": "ema50_1h",
+          "value": null,
+          "left_offset": 0,
+          "right_offset": 0
+        },
+        {
+          "id": "long-adx",
+          "left": "adx14_1h.adx",
+          "operator": "GTE",
+          "right": null,
+          "value": 25,
+          "left_offset": 0,
+          "right_offset": 0
+        },
+        {
+          "id": "long-di",
+          "left": "adx14_1h.plus_di",
+          "operator": "GT",
+          "right": "adx14_1h.minus_di",
+          "value": null,
+          "left_offset": 0,
+          "right_offset": 0
+        },
+        {
+          "id": "long-breakout",
+          "left": "close",
+          "operator": "GT",
+          "right": "high",
+          "value": null,
+          "left_offset": 0,
+          "right_offset": 1
+        }
+      ],
+      "groups": []
+    },
+    "put_entry": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "short-ema",
+          "left": "ema50_1h",
+          "operator": "LT",
+          "right": "ema200_1h",
+          "value": null,
+          "left_offset": 0,
+          "right_offset": 0
+        },
+        {
+          "id": "short-slope",
+          "left": "ema50_1h",
+          "operator": "FALLING",
+          "right": null,
+          "value": null,
+          "left_offset": 0,
+          "right_offset": 0
+        },
+        {
+          "id": "short-close",
+          "left": "close",
+          "operator": "LT",
+          "right": "ema50_1h",
+          "value": null,
+          "left_offset": 0,
+          "right_offset": 0
+        },
+        {
+          "id": "short-adx",
+          "left": "adx14_1h.adx",
+          "operator": "GTE",
+          "right": null,
+          "value": 25,
+          "left_offset": 0,
+          "right_offset": 0
+        },
+        {
+          "id": "short-di",
+          "left": "adx14_1h.minus_di",
+          "operator": "GT",
+          "right": "adx14_1h.plus_di",
+          "value": null,
+          "left_offset": 0,
+          "right_offset": 0
+        },
+        {
+          "id": "short-breakdown",
+          "left": "close",
+          "operator": "LT",
+          "right": "low",
+          "value": null,
+          "left_offset": 0,
+          "right_offset": 1
+        }
+      ],
+      "groups": []
+    },
+    "call_entry_lifecycles": [
+      {
+        "id": "fut-long",
+        "name": "Once per breakout",
+        "enabled": true,
+        "trigger_condition_id": "long-breakout",
+        "delay_bars": 0,
+        "max_wait_bars": 0,
+        "max_entries_per_activation": 1,
+        "cooldown_bars": 1
+      }
+    ],
+    "put_entry_lifecycles": [
+      {
+        "id": "fut-short",
+        "name": "Once per breakdown",
+        "enabled": true,
+        "trigger_condition_id": "short-breakdown",
+        "delay_bars": 0,
+        "max_wait_bars": 0,
+        "max_entries_per_activation": 1,
+        "cooldown_bars": 1
+      }
+    ],
+    "futures": {
+      "symbol": "BTCUSD",
+      "contract_btc": 0.001,
+      "quantity_lots": 1,
+      "leverage": 5,
+      "margin_mode": "ISOLATED",
+      "maintenance_margin_percent": 0.25,
+      "taker_fee_percent": 0.05,
+      "gst_percent": 18,
+      "slippage_bps": 2,
+      "extra_half_spread_bps": 0,
+      "tick_size": 0.5,
+      "slippage_ticks": 0,
+      "funding_mode": "EXCLUDE_WITH_WARNING",
+      "margin_tier_mode": "FLAT_RESEARCH",
+      "stop_loss_percent": null,
+      "take_profit_percent": null,
+      "pullback": {
+        "enabled": false
+      },
+      "adaptive": {
+        "enabled": false
+      },
+      "rule_risk": {
+        "enabled": true,
+        "stop_mode": "SIGNAL_CANDLE",
+        "stop_candle_offset_bars": 0,
+        "max_entry_gap_percent": 0.5,
+        "swing_lookback_bars": 1,
+        "atr_indicator_id": "atr14_1h",
+        "stop_atr_multiple": 1.5,
+        "stop_buffer_atr": 0,
+        "reward_r_multiple": 3,
+        "take_profit_points": null,
+        "atr_stop_anchor": "SIGNAL_CLOSE",
+        "trailing_enabled": false,
+        "size_mode": "RISK_EQUITY",
+        "equity_risk_percent": 1,
+        "max_lots": 100000,
+        "max_estimated_risk_multiple": 1
+      }
+    },
+    "risk": {
+      "starting_balance_usd": 1000,
+      "enforce_cash": true,
+      "max_daily_loss_percent": 3,
+      "stop_trading_after_daily_loss_limit": true
+    },
+    "session": {
+      "timezone": "Asia/Kolkata",
+      "start": "00:00",
+      "end": "23:59",
+      "windows": [
+        {
+          "start": "00:00",
+          "end": "23:59"
+        }
+      ],
+      "blocked_weekdays": []
+    },
+    "conflict_policy": "SKIP",
+    "position_policy": "EXCLUSIVE"
+  }
+}

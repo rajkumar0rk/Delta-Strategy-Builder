@@ -1,5 +1,42 @@
 # Copy-paste prompt — BTCUSD Futures Strategy Lab JSON
 
+## v2: stronger 1H BTC Futures bullish reversal with adaptive structure exit (November 2026)
+
+Import `visualizer/backend/examples/btc-futures-1h-bullish-reversal-confirmed-v2.strategy.json`. The older `btc-futures-1h-bullish-reversal-structure-exit.strategy.json` is retained as an unchanged baseline.
+
+- Long only. Require three consecutive completed lower highs AND lower lows, including a bearish last setup candle, close below its predecessor's open, and at least two bearish candles in the three-bar down sequence.
+- Entry alternative A: immediately completed bullish engulfing of previous red body; fill next 1H open.
+- Entry alternative B: prior completed doji (body/range <= 10%) or bullish hammer (body/range <= 40%, lower wick >=50%, upper wick <=20%) after the bearish sequence, plus a **later** completed bullish candle closing strictly ABOVE the pattern HIGH; fill next 1H open. All thresholds and historical offsets are editable via ordinary nested JSON rules. Never use a still-forming candle or a later bar for pattern detection.
+- Initial stop: lowest low of the last two completed bars (reversal/confirmation window), using existing `rule_risk.stop_mode=SWING`, `swing_lookback_bars=2`. Includes next-open gap protection and estimated fees in risk sizing.
+- New opt-in `rule_risk.max_stop_distance_percent` and `max_stop_distance_atr` reject entries where the executed entry-to-initial-stop price distance exceeds either cap. ATR caps require a non-chart-only strategy-timeframe ATR indicator; validated on import.
+- Exit: close below the immediately preceding 1H LOW, OR two consecutive lower highs **and** lower lows. A single non-higher-high is not sufficient.
+- `rule_risk.condition_exit_activation_r=0.5` arms the exit tree after a completed close reaches +0.5 times initial price risk; before arming the initial protective stop and margin/time exits still apply. Arming stays active afterward. `breakeven_activation_r=1.0` ratchets stop to entry (plus `breakeven_offset_ticks`) **only** after a completed close reaches +1R. Protective stop remains active intrabar, ratchet applies to next bar; stop gaps and fees mean realized net loss remains possible.
+- `reward_r_multiple=null`, `take_profit_points=null`, trailing disabled. Example starting defaults: 0.5% equity risk, max stop distance 1% of fill and 3× frozen ATR, 72-hour time exit. No fixed take-profit; this is not guaranteed to outperform the previous strategy.
+- Existing saved strategies retain null/zero defaults for every new field, and old execution behavior remains unchanged. Futures research remains OHLC-proxy only. Cache version 180.
+
+
+## Example: 1H bearish continuation to bullish reversal, then exit on failure
+
+File: `visualizer/backend/examples/btc-futures-1h-bullish-reversal-structure-exit.strategy.json`.
+This is a **LONG-only** strategy, not the former EMA/ADX breakout + fixed 3R preset.
+
+- Bearish setup on the completed **red candle** immediately preceding the reversal candle: its high is strictly below the high two candles back, its close is strictly below the open two candles back, and its low is strictly below the low two candles back.
+- The current completed 1H candle must confirm one of: (1) bullish body-engulfing of the previous red candle (`open <= previous close` and `close > previous open`); (2) bullish/flat doji (body/range <= 10%, close >= open and close > previous close); or (3) bullish hammer (body/range <= 40%, lower wick >= 50%, upper wick <= 20%, close > previous close). All thresholds are ordinary configurable rule values, and `CANDLE_STRENGTH` is an existing indicator.
+- LONG executes at the next 1H OPEN, subject to existing gap guard and an initial protective stop at the completed reversal signal candle LOW. Fixed R/point profit targets and ATR trailing are disabled. Daily risk, execution costs, margin estimates and one-position-only operation remain enabled.
+- While long, a completed 1H candle sustains bullish structure only if `high > high[1]`, `close > open[1]`, AND `low > low[1]`. The `call_exit` rule is the **OR of their failures**, using `LTE`, so any one failure schedules an exit at the next candle OPEN. Stops can exit earlier inside the research OHLC candle.
+- No new schema keys, candle scans, rule operators, or execution engine changes are required. The existing generic rule evaluator is closed-candle/no-lookahead and uses bounded constant-offset comparisons. This is a candidate model, not proof of a real market trend change.
+
+
+## Completed reference-candle stop and entry-gap guard (November 2026)
+
+Use the opt-in existing `futures.rule_risk` planner; do not invent another futures mode.
+- `stop_mode=SIGNAL_CANDLE`, `stop_candle_offset_bars=0`: the completed entry signal candle (the **previous** candle when the subsequent candle OPEN fills the entry). Offset 1 selects the completed candle immediately before that signal. Valid offsets: 0..200, available history required. Nonzero offset with SWING or ATR mode is invalid.
+- `max_entry_gap_percent=null`: legacy no-gap-limit behavior. Otherwise 0..100 is the maximum absolute distance in percent between the frozen signal CLOSE and adverse-slippage-adjusted next OPEN fill. Reject larger gaps. Stop-protectiveness, risk budget, whole-lot sizing, margin, fees, and funding checks still apply.
+- `reward_r_multiple=3`, `take_profit_points=null`: target three times the **actual executed entry-to-frozen-stop** price difference, with conservative tick rounding. No guarantee of net 3R after fees, GST, slippage, stop gaps or liquidation. Existing stop-first same-candle convention applies.
+- Example: `visualizer/backend/examples/btc-futures-1h-previous-candle-3r.strategy.json`. A 1h EMA50/200 + ADX14/DMI trend filter and preceding-high/low close breakout is evaluated on completed 1h bars. Entry is next 1h OPEN; long SL at previous 1h candle low, short SL at its high; 3R target. Uses one-position-only and optional 0.5% next-open gap guard.
+- This is a deterministic OHLC simulation, not actual tick-sequenced exchange execution. Gap-fill limits do **not** cap stop losses. Existing serialized strategies default the new fields to `0` and `null` and keep their original behavior. Backtest cache version bumped to 179.
+
+
 ## Optional fixed-point BTCUSD Futures take-profit (November 2026)
 
 The existing opt-in generic `futures.rule_risk` execution supports three **mutually exclusive** target modes:
