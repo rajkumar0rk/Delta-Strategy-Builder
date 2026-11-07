@@ -325,7 +325,7 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
 
 def _backtest_cache_key(req: BacktestRequest, paths) -> str:
     payload = {
-        'engine_version': 178,  # observed account risk replay alongside hypothetical strategy backtests
+        'engine_version': 179,  # futures frozen candle-reference and configurable next-open gap guard
         'warmup_candles': req.warmup_candles,
         'warmup_policy': req.warmup_policy,
         'bar_gap_policy': req.bar_gap_policy,
