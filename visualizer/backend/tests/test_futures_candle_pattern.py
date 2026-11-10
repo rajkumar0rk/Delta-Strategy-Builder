@@ -186,3 +186,86 @@ def test_integrated_hourly_entry_five_minute_trail_and_gap_model(tmp_path, monke
     assert trade["exit_time"] == "2026-11-09T04:15:00+00:00"
     assert result["metrics"]["cash_reconciliation_residual_usd"] == pytest.approx(0)
     assert result["futures_research"]["candle_pattern_enabled"]
+
+
+def test_third_hour_entry_points_stop_is_deferred_until_execution_fill():
+    frame=hourly_frame(SETUP[:2])
+    cfg=FuturesCandlePatternConfig(enabled=True,entry_candle=3,
+        stop_anchor="ENTRY_POINTS",stop_loss_points=500,
+        activation_points=1000,pullback_points=100)
+    signals=completed_hour_patterns(frame,cfg,.5)
+    assert list(signals)==[23]
+    assert signals[23]["stop_price"] is None
+    assert signals[23]["take_profit_points"] is None
+
+
+def test_entry_point_stop_and_1000_100_trailing_through_backtest(tmp_path,monkeypatch):
+    import csv
+    from app.engine import run_backtest
+    from app.models import BacktestRequest
+
+    root=tmp_path/"data"/"sample"
+    root.mkdir(parents=True)
+    monkeypatch.setenv("STRATEGY_LAB_DATA_ROOT",str(tmp_path/"data"))
+    monkeypatch.setenv("STRATEGY_LAB_RESULT_ROOT",str(tmp_path/"results"))
+    monkeypatch.setenv("STRATEGY_LAB_CACHE_ROOT",str(tmp_path/"cache"))
+    # 1H C1 green, C2 red and C2 closes under C1 low.
+    # Third hour opens at 99500, reaches activation on 5m eligible close,
+    # next bar may tighten the protective stop to completed close + 100.
+    setup=hourly_frame([
+        (100000,100500,99800,100200),
+        (100200,100300,99300,99500),
+    ])
+    later=pd.DataFrame([
+        ("2026-11-09T03:05:00Z",99500,99510,98400,98500),
+        ("2026-11-09T03:10:00Z",98500,98510,98100,98200),
+        ("2026-11-09T03:15:00Z",98200,98300,98150,98250),
+    ],columns=["timestamp","open","high","low","close"]).set_index("timestamp")
+    later.index=pd.to_datetime(later.index,utc=True)
+    rows=pd.concat([setup,later])
+    with (root/"underlying_bars.csv").open("w",newline="",encoding="utf-8") as handle:
+        writer=csv.DictWriter(handle,fieldnames=["timestamp","open","high","low","close","volume"])
+        writer.writeheader()
+        for ts,row in rows.iterrows():
+            writer.writerow({"timestamp":ts.isoformat(),"open":float(row.open),
+                "high":float(row.high),"low":float(row.low),"close":float(row.close),"volume":100})
+    example=Path(__file__).resolve().parents[1]/"examples"/(
+        "btc-futures-1h-c3-stop500-activation1000-pullback100.strategy.json")
+    j=json.loads(example.read_text(encoding="utf-8"))
+    assert j["schema_version"]==15
+    assert j["strategy"]["timeframe"]=="5m"
+    cfg=StrategyConfig.model_validate(j["strategy"])
+    assert cfg.futures.candle_pattern.entry_candle==3
+    assert cfg.futures.candle_pattern.stop_loss_points==500
+    assert cfg.session.blocked_weekdays==[5,6]
+    cfg.futures.slippage_bps=0
+    cfg.risk.starting_balance_usd=10000
+    result=run_backtest(BacktestRequest(
+        dataset_id="sample",
+        start="2026-11-09T01:05:00Z",
+        end="2026-11-09T03:20:00Z",
+        strategy=cfg,
+    ))
+    assert result["metrics"]["trades"]==1
+    trade=result["trades"][0]
+    assert trade["entry_time"]=="2026-11-09T03:00:00+00:00"
+    assert trade["entry_price"]==99500
+    assert trade["initial_stop_price"]==100000
+    assert trade["exit_reason"]=="PATTERN_TRAILING_STOP"
+    assert trade["exit_price"]==98300
+    assert trade["exit_time"]=="2026-11-09T03:15:00+00:00"
+    assert result["metrics"]["cash_reconciliation_residual_usd"]==pytest.approx(0)
+    assert result["futures_research"]["candle_pattern_config"]["stop_loss_points"]==500
+
+
+def test_fixed_entry_point_stop_validates_tick_compatibility():
+    import copy
+    sample_path=Path(__file__).resolve().parents[1]/"examples"/(
+        "btc-futures-1h-c3-stop500-activation1000-pullback100.strategy.json")
+    data=json.loads(sample_path.read_text(encoding="utf-8"))["strategy"]
+    bad=copy.deepcopy(data)
+    bad["futures"]["candle_pattern"]["stop_loss_points"]=.1
+    with pytest.raises(ValidationError,match="stop_loss_points"):
+        StrategyConfig.model_validate(bad)
+    old=FuturesCandlePatternConfig()
+    assert old.stop_anchor=="PATTERN_HIGHEST_HIGH"
