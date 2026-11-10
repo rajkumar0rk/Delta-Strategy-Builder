@@ -54,7 +54,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
  const setPattern=(patch:Partial<FuturesCandlePatternConfig>)=>{
   const enabled=patch.enabled===true;
   onChange({...value,
-   ...(enabled?{market_type:'FUTURES',timeframe:'5m',direction_mode:'PUT'}:{}),
+   ...(enabled?{market_type:'FUTURES' as const,timeframe:'5m' as const,direction_mode:'PUT' as const}:{}),
    futures:{...f,...(enabled?{stop_loss_percent:null,take_profit_percent:null,
     rule_risk:{...ruleRisk,enabled:false},pullback:{...pullback,enabled:false},
     ...(f.adaptive?{adaptive:{...f.adaptive,enabled:false}}:{})}:{}),
