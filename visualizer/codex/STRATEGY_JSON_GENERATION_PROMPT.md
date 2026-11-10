@@ -149,3 +149,43 @@ When asked to create an adaptive 1h trend/volatility classifier with separate tr
 Use 5m base timeframe, `market_type=FUTURES`, `position_policy=EXCLUSIVE`, `futures.adaptive.enabled=true`, `futures.pullback.enabled=false`, `futures.stop_loss_percent=null` and `futures.take_profit_percent=null`. Require 1h EMA50/EMA200/EMA1(close), ADX_DMI(14), ATR_PERCENTILE(14,720), plus 15m Donchian(20), ATR(14), VOLUME_RATIO(20). These must be non-chart-only and all ID/timeframe references must be consistent. Configure regime ADX and ATR percentile thresholds, 1h confirmation candles and EMA slope; trend continuation and compression modules independently control volume ratio, breakout/retest, ATR stop buffer and 3R target. The compression retest uses a later completed 15m candle, not same-candle high/low. If enabled, ATR trailing activates after 2R and uses only previous closed 5m information. Fees, GST, slippage, risk-based whole-lot sizing, session and daily risk caps remain unchanged. No automatic live orders or guaranteed profit. Use the actual reference `visualizer/backend/examples/btc-futures-adaptive-regimes-v1.strategy.json`. No ATR_PERCENTILE output is valid without sufficient prior lookback history.
 
 All adaptive scenarios are conservative OHLC-based RESEARCH_ONLY studies. Configure funded position assumptions with verified data or `EXCLUDE_WITH_WARNING`; do not represent optional observation rates as settled funding cashflows.
+
+
+## 1H bearish continuation / 5M fixed-stop & point trail (opt-in)
+
+The exact supported mode is documented in
+[`BTC_1H_CANDLE_PATTERN_5M_TRAILING.md`](BTC_1H_CANDLE_PATTERN_5M_TRAILING.md).
+For an importable strategy, use:
+`visualizer/backend/examples/btc-futures-1h-bearish-4th-candle-5m-200-point-trail.strategy.json`.
+
+- `market_type=FUTURES`, `timeframe=5m`, `direction_mode=PUT` (SHORT),
+  `futures.candle_pattern.enabled=true`; disable legacy percentage stop/target,
+  rule_risk, pullback, adaptive and OPTIONS pattern execution.
+- `entry_candle=4`: completed UTC 1H C1 GREEN; C2 RED closing strictly
+  below C1 LOW; C3 RED; enter SHORT at C4 OPEN. `entry_candle=3`
+  enters at C3 OPEN after C1/C2. Only twelve complete consecutive
+  5m bars may form an hourly candle; missing data invalidates setup.
+- `doji_filter_enabled=true` and `doji_threshold_percent=10`
+  require setup candle body to be >= 10% of total candle range.
+- `stop_anchor=PATTERN_HIGHEST_HIGH` freezes highest 1H HIGH among
+  setup candles; `SETUP_CANDLE_HIGH` selects last setup candle HIGH.
+  `stop_buffer_ticks=0` is default. Every 5M HIGH checks the active stop.
+- `take_profit_mode=TRAILING_POINTS`, `activation_points=200`,
+  `pullback_points=200`, `trailing_ignore_doji=true`: activate only
+  after eligible completed 5M CLOSE <= actual short entry - 200.
+  At activation, protect at least the 200-point level; later eligible
+  completed CLOSE updates the stop downward to no higher than
+  `close + pullback_points`. New values take effect on the next 5M bar.
+  Alternatives: `FIXED_POINTS` with `fixed_target_points` and `NONE`.
+- Reuse `size_mode` (FIXED/RISK_EQUITY), `equity_risk_percent`,
+  `max_lots`, `max_estimated_risk_multiple`, all existing fees/GST,
+  funding, margin guards and risk controls. Block Saturday/Sunday
+  with `session.blocked_weekdays=[5,6]`, `timezone=Asia/Kolkata`.
+- Never translate this to legacy `TRAILING_PERCENT`, option premium
+  protection, generic ATR trailing, or an unvalidated pseudo-field.
+  Keep schema_version=15. Use only supported inputs and mark historical
+  OHLC execution as RESEARCH_ONLY.
+
+The scanner runs once in O(N) over completed 5m history and keeps only a
+bounded hour aggregate and 3-pattern state. Regression coverage:
+`backend/tests/test_futures_candle_pattern.py`.
