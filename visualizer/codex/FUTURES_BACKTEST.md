@@ -173,3 +173,43 @@ The `ATR_PERCENTILE` indicator computes ATR14 percentile rank against **prior** 
 Adaptive entry reuses `risk_sized_lots` (fees/GST, whole lots, margin, daily budget) and the existing 5m OHLC conservative price proxy. Module-specific frozen 15m structure/ATR stop and R multiple are used per trade. The adaptive trailing stop activates after the **prior completed** 5m close demonstrates at least activation_r of favorable close movement, and updates at the next bar's open by ATR multiple. LONG ratchets upwards only, SHORT downwards only; conservative stop-first handling remains. No tick-path, true mark-to-market liquidation, historical L1/BBO or proven funding settlement precision. All such tests are `RESEARCH_ONLY`.
 
 In-app prompt `visualizer/backend/app/ai_prompt.py` and Codex strategy generation prompt must reuse the actual Pydantic strategy schema. Do not invent `regime` as a top-level StrategyConfig property: it is under `futures.adaptive.regime`. The new `futures.adaptive.trend`, `futures.adaptive.compression`, `futures.adaptive.trailing` sections have validated nested fields. `futures.adaptive` remains disabled by default. See `visualizer/backend/tests/test_adaptive_futures.py`.
+
+
+## 1H bearish continuation / 5M fixed-stop & point trail (opt-in)
+
+The exact supported mode is documented in
+[`BTC_1H_CANDLE_PATTERN_5M_TRAILING.md`](BTC_1H_CANDLE_PATTERN_5M_TRAILING.md).
+For an importable strategy, use:
+`visualizer/backend/examples/btc-futures-1h-bearish-4th-candle-5m-200-point-trail.strategy.json`.
+
+- `market_type=FUTURES`, `timeframe=5m`, `direction_mode=PUT` (SHORT),
+  `futures.candle_pattern.enabled=true`; disable legacy percentage stop/target,
+  rule_risk, pullback, adaptive and OPTIONS pattern execution.
+- `entry_candle=4`: completed UTC 1H C1 GREEN; C2 RED closing strictly
+  below C1 LOW; C3 RED; enter SHORT at C4 OPEN. `entry_candle=3`
+  enters at C3 OPEN after C1/C2. Only twelve complete consecutive
+  5m bars may form an hourly candle; missing data invalidates setup.
+- `doji_filter_enabled=true` and `doji_threshold_percent=10`
+  require setup candle body to be >= 10% of total candle range.
+- `stop_anchor=PATTERN_HIGHEST_HIGH` freezes highest 1H HIGH among
+  setup candles; `SETUP_CANDLE_HIGH` selects last setup candle HIGH.
+  `stop_buffer_ticks=0` is default. Every 5M HIGH checks the active stop.
+- `take_profit_mode=TRAILING_POINTS`, `activation_points=200`,
+  `pullback_points=200`, `trailing_ignore_doji=true`: activate only
+  after eligible completed 5M CLOSE <= actual short entry - 200.
+  At activation, protect at least the 200-point level; later eligible
+  completed CLOSE updates the stop downward to no higher than
+  `close + pullback_points`. New values take effect on the next 5M bar.
+  Alternatives: `FIXED_POINTS` with `fixed_target_points` and `NONE`.
+- Reuse `size_mode` (FIXED/RISK_EQUITY), `equity_risk_percent`,
+  `max_lots`, `max_estimated_risk_multiple`, all existing fees/GST,
+  funding, margin guards and risk controls. Block Saturday/Sunday
+  with `session.blocked_weekdays=[5,6]`, `timezone=Asia/Kolkata`.
+- Never translate this to legacy `TRAILING_PERCENT`, option premium
+  protection, generic ATR trailing, or an unvalidated pseudo-field.
+  Keep schema_version=15. Use only supported inputs and mark historical
+  OHLC execution as RESEARCH_ONLY.
+
+The scanner runs once in O(N) over completed 5m history and keeps only a
+bounded hour aggregate and 3-pattern state. Regression coverage:
+`backend/tests/test_futures_candle_pattern.py`.

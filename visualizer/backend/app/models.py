@@ -687,11 +687,32 @@ class FuturesRuleRiskConfig(BaseModel):
         return self
 
 
+class FuturesCandlePatternConfig(BaseModel):
+    """Opt-in completed 1h bearish continuation, executed and managed on 5m."""
+
+    enabled: bool = False
+    entry_candle: Literal[3, 4] = 4
+    doji_filter_enabled: bool = True
+    doji_threshold_percent: float = Field(default=10.0, ge=0, le=100)
+    stop_anchor: Literal["PATTERN_HIGHEST_HIGH", "SETUP_CANDLE_HIGH"] = "PATTERN_HIGHEST_HIGH"
+    stop_buffer_ticks: int = Field(default=0, ge=0, le=1000)
+    take_profit_mode: Literal["TRAILING_POINTS", "FIXED_POINTS", "NONE"] = "TRAILING_POINTS"
+    activation_points: float = Field(default=200.0, gt=0, le=10000000)
+    pullback_points: float = Field(default=200.0, gt=0, le=10000000)
+    fixed_target_points: float = Field(default=200.0, gt=0, le=10000000)
+    trailing_ignore_doji: bool = True
+    size_mode: Literal["RISK_EQUITY", "FIXED"] = "RISK_EQUITY"
+    equity_risk_percent: float = Field(default=0.5, gt=0, le=100)
+    max_lots: int = Field(default=100000, ge=1, le=100000)
+    max_estimated_risk_multiple: float = Field(default=1.0, ge=1, le=10)
+
+
 class FuturesConfig(BaseModel):
     """BTCUSD perpetual research assumptions, never an exchange-margin oracle."""
     pullback: FuturesPullbackConfig = Field(default_factory=FuturesPullbackConfig)
     adaptive: AdaptiveFuturesConfig = Field(default_factory=AdaptiveFuturesConfig)
     rule_risk: FuturesRuleRiskConfig = Field(default_factory=FuturesRuleRiskConfig)
+    candle_pattern: FuturesCandlePatternConfig = Field(default_factory=FuturesCandlePatternConfig)
     symbol: Literal["BTCUSD"] = "BTCUSD"
     contract_btc: float = Field(default=0.001, gt=0)
     quantity_lots: int = Field(default=1, ge=1, le=100000)
@@ -877,6 +898,25 @@ class StrategyConfig(BaseModel):
             if cfg.max_wait_bars*5>({"15m":15,"30m":30,"1h":60}[cfg.setup_timeframe])*2:
                 raise ValueError("Options pullback expiry cannot exceed two setup candles")
 
+        if self.futures.candle_pattern.enabled:
+            if self.market_type != "FUTURES" or self.timeframe != "5m":
+                raise ValueError("Futures candle_pattern requires FUTURES market and 5m execution timeframe")
+            if self.put_exit.configured():
+                raise ValueError("Futures candle_pattern uses dedicated 5m exits; remove ordinary PUT exit conditions")
+            if self.direction_mode != "PUT" or self.put_signal_mode == "ALERT_ONLY":
+                raise ValueError("Futures bearish candle_pattern requires SHORT-only PUT order execution")
+            if (self.futures.rule_risk.enabled or self.futures.pullback.enabled
+                    or self.futures.adaptive.enabled or self.pattern_trade.enabled):
+                raise ValueError("Futures candle_pattern is exclusive of rule_risk, pullback, adaptive and options patterns")
+            if self.futures.stop_loss_percent is not None or self.futures.take_profit_percent is not None:
+                raise ValueError("Futures candle_pattern uses frozen pattern stops; disable legacy percentage exits")
+            p = self.futures.candle_pattern
+            if p.take_profit_mode == "TRAILING_POINTS":
+                if (p.activation_points < self.futures.tick_size
+                        or p.pullback_points < self.futures.tick_size):
+                    raise ValueError("Futures pattern trail distances must be at least one tick_size")
+            if p.take_profit_mode == "FIXED_POINTS" and p.fixed_target_points < self.futures.tick_size:
+                raise ValueError("Futures pattern fixed target must be at least one tick_size")
         if self.futures.rule_risk.enabled:
             if self.market_type != "FUTURES":
                 raise ValueError("Futures rule_risk requires market_type FUTURES")

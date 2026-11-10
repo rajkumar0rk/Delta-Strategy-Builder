@@ -15,3 +15,5 @@ This root `.codex/project-context/` directory provides a repository-wide orienta
 ### Shared BTC signal -> market-specific execution (November 2026)
 
 The maintained cross-market underlying planner is `backend/app/futures_setups.py`, with market-neutral pending-order, completed 1h trend and clock/risk primitives under `backend/app/shared_execution.py`. Futures run in `futures_engine.py` with OHLC proxy execution. Quote-backed BUY Options opt-in to `strategy.options_pullback` in `engine.py`, with a separate `options_force_exit_time`, preserving option bid/ask and fee accounting. See `OPTIONS_PULLBACK_BACKTEST.md`, `SHARED_EXECUTION_ARCHITECTURE.md`, and `backend/examples/btc-options-intraday-pullback.strategy.json`. The combined strategy generation contract is `STRATEGY_JSON_GENERATION_PROMPT.md` and the in-app source is `backend/app/ai_prompt.py`. All options/futures sample performance remains unverified on the user's real archive.
+
+- [BTC 1H bearish continuation with 5M point trailing](BTC_1H_CANDLE_PATTERN_5M_TRAILING.md) — configuration, conservative stop/fill rules, example JSON and regression coverage.
