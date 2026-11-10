@@ -901,6 +901,8 @@ class StrategyConfig(BaseModel):
         if self.futures.candle_pattern.enabled:
             if self.market_type != "FUTURES" or self.timeframe != "5m":
                 raise ValueError("Futures candle_pattern requires FUTURES market and 5m execution timeframe")
+            if self.put_exit.configured():
+                raise ValueError("Futures candle_pattern uses dedicated 5m exits; remove ordinary PUT exit conditions")
             if self.direction_mode != "PUT" or self.put_signal_mode == "ALERT_ONLY":
                 raise ValueError("Futures bearish candle_pattern requires SHORT-only PUT order execution")
             if (self.futures.rule_risk.enabled or self.futures.pullback.enabled
