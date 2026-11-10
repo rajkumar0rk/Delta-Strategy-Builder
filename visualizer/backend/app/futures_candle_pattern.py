@@ -89,7 +89,8 @@ def completed_hour_patterns(frame, config, tick_size: float):
         if stop <= 0 or not math.isfinite(stop):
             continue
         result[index] = {
-            'stop_price': stop,
+            # ENTRY_POINTS cannot be fixed until the actual next-open fill.
+            'stop_price': None if config.stop_anchor == 'ENTRY_POINTS' else stop,
             'setup_time': ts.isoformat(),
             'entry_candle': config.entry_candle,
             'setup_highs': [candle[2] for candle in setup],
