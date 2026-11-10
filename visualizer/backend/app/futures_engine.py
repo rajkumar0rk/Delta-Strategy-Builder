@@ -18,6 +18,7 @@ from .alerts import alert_markers
 from .rules import evaluate_group
 from .futures_setups import PullbackBreakoutPlanner, risk_sized_lots, target_at_r, target_at_points
 from .adaptive_futures import AdaptiveBreakoutPlanner, trail_stop
+from .futures_candle_pattern import completed_hour_patterns, update_short_point_trail
 from .shared_execution import (
     CompletedHourlyTrendGate, clock_due, remaining_daily_risk,
     pending_expired, stop_trigger_price, stop_trigger_on_bar,
@@ -165,7 +166,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':15,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':16,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
@@ -185,6 +186,9 @@ def run_futures_backtest(req, progress=None):
     adaptive=cfg.adaptive if cfg.adaptive.enabled else None
     pullback=adaptive if adaptive else (cfg.pullback if cfg.pullback.enabled else None)
     rule_risk=cfg.rule_risk if cfg.rule_risk.enabled else None
+    candle_pattern=cfg.candle_pattern if cfg.candle_pattern.enabled else None
+    pattern_signals=(completed_hour_patterns(frame,candle_pattern,cfg.tick_size)
+                     if candle_pattern else {})
     planner=(AdaptiveBreakoutPlanner(frame,adaptive,strategy.timeframe) if adaptive else
              PullbackBreakoutPlanner(frame,pullback,strategy.timeframe) if pullback else None)
     rates,missing_funding=funding_events(parts,req.start,req.end,
@@ -430,7 +434,8 @@ def run_futures_backtest(req, progress=None):
                     remaining_day_risk=remaining_daily_risk(
                         daily['start_balance'],daily['realized'],
                         strategy.risk.max_daily_loss_percent)
-                    sizing=rule_risk if rule_risk is not None and execution_setup.get('rule_risk') else pullback
+                    sizing=(rule_risk if rule_risk is not None and execution_setup.get('rule_risk')
+                            else candle_pattern if execution_setup.get('candle_pattern') else pullback)
                     lots,reason,risk_per_lot=risk_sized_lots(
                         px,stop_proxy,direction,balance,cfg,sizing,max_risk_usd=remaining_day_risk)
                     trade_qty=lots*cfg.contract_btc
@@ -485,6 +490,9 @@ def run_futures_backtest(req, progress=None):
                     'initial_r':abs(px-stop_price) if adaptive and stop_price is not None else None,
                     'favorable_close':px,'trailing_active':False,'trail_extreme':px,
                     'rule_risk_position':bool(execution_setup and execution_setup.get('rule_risk')),
+                    'candle_pattern_position':bool(execution_setup and execution_setup.get('candle_pattern')),
+                    'pattern_profit_active':False,
+                    'pattern_setup_time':execution_setup.get('setup_time') if execution_setup else None,
                     'initial_stop_price':stop_price,
                     'entry_fill_timing':'INTRABAR_ESTIMATED' if intrabar_candidate is not None else 'OPEN',
                     'mfe':0.0,'mae':0.0,
@@ -527,12 +535,20 @@ def run_futures_backtest(req, progress=None):
                         target=position.get('target_price') or position['entry_price']*(1+cfg.take_profit_percent/100*sign)
                         if (float(row.low)<=min(stop,target) and float(row.high)>=max(stop,target)):
                             ambiguous+=1
-                    exit_reason=('TRAILING_STOP' if hit[0]=='STOP_LOSS' and position.get('trailing_active') else hit[0])
+                    exit_reason=('PATTERN_TRAILING_STOP' if hit[0]=='STOP_LOSS' and position.get('pattern_profit_active')
+                                 else 'TRAILING_STOP' if hit[0]=='STOP_LOSS' and position.get('trailing_active')
+                                 else hit[0])
                     close(position,ts,hit[1],exit_reason);position=None;closed=True
                 else:
                     close(position,ts,worst,'ESTIMATED_MARGIN_BREACH')
                     position=None;closed=True
             else:
+                if position.get('candle_pattern_position'):
+                    trail_event=update_short_point_trail(position,row,candle_pattern,cfg.tick_size)
+                    if trail_event:
+                        decisions.append({'timestamp':ts.isoformat(),'kind':'TRAIL_UPDATE',
+                            'direction':position['direction'],'passed':True,
+                            'reason':trail_event,'stop_price':position['stop_price']})
                 if ratchet_rule_trailing(position,row):
                     decisions.append({'timestamp':ts.isoformat(),'kind':'TRAIL_UPDATE',
                         'direction':position['direction'],'passed':True,
@@ -599,6 +615,32 @@ def run_futures_backtest(req, progress=None):
           or strategy.risk.max_daily_loss_percent is not None and strategy.risk.stop_trading_after_daily_loss_limit
              and daily['realized']<=-daily['start_balance']*strategy.risk.max_daily_loss_percent/100):
             daily['blocks']+=1
+            continue
+        if candle_pattern:
+            # Completed-hour setup is known only at this 5m CLOSE and fills
+            # at the OPEN of the next 5m bar (the next UTC hour).
+            signal=pattern_signals.get(i)
+            if signal is not None and put_enabled and (
+                not strategy.put_no_trade.configured()
+                or not evaluate_group(frame,i,strategy.put_no_trade)['passed']
+            ):
+                pending='SHORT'
+                pending_lifecycle_id=None
+                pending_lifecycle_snapshot={
+                    'entry_lifecycle_id':'CANDLE_PATTERN',
+                    'entry_lifecycle_signal_time':ts.isoformat(),
+                    'entry_lifecycle_age_bars':0,
+                    'entry_lifecycle_delay_bars':0,
+                    'entry_lifecycle_entries_before':0,
+                    'entry_lifecycle_max_entries':1,
+                    'entry_lifecycle_expired':False,
+                    'entry_lifecycle_eligible':True,
+                }
+                pending_setup=signal
+                decisions.append({'timestamp':ts.isoformat(),'kind':'SIGNAL',
+                                  'direction':'SHORT','passed':True,
+                                  'reason':'COMPLETED_1H_BEARISH_PATTERN',
+                                  'stop_price':signal['stop_price']})
             continue
         eligible=[]
         for direction,enabled,group,nt,side in (
@@ -784,6 +826,7 @@ def run_futures_backtest(req, progress=None):
         'limitations':['No historical futures orderbook/spread or fills',
            'Intrabar stops/targets, slippage and margin breaches are estimates',
            'Stop-market trigger timing is estimated from 5m OHLC; pre-entry extremes within the same bar may cause a conservatively counted stop',
+           'Futures candle patterns use complete UTC 1h groups; point trailing activates on completed eligible 5m closes and updates apply next bar only',
            'Risk-sized trades can exceed the configured estimated loss in stop gaps',
            'Option premium-based profit-protection fields are ignored in Futures mode; use futures price stop/target',
            'Real exchange mark-to-market drawdown cannot be computed; candle-close proxy estimates are supplied separately',
@@ -799,6 +842,8 @@ def run_futures_backtest(req, progress=None):
         'pullback_enabled':bool(cfg.pullback.enabled),
         'adaptive_enabled':bool(adaptive),
         'rule_risk_atr_trailing_enabled':bool(rule_risk and rule_risk.trailing_enabled),
+        'candle_pattern_enabled':bool(candle_pattern),
+        'candle_pattern_config':candle_pattern.model_dump() if candle_pattern else None,
         'adaptive_regime_transitions':planner.regime_log if adaptive else [],
         'adaptive_regime_counts':({state:sum(entry[1]==state for entry in planner.regime_log)
             for state in ('TREND_UP','TREND_DOWN','COMPRESSION','RANGE','TRANSITION','EXTREME_VOLATILITY')}
