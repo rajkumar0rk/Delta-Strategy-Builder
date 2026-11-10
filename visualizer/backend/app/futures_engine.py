@@ -336,6 +336,8 @@ def run_futures_backtest(req, progress=None):
         setup_signals=planner.step(i,ts,row) if planner else {}
         update_hour_trend(ts,row)
         if ts<pd.Timestamp(req.start):
+            if candle_pattern:
+                continue  # Dedicated hourly detector has already scanned completed history.
             # Warm up lifecycle state without placing pre-range orders.
             for direction,enabled,group,side in (
                 ('LONG',call_enabled,strategy.call_entry,'CALL'),
@@ -576,16 +578,17 @@ def run_futures_backtest(req, progress=None):
             # Keep the active direction's lifecycle re-armed/reset on every bar,
             # matching the exclusive-position options engine.
             side='CALL' if position['direction']=='LONG' else 'PUT'
-            _update_lifecycles(frame,i,
-                strategy.call_entry if side=='CALL' else strategy.put_entry,
-                _entry_behaviors(strategy,side),cycles[position['direction']])
+            if not candle_pattern:
+                _update_lifecycles(frame,i,
+                    strategy.call_entry if side=='CALL' else strategy.put_entry,
+                    _entry_behaviors(strategy,side),cycles[position['direction']])
         # Advance *both* flat-side lifecycles on every completed candle, even
         # when a session, NO TRADE or daily risk gate blocks new orders, or
         # when a position was closed during this candle. An entry may be
         # blocked, but a historical trigger/cooldown must not freeze in time.
         # During exposure the opposite direction stays paused (EXCLUSIVE).
         flat_lifecycles={}
-        if position is None:
+        if position is None and not candle_pattern:
             for direction,enabled,group,side in (
                 ('LONG',call_enabled,strategy.call_entry,'CALL'),
                 ('SHORT',put_enabled,strategy.put_entry,'PUT')):
