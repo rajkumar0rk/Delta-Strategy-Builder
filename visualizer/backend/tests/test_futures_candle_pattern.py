@@ -218,7 +218,7 @@ def test_entry_point_stop_and_1000_100_trailing_through_backtest(tmp_path,monkey
     ])
     later=pd.DataFrame([
         ("2026-11-09T03:05:00Z",99500,99510,98400,98500),
-        ("2026-11-09T03:10:00Z",98500,98510,98100,98200),
+        ("2026-11-09T03:10:00Z",98450,98480,98100,98200),
         ("2026-11-09T03:15:00Z",98200,98300,98150,98250),
     ],columns=["timestamp","open","high","low","close"]).set_index("timestamp")
     later.index=pd.to_datetime(later.index,utc=True)
