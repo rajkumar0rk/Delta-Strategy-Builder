@@ -146,7 +146,7 @@ For an importable strategy, use:
   `max_lots`, `max_estimated_risk_multiple`, all existing fees/GST,
   funding, margin guards and risk controls. Block Saturday/Sunday
   with `session.blocked_weekdays=[5,6]`, `timezone=Asia/Kolkata`.
-- Never translate this to legacy `TRAILING_PERCENT`, option premium
+- Clear ordinary PUT exit rule conditions to prevent competing exit behavior; optional risk max-hold and force-exit controls remain separate.\n- Never translate this to legacy `TRAILING_PERCENT`, option premium
   protection, generic ATR trailing, or an unvalidated pseudo-field.
   Keep schema_version=15. Use only supported inputs and mark historical
   OHLC execution as RESEARCH_ONLY.
