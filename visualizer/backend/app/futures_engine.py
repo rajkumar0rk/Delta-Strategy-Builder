@@ -440,7 +440,7 @@ def run_futures_backtest(req, progress=None):
                         px,stop_proxy,direction,balance,cfg,sizing,max_risk_usd=remaining_day_risk)
                     trade_qty=lots*cfg.contract_btc
                     if not lots:entry_rejection=reason
-                    multiple=execution_setup.get('reward_r_multiple',sizing.reward_r_multiple)
+                    multiple=execution_setup.get('reward_r_multiple',getattr(sizing,'reward_r_multiple',None))
                     target_points=execution_setup.get('take_profit_points')
                     if target_points is not None:
                         target_price=target_at_points(px,target_points,direction,cfg.tick_size)
