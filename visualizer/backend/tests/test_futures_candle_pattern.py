@@ -124,6 +124,10 @@ def test_strategy_schema_rejects_mixed_modes_and_accepts_reference_json():
     with pytest.raises(ValidationError, match="5m execution"):
         StrategyConfig.model_validate(invalid)
     invalid = strategy.model_dump()
+    invalid["put_exit"] = {"mode":"ANY","conditions":[{"id":"unexpected","left":"close","operator":"GT","value":0}]}
+    with pytest.raises(ValidationError, match="dedicated 5m exits"):
+        StrategyConfig.model_validate(invalid)
+    invalid = strategy.model_dump()
     invalid["direction_mode"] = "BOTH"
     with pytest.raises(ValidationError, match="SHORT-only"):
         StrategyConfig.model_validate(invalid)
