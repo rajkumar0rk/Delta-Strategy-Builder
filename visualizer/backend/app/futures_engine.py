@@ -557,7 +557,7 @@ def run_futures_backtest(req, progress=None):
                     pending=('CLOSE','TIME_STOP')
                 elif strategy.risk.close_at_session_end and _session_end_due(ts,strategy.session,tf):
                     pending=('CLOSE','SESSION_END_EXIT')
-                elif ((position['direction']=='LONG' and strategy.call_exit_signal_mode!='ALERT_ONLY' and evaluate_group(frame,i,strategy.call_exit)['passed'] and strategy.call_exit.configured())
+                elif not candle_pattern and ((position['direction']=='LONG' and strategy.call_exit_signal_mode!='ALERT_ONLY' and evaluate_group(frame,i,strategy.call_exit)['passed'] and strategy.call_exit.configured())
                    or (position['direction']=='SHORT' and strategy.put_exit_signal_mode!='ALERT_ONLY' and evaluate_group(frame,i,strategy.put_exit)['passed'] and strategy.put_exit.configured())):
                     # Condition known at this candle's close: cannot execute
                     # at this candle's close. Next bar open is required.
