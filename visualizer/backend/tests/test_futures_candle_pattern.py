@@ -127,3 +127,58 @@ def test_strategy_schema_rejects_mixed_modes_and_accepts_reference_json():
     invalid["direction_mode"] = "BOTH"
     with pytest.raises(ValidationError, match="SHORT-only"):
         StrategyConfig.model_validate(invalid)
+
+
+def test_integrated_hourly_entry_five_minute_trail_and_gap_model(tmp_path, monkeypatch):
+    """Real Futures backtest uses next-hour open, 5m HIGH and frozen stop."""
+    import csv
+    from app.engine import run_backtest
+    from app.models import BacktestRequest
+
+    root = tmp_path / "data" / "sample"
+    root.mkdir(parents=True)
+    monkeypatch.setenv("STRATEGY_LAB_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("STRATEGY_LAB_RESULT_ROOT", str(tmp_path / "results"))
+    monkeypatch.setenv("STRATEGY_LAB_CACHE_ROOT", str(tmp_path / "cache"))
+
+    history = hourly_frame(SETUP)
+    future = pd.DataFrame([
+        ("2026-11-09T04:05:00Z", 950, 958, 920, 928),
+        ("2026-11-09T04:10:00Z", 928, 928, 895, 900),
+        ("2026-11-09T04:15:00Z", 900, 925, 897, 915),
+    ], columns=["timestamp", "open", "high", "low", "close"]).set_index("timestamp")
+    future.index = pd.to_datetime(future.index, utc=True)
+    history = pd.concat([history, future]).sort_index()
+    with (root / "underlying_bars.csv").open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f, fieldnames=["timestamp", "open", "high", "low", "close", "volume"]
+        )
+        writer.writeheader()
+        for timestamp, row in history.iterrows():
+            writer.writerow({"timestamp": timestamp.isoformat(),
+                             **{k: float(row[k]) for k in ["open", "high", "low", "close"]},
+                             "volume": 100})
+
+    path = Path(__file__).resolve().parents[1] / "examples" / (
+        "btc-futures-1h-bearish-4th-candle-5m-200-point-trail.strategy.json"
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))["strategy"]
+    payload["futures"]["candle_pattern"]["activation_points"] = 20
+    payload["futures"]["candle_pattern"]["pullback_points"] = 20
+    payload["risk"]["starting_balance_usd"] = 1000
+    payload["futures"]["slippage_bps"] = 0
+    strategy = StrategyConfig.model_validate(payload)
+    result = run_backtest(BacktestRequest(
+        dataset_id="sample", start="2026-11-09T01:05:00Z",
+        end="2026-11-09T04:20:00Z", strategy=strategy
+    ))
+    assert result["metrics"]["trades"] == 1
+    trade = result["trades"][0]
+    assert trade["direction"] == "SHORT"
+    assert trade["entry_time"] == "2026-11-09T04:00:00+00:00"
+    assert trade["initial_stop_price"] == 1060
+    assert trade["exit_reason"] == "PATTERN_TRAILING_STOP"
+    assert trade["exit_price"] == pytest.approx(920)
+    assert trade["exit_time"] == "2026-11-09T04:15:00+00:00"
+    assert result["metrics"]["cash_reconciliation_residual_usd"] == pytest.approx(0)
+    assert result["futures_research"]["candle_pattern_enabled"]
