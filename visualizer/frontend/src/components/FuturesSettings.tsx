@@ -45,7 +45,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
 
  const patternDefaults:FuturesCandlePatternConfig={
   enabled:false,entry_candle:4,doji_filter_enabled:true,doji_threshold_percent:10,
-  stop_anchor:'PATTERN_HIGHEST_HIGH',stop_buffer_ticks:0,
+  stop_anchor:'PATTERN_HIGHEST_HIGH',stop_loss_points:500,stop_buffer_ticks:0,
   take_profit_mode:'TRAILING_POINTS',activation_points:200,pullback_points:200,
   fixed_target_points:200,trailing_ignore_doji:true,size_mode:'RISK_EQUITY',
   equity_risk_percent:.5,max_lots:100000,max_estimated_risk_multiple:1
@@ -137,8 +137,11 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
     onChange={e=>setPattern({stop_anchor:e.target.value as FuturesCandlePatternConfig['stop_anchor']})}>
      <option value="PATTERN_HIGHEST_HIGH">Highest HIGH across setup candles</option>
      <option value="SETUP_CANDLE_HIGH">Last completed setup candle HIGH</option>
+     <option value="ENTRY_POINTS">Entry fill + fixed BTC points (SHORT)</option>
     </select></label>
-   {patternNumber('stop_buffer_ticks','Fixed stop buffer in price ticks',0,1)}
+   {pattern.stop_anchor==='ENTRY_POINTS'
+    ? patternNumber('stop_loss_points','Initial stop distance above actual SHORT entry (BTC points)',.01,.5)
+    : patternNumber('stop_buffer_ticks','Fixed stop buffer in price ticks',0,1)}
    <label className="switch"><input type="checkbox" checked={pattern.doji_filter_enabled}
     onChange={e=>setPattern({doji_filter_enabled:e.target.checked})}/>Reject doji 1H setup candles</label>
    {patternNumber('doji_threshold_percent','Minimum candle body / full range (%)',0,1)}

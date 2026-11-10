@@ -166,7 +166,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':16,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':17,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
@@ -425,6 +425,10 @@ def run_futures_backtest(req, progress=None):
                 else:
                     sign=1 if direction=='LONG' else -1
                     execution_setup['stop_price']=px-sign*rule_risk.stop_atr_multiple*frozen_atr
+            if execution_setup and execution_setup.get('candle_pattern') and candle_pattern.stop_anchor=='ENTRY_POINTS':
+                # Fixed distance measured from the actual slipped/tick-rounded
+                # short entry fill, not the preceding setup candle or signal close.
+                execution_setup['stop_price']=px+candle_pattern.stop_loss_points
             if execution_setup:
                 raw_stop=float(execution_setup['stop_price'])
                 units=raw_stop/cfg.tick_size

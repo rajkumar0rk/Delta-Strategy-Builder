@@ -694,7 +694,8 @@ class FuturesCandlePatternConfig(BaseModel):
     entry_candle: Literal[3, 4] = 4
     doji_filter_enabled: bool = True
     doji_threshold_percent: float = Field(default=10.0, ge=0, le=100)
-    stop_anchor: Literal["PATTERN_HIGHEST_HIGH", "SETUP_CANDLE_HIGH"] = "PATTERN_HIGHEST_HIGH"
+    stop_anchor: Literal["PATTERN_HIGHEST_HIGH", "SETUP_CANDLE_HIGH", "ENTRY_POINTS"] = "PATTERN_HIGHEST_HIGH"
+    stop_loss_points: float = Field(default=500.0, gt=0, le=10000000)
     stop_buffer_ticks: int = Field(default=0, ge=0, le=1000)
     take_profit_mode: Literal["TRAILING_POINTS", "FIXED_POINTS", "NONE"] = "TRAILING_POINTS"
     activation_points: float = Field(default=200.0, gt=0, le=10000000)
@@ -911,6 +912,8 @@ class StrategyConfig(BaseModel):
             if self.futures.stop_loss_percent is not None or self.futures.take_profit_percent is not None:
                 raise ValueError("Futures candle_pattern uses frozen pattern stops; disable legacy percentage exits")
             p = self.futures.candle_pattern
+            if p.stop_anchor == "ENTRY_POINTS" and p.stop_loss_points < self.futures.tick_size:
+                raise ValueError("Futures pattern stop_loss_points must be at least one futures.tick_size")
             if p.take_profit_mode == "TRAILING_POINTS":
                 if (p.activation_points < self.futures.tick_size
                         or p.pullback_points < self.futures.tick_size):
