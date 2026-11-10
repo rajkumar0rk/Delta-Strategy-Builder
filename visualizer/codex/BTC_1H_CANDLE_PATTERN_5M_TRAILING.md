@@ -97,3 +97,31 @@ Regression tests: `visualizer/backend/tests/test_futures_candle_pattern.py`.
 Run the complete backend pytest suite, frontend tests and build, and verify
 unchanged existing rule-risk, options, adaptive, pullback, and funding cases
 before merging. Futures engine cache identity changes from 15 to 16.
+
+
+## Chart-only 1H view (no change to trading behavior)
+
+The BTC Strategy Lab chart now defaults to `1H (chart only)` when
+`futures.candle_pattern.enabled=true`, with a user-selectable
+`5M (execution)` alternative. This selector is React presentation state:
+**do not edit** `StrategyConfig.timeframe` (it stays `5m`), backend
+simulation, risk rules, trade timestamps, or saved JSON.
+
+The UI groups existing 5m-close OHLCV observations into UTC hour-open
+chart candles. A historical hour is shown only when all twelve consecutive
+5m closes are present. The final range-end hour may be displayed as a
+**partial** hour and is labeled as such, never as a completed 1h signal.
+Hourly display indicators and condition scores sample the last available 5m
+value in that bucket; this is a visualization of the known values, not
+permission to use that end-of-hour snapshot before the close.
+
+Entry/exit/study/alert markers map onto the containing UTC 1h display
+candle, with their original timestamp retained for tooltips. When a marker
+belongs to an omitted incomplete historical hour, it remains in the
+unmodified 5m payload and appears in the 5m view instead. Changing the
+selector does not recalculate backtest trades or P&L.
+
+Implementation:
+`frontend/src/components/hourlyChartDisplay.ts` and
+`TradingChart.tsx`; focused tests:
+`frontend/src/components/hourlyChartDisplay.test.ts`.

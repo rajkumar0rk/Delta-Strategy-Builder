@@ -86,3 +86,8 @@ Do **not** claim "all related files updated" without inspecting the consumers an
 | Rolling ATR percentile rank | `backend/app/indicators.py`, `backend/app/warmup.py`, indicator catalog & schema | Prior-window-only percentile, full warmup, boundary/alignment, chunked performance |
 | ATR trailing + adaptive reporting | `backend/app/adaptive_futures.py`, `backend/app/futures_engine.py`, `backend/tests/test_adaptive_futures.py` | Stop never loosens, next-open timing, stop-first fill, closed trade reconciles fees and margin |
 | Strategy JSON/prompt/frontend | `backend/app/ai_prompt.py`, `backend/app/models.py`, `frontend/src/types.ts`, `frontend/src/components/AdaptiveFuturesEditor.tsx`, `frontend/src/components/FuturesSettings.tsx`, `codex/STRATEGY_JSON_GENERATION_PROMPT.md`, `codex/FUTURES_BACKTEST.md` | Schema JSON validation, no invented keys, import/export roundtrip, frontend test/build |
+
+
+### Chart-only hourly display (November 2026)
+
+When changing `frontend/src/components/hourlyChartDisplay.ts` or the chart display selector in `frontend/src/components/TradingChart.tsx`, inspect chart marker placement, `frontend/src/types.ts`, `frontend/src/App.tsx`, backend `engine.chart_payload`, and `frontend/src/components/alertMarkerSpacing.ts`. Run `hourlyChartDisplay.test.ts` and the frontend build/test suite. Display aggregation must not modify `StrategyConfig.timeframe`, backtest requests, cached results, or any 5M execution logic. Preserve exact original event timestamps and exclude incomplete historical hourly candles.
