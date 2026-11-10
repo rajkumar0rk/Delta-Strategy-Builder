@@ -154,3 +154,34 @@ For an importable strategy, use:
 The scanner runs once in O(N) over completed 5m history and keeps only a
 bounded hour aggregate and 3-pattern state. Regression coverage:
 `backend/tests/test_futures_candle_pattern.py`.
+
+## Configurable fixed stop from actual entry (C3 / 500 / 1000 / 100)
+
+A SHORT pattern may now use `futures.candle_pattern.stop_anchor="ENTRY_POINTS"`
+and `stop_loss_points=500`. The price is frozen **only after** the next-open
+SHORT execution fill, as `stop_price=entry_fill+500`; this is distinct from
+`PATTERN_HIGHEST_HIGH` and `SETUP_CANDLE_HIGH`. No pattern-derived
+placeholder stop is used for risk sizing or entry checks. The engine
+conservatively rounds the protective stop to the nearest valid adverse tick.
+`stop_buffer_ticks` applies to the structure stop modes, not entry points.
+Existing strategies still default to `PATTERN_HIGHEST_HIGH`; this is opt-in.
+
+Validated example:
+`visualizer/backend/examples/btc-futures-1h-c3-stop500-activation1000-pullback100.strategy.json`
+
+Use `entry_candle=3` for completed green C1 + red C2 closing below C1 LOW
+and entry at C3 OPEN, `doji_filter_enabled=true`,
+`doji_threshold_percent=10`,
+`take_profit_mode=TRAILING_POINTS`,
+`activation_points=1000`, `pullback_points=100`, and
+`trailing_ignore_doji=true`. Trading days are Monday-Friday with
+`session.blocked_weekdays=[5,6]`; entry window is
+`session.windows=[{"start":"00:00","end":"23:59"}]` and timezone
+`Asia/Kolkata`. The 1H chart is **display-only**; always retain
+`strategy.timeframe="5m"` for 5M intrabar stop monitoring and
+close-based trailing updates.
+
+The Futures engine cache identity advances from 16 to 17. Regression
+coverage includes actual fill-based stop placement, doji/entry filtering,
+trail activation/ratcheting, fee reconciliation, and schema checks.
+Market execution remains RESEARCH_ONLY.
