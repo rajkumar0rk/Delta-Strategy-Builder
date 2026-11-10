@@ -1,4 +1,4 @@
-import type {FuturesConfig,Strategy} from '../types';
+import type {FuturesConfig,FuturesCandlePatternConfig,Strategy} from '../types';
 import {AdaptiveFuturesEditor} from './AdaptiveFuturesEditor';
 
 const defaults:FuturesConfig={symbol:'BTCUSD',contract_btc:0.001,quantity_lots:1,leverage:5,
@@ -26,6 +26,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
  const ruleRisk={...ruleDefaults,...f.rule_risk};
  const setRuleRisk=(patch:Partial<typeof ruleRisk>)=>onChange({...value,futures:{...f,
   ...(patch.enabled===true?{stop_loss_percent:null,take_profit_percent:null,
+    ...(f.candle_pattern?{candle_pattern:{...pattern,enabled:false}}:{}),
     ...(f.pullback?{pullback:{...f.pullback,enabled:false}}:{}),
     ...(f.adaptive?{adaptive:{...f.adaptive,enabled:false}}:{})}:{} ),
   rule_risk:{...ruleRisk,...patch}}});
@@ -34,13 +35,35 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
    value={Number(ruleRisk[key])} onChange={e=>setRuleRisk({[key]:Number(e.target.value)})}/></label>);
  const pullback={...setupDefaults,...f.pullback};
  const setup=(patch:Partial<typeof pullback>)=>onChange({...value,futures:{...f,
-   ...(patch.enabled===true?{stop_loss_percent:null,take_profit_percent:null}:{}),
+   ...(patch.enabled===true?{stop_loss_percent:null,take_profit_percent:null,
+      ...(f.candle_pattern?{candle_pattern:{...pattern,enabled:false}}:{})}:{}),
    pullback:{...pullback,...patch},...(patch.enabled===true&&f.adaptive?{adaptive:{...f.adaptive,enabled:false}}:{}),
    ...(patch.enabled===true?{rule_risk:{...ruleRisk,enabled:false}}:{})}});
  const setupNumber=(key:keyof typeof setupDefaults,label:string,step:string,min:number)=>(
   <label key={key}>{label}<input type="number" step={step} min={min}
    value={Number(pullback[key])} onChange={e=>setup({[key]:Number(e.target.value)})}/></label>);
 
+ const patternDefaults:FuturesCandlePatternConfig={
+  enabled:false,entry_candle:4,doji_filter_enabled:true,doji_threshold_percent:10,
+  stop_anchor:'PATTERN_HIGHEST_HIGH',stop_buffer_ticks:0,
+  take_profit_mode:'TRAILING_POINTS',activation_points:200,pullback_points:200,
+  fixed_target_points:200,trailing_ignore_doji:true,size_mode:'RISK_EQUITY',
+  equity_risk_percent:.5,max_lots:100000,max_estimated_risk_multiple:1
+ };
+ const pattern={...patternDefaults,...f.candle_pattern};
+ const setPattern=(patch:Partial<FuturesCandlePatternConfig>)=>{
+  const enabled=patch.enabled===true;
+  onChange({...value,
+   ...(enabled?{market_type:'FUTURES',timeframe:'5m',direction_mode:'PUT'}:{}),
+   futures:{...f,...(enabled?{stop_loss_percent:null,take_profit_percent:null,
+    rule_risk:{...ruleRisk,enabled:false},pullback:{...pullback,enabled:false},
+    ...(f.adaptive?{adaptive:{...f.adaptive,enabled:false}}:{})}:{}),
+    candle_pattern:{...pattern,...patch}}
+  });
+ };
+ const patternNumber=(key:keyof FuturesCandlePatternConfig,label:string,min:number,step:number)=><label key={key}>{label}
+  <input type="number" min={min} step={step} value={Number(pattern[key])}
+   onChange={e=>setPattern({[key]:Number(e.target.value)})}/></label>;
  const risk=(patch:Record<string,any>)=>onChange({...value,risk:{...value.risk,...patch}});
  const session=(patch:Partial<Strategy['session']>)=>onChange({...value,session:{...value.session,...patch}});
  const windows=value.session.windows?.length?value.session.windows:[{start:'00:00',end:'23:59'}];
@@ -94,6 +117,49 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   </div>)}
  </div>
  <div className="warning-box"><b>Accuracy limitations:</b> Futures fills use historical 5m-derived OHLC and assumed slippage, not recorded futures order-book quotes. Funding requires <code>futures_funding.csv</code> with timestamp, symbol and decimal funding_rate. Collateral and liquidation are approximations; no Delta exchange liquidation precision is claimed. Current published snapshot supports size-dependent margins above $100,000 notional; INR conversion, historical collateral tiers, and genuine liquidation remain unmodeled. Pre-8-Sep-2025 minute-by-minute funding is not supported by the 8-hour funding importer. Backtests never place orders.</div>
+ </section>
+ <section className="card"><h2>1H bearish candle pattern + 5M point trailing</h2>
+  <p>Opt-in, SHORT-only. Completed UTC 1H candles establish the setup; the next hour opens at the first 5M bar open. Only complete 12-bar hours qualify. Each 5M high tests the fixed 1H stop, and the profit trail updates only after eligible completed 5M closes.</p>
+  <label className="switch"><input type="checkbox" checked={pattern.enabled}
+    onChange={e=>setPattern({enabled:e.target.checked})}/>Enable bearish continuation pattern</label>
+  {pattern.enabled&&<div className="form-grid">
+   <label>Entry candle<select value={pattern.entry_candle}
+    onChange={e=>setPattern({entry_candle:Number(e.target.value) as 3|4})}>
+     <option value={3}>3rd 1H candle open (green, red setup)</option>
+     <option value={4}>4th 1H candle open (green, red, red setup)</option>
+    </select></label>
+   <label>Fixed stop anchor<select value={pattern.stop_anchor}
+    onChange={e=>setPattern({stop_anchor:e.target.value as FuturesCandlePatternConfig['stop_anchor']})}>
+     <option value="PATTERN_HIGHEST_HIGH">Highest HIGH across setup candles</option>
+     <option value="SETUP_CANDLE_HIGH">Last completed setup candle HIGH</option>
+    </select></label>
+   {patternNumber('stop_buffer_ticks','Fixed stop buffer in price ticks',0,1)}
+   <label className="switch"><input type="checkbox" checked={pattern.doji_filter_enabled}
+    onChange={e=>setPattern({doji_filter_enabled:e.target.checked})}/>Reject doji 1H setup candles</label>
+   {patternNumber('doji_threshold_percent','Minimum candle body / full range (%)',0,1)}
+   <label>Profit-taking mode<select value={pattern.take_profit_mode}
+    onChange={e=>setPattern({take_profit_mode:e.target.value as FuturesCandlePatternConfig['take_profit_mode']})}>
+     <option value="TRAILING_POINTS">5M confirmed-close point trailing</option>
+     <option value="FIXED_POINTS">Fixed BTC price-point target</option>
+     <option value="NONE">Fixed 1H stop only</option>
+    </select></label>
+   {pattern.take_profit_mode==='TRAILING_POINTS'&&<>
+    {patternNumber('activation_points','Profit activation distance (BTC points)',.01,.5)}
+    {patternNumber('pullback_points','Trailing pullback distance (BTC points)',.01,.5)}
+    <label className="switch"><input type="checkbox" checked={pattern.trailing_ignore_doji}
+     onChange={e=>setPattern({trailing_ignore_doji:e.target.checked})}/>Skip doji 5M closes for activation and trailing updates</label>
+   </>}
+   {pattern.take_profit_mode==='FIXED_POINTS'&&patternNumber('fixed_target_points','Fixed take-profit distance (BTC points)',.01,.5)}
+   <label>Position sizing<select value={pattern.size_mode}
+    onChange={e=>setPattern({size_mode:e.target.value as FuturesCandlePatternConfig['size_mode']})}>
+     <option value="RISK_EQUITY">Risk % of available equity</option>
+     <option value="FIXED">Fixed whole lots, guarded by estimated risk</option>
+    </select></label>
+   {patternNumber('equity_risk_percent','Equity risk % per trade',.01,.1)}
+   {patternNumber('max_lots','Maximum futures lots',1,1)}
+   {patternNumber('max_estimated_risk_multiple','Fixed size estimated-risk allowance',1,.1)}
+  </div>}
+  <p>Enabling this mode selects FUTURES / SHORT-only / 5M, disables legacy percent exits, rule risk, pullback and adaptive. Configure Monday-Friday and the IST entry window in Futures risk and entry sessions. OHLC stop hits are research proxies, not guaranteed intrabar fills.</p>
  </section>
  <section className="card"><h2>Rule-tree futures dynamic risk</h2>
   <p>Opt-in swing/signal/ATR stops for ordinary CALL=LONG and PUT=SHORT rules, including VWAP strategies. Signal extremes and ATR are frozen at candle close; entry fills at the next open. Size estimates include fees and adverse stop slippage.</p>
