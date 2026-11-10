@@ -10,7 +10,11 @@ Research-only, opt-in Futures execution. Introduced on the feature branch
 Set `market_type=FUTURES`, `timeframe=5m`, `direction_mode=PUT`,
 `futures.candle_pattern.enabled=true`, `position_policy=EXCLUSIVE`.
 Ordinary entry rule trees are not required; candle-pattern detection is
-performed by the dedicated completed-hour scanner.
+performed by the dedicated completed-hour scanner. Ordinary PUT exit rule
+conditions must be empty: the dedicated 5M fixed/profit-stop manager controls
+exits; optional max-hold or forced-clock exits remain separate explicit risk
+settings. When the UI enables the mode, it clears old PUT exits, time-stop
+and session-end exit overrides, selects short-only 5m, and blocks weekends.
 
 ## Exact strategy semantics
 
