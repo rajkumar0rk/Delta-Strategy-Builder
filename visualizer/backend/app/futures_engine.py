@@ -166,7 +166,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':17,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':18,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
@@ -238,16 +238,18 @@ def run_futures_backtest(req, progress=None):
         """Freeze an entry stop from completed bars only (no future OHLC)."""
         rc=rule_risk
         window=frame.iloc[max(0,index+1-rc.swing_lookback_bars):index+1]
-        if len(window)<rc.swing_lookback_bars or window[['high','low','close']].isna().any().any():
+        if rc.stop_mode!='FIXED_POINTS' and (len(window)<rc.swing_lookback_bars or window[['high','low','close']].isna().any().any()):
             return None
         signal=frame.iloc[index]
         atr=0.0
-        if rc.stop_mode=='ATR' or rc.stop_buffer_atr>0:
+        if rc.stop_mode=='ATR' or (rc.stop_mode in ('SWING','SIGNAL_CANDLE') and rc.stop_buffer_atr>0):
             raw=float(signal.get(rc.atr_indicator_id,float('nan')))
             if not math.isfinite(raw) or raw<=0:return None
             atr=raw
         sign=1 if direction=='LONG' else -1
         close=float(signal.close)
+        if rc.stop_mode=='FIXED_POINTS':
+            return close  # candidate placeholder: real stop is anchored to the slipped entry fill
         if rc.stop_mode=='ATR':
             stop=close-sign*rc.stop_atr_multiple*atr
         elif rc.stop_mode=='SIGNAL_CANDLE':
@@ -264,23 +266,35 @@ def run_futures_backtest(req, progress=None):
         """
         if not (rule_risk and rule_risk.trailing_enabled and pos.get('rule_risk_position')):
             return False
-        value=completed_bar.get(rule_risk.atr_indicator_id)
-        try:
-            atr=float(value)
-        except (ValueError,TypeError):
-            return False
-        if not math.isfinite(atr) or atr<=0:
-            return False
+        atr=None
+        if rule_risk.trailing_mode=='ATR':
+            value=completed_bar.get(rule_risk.atr_indicator_id)
+            try:
+                atr=float(value)
+            except (ValueError,TypeError):
+                return False
+            if not math.isfinite(atr) or atr<=0:
+                return False
         sign=1 if pos['direction']=='LONG' else -1
         point=(float(completed_bar.close) if rule_risk.trailing_source=='CLOSE'
                else float(completed_bar.high) if sign==1 else float(completed_bar.low))
         extreme=pos.get('trail_extreme',pos['entry_price'])
         extreme=max(extreme,point) if sign==1 else min(extreme,point)
         pos['trail_extreme']=extreme
-        proposed=extreme-sign*rule_risk.trailing_atr_multiple*atr
+        if rule_risk.trailing_mode=='POINTS':
+            if (extreme-pos['entry_price'])*sign < rule_risk.trailing_activation_points:
+                return False
+            proposed=extreme-sign*rule_risk.trailing_pullback_points
+        else:
+            proposed=extreme-sign*rule_risk.trailing_atr_multiple*atr
         units=proposed/cfg.tick_size
         tick_stop=round((math.floor(units+1e-10) if sign==1 else math.ceil(units-1e-10))*cfg.tick_size,10)
-        if tick_stop<=0 or (tick_stop-pos['stop_price'])*sign<=0:
+        if tick_stop<=0:
+            return False
+        if rule_risk.trailing_mode=='POINTS' and not pos.get('trailing_active'):
+            # Activation itself is stateful even when the new stop is not tighter.
+            pos['trailing_active']=True
+        if (tick_stop-pos['stop_price'])*sign<=0:
             return False
         pos['stop_price']=tick_stop
         pos['trailing_active']=True
@@ -418,6 +432,9 @@ def run_futures_backtest(req, progress=None):
             px=_slipped(intrabar_candidate if intrabar_candidate is not None else float(row.open),
                         direction,True,effective_slippage_bps,cfg.tick_size,cfg.slippage_ticks)
             trade_qty=qty; stop_price=None; target_price=None; risk_per_lot=None; entry_rejection=None
+            if execution_setup and execution_setup.get('rule_risk') and rule_risk and rule_risk.stop_mode=='FIXED_POINTS':
+                sign=1 if direction=='LONG' else -1
+                execution_setup['stop_price']=px-sign*rule_risk.stop_loss_points
             if execution_setup and execution_setup.get('rule_risk') and rule_risk and rule_risk.stop_mode=='ATR' and rule_risk.atr_stop_anchor=='ENTRY_FILL':
                 frozen_atr=execution_setup['signal_atr']
                 if not (math.isfinite(frozen_atr) and frozen_atr>0):
@@ -558,7 +575,8 @@ def run_futures_backtest(req, progress=None):
                 if ratchet_rule_trailing(position,row):
                     decisions.append({'timestamp':ts.isoformat(),'kind':'TRAIL_UPDATE',
                         'direction':position['direction'],'passed':True,
-                        'reason':'RULE_ATR_RATCHET','stop_price':position['stop_price']})
+                        'reason':('RULE_POINTS_RATCHET' if rule_risk.trailing_mode=='POINTS' else 'RULE_ATR_RATCHET'),
+                        'stop_price':position['stop_price']})
                 if strategy.risk.max_hold_minutes is not None and (ts-pd.Timestamp(position['entry_time'])).total_seconds()/60>=strategy.risk.max_hold_minutes:
                     pending=('CLOSE','TIME_STOP')
                 elif strategy.risk.close_at_session_end and _session_end_due(ts,strategy.session,tf):
