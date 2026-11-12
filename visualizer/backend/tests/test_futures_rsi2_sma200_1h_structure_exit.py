@@ -119,3 +119,13 @@ def test_one_hour_completed_signal_exits_next_hour_open(tmp_path, monkeypatch):
     for trade in result["trades"]:
         expected_sl = trade["entry_price"] - 500 if trade["direction"] == "LONG" else trade["entry_price"] + 500
         assert trade["initial_stop_price"] == expected_sl
+
+
+def test_rsi2_reversal_thresholds_and_sma_trend_filters():
+    cfg = load_strategy()
+    long_rsi, long_trend = cfg.call_entry.conditions
+    short_rsi, short_trend = cfg.put_entry.conditions
+    assert (long_rsi.left, long_rsi.operator, long_rsi.value) == ("rsi2", "LT", 3)
+    assert (short_rsi.left, short_rsi.operator, short_rsi.value) == ("rsi2", "GT", 97)
+    assert (long_trend.left, long_trend.operator, long_trend.right) == ("close", "GT", "sma200")
+    assert (short_trend.left, short_trend.operator, short_trend.right) == ("close", "LT", "sma200")
