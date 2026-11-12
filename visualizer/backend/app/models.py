@@ -168,7 +168,7 @@ class EntryBehavior(BaseModel):
     trigger_condition_id: str | None = None
     delay_bars: int = Field(default=0, ge=0, le=500)
     max_wait_bars: int | None = Field(default=None, ge=0, le=5000)
-    max_entries_per_activation: int = Field(default=1, ge=1, le=100)
+    max_entries_per_activation: int | None = Field(default=1, ge=1, le=100)  # null = unlimited while trigger remains active
     cooldown_bars: int = Field(default=0, ge=0, le=5000)
 
     @model_validator(mode="after")
@@ -655,7 +655,8 @@ class FuturesRuleRiskConfig(BaseModel):
     pullback/AMRS planners. Signal snapshots never see the next candle.
     """
     enabled: bool = False
-    stop_mode: Literal["SWING", "SIGNAL_CANDLE", "ATR"] = "SWING"
+    stop_mode: Literal["SWING", "SIGNAL_CANDLE", "ATR", "FIXED_POINTS"] = "SWING"
+    stop_loss_points: float = Field(default=500.0, gt=0, le=10000000)  # actual entry-price distance
     swing_lookback_bars: int = Field(default=3, ge=1, le=200)
     atr_indicator_id: str = "atr14_5m"
     stop_atr_multiple: float = Field(default=1.5, gt=0, le=20)
@@ -670,7 +671,10 @@ class FuturesRuleRiskConfig(BaseModel):
     # Both modes use only the last confirmed signal-candle ATR.
     atr_stop_anchor: Literal["SIGNAL_CLOSE", "ENTRY_FILL"] = "SIGNAL_CLOSE"
     trailing_enabled: bool = False
+    trailing_mode: Literal["ATR", "POINTS"] = "ATR"  # legacy ATR behavior unchanged
     trailing_atr_multiple: float = Field(default=3.0, gt=0, le=100)
+    trailing_activation_points: float = Field(default=500.0, gt=0, le=10000000)
+    trailing_pullback_points: float = Field(default=100.0, gt=0, le=10000000)
     trailing_source: Literal["HIGH_LOW", "CLOSE"] = "HIGH_LOW"
     size_mode: Literal["RISK_EQUITY", "FIXED"] = "RISK_EQUITY"
     equity_risk_percent: float = Field(default=0.5, gt=0, le=100)
@@ -930,7 +934,16 @@ class StrategyConfig(BaseModel):
             rcfg = self.futures.rule_risk
             if rcfg.atr_stop_anchor == "ENTRY_FILL" and rcfg.stop_mode != "ATR":
                 raise ValueError("ENTRY_FILL ATR stop anchor requires stop_mode ATR")
-            if rcfg.stop_mode == "ATR" or rcfg.stop_buffer_atr > 0 or rcfg.trailing_enabled:
+            if rcfg.stop_mode == "FIXED_POINTS" and rcfg.stop_loss_points < self.futures.tick_size:
+                raise ValueError("Futures rule_risk stop_loss_points must be at least one futures.tick_size")
+            if rcfg.trailing_enabled and rcfg.trailing_mode == "POINTS" and (
+                    rcfg.trailing_activation_points < self.futures.tick_size
+                    or rcfg.trailing_pullback_points < self.futures.tick_size):
+                raise ValueError("Futures rule_risk point trail distances must be at least one futures.tick_size")
+            requires_atr = (rcfg.stop_mode == "ATR"
+                            or (rcfg.stop_mode in ("SWING", "SIGNAL_CANDLE") and rcfg.stop_buffer_atr > 0)
+                            or (rcfg.trailing_enabled and rcfg.trailing_mode == "ATR"))
+            if requires_atr:
                 found = next((item for item in self.indicators if item.id == rcfg.atr_indicator_id), None)
                 if (found is None or found.kind != "ATR" or found.chart_only
                         or found.timeframe not in ("strategy", self.timeframe)):
