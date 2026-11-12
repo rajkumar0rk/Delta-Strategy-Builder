@@ -117,4 +117,5 @@ def test_one_hour_completed_signal_exits_next_hour_open(tmp_path, monkeypatch):
                for t in result["trades"])
     assert all(t["exit_reason"] != "TRAILING_STOP" for t in result["trades"])
     for trade in result["trades"]:
-        assert trade["initial_stop_price"] == trade["entry_price"] - 500 if trade["direction"] == "LONG" else trade["entry_price"] + 500
+        expected_sl = trade["entry_price"] - 500 if trade["direction"] == "LONG" else trade["entry_price"] + 500
+        assert trade["initial_stop_price"] == expected_sl
