@@ -2,7 +2,7 @@
   "schema_version": 15,
   "app": "BTC Strategy Lab",
   "strategy": {
-    "name": "BTCUSD RSI2 + SMA200 1H | EMA20 confirmed structure exit | 500-point emergency SL",
+    "name": "BTCUSD RSI2 Reversal + SMA200 1H | LONG below 3 SHORT above 97 | EMA20 exit",
     "market_type": "FUTURES",
     "timeframe": "1h",
     "direction_mode": "BOTH",
@@ -99,10 +99,10 @@
       "mode": "ALL",
       "conditions": [
         {
-          "id": "long_rsi97",
+          "id": "long_rsi_below3",
           "left": "rsi2",
-          "operator": "GT",
-          "value": 97
+          "operator": "LT",
+          "value": 3
         },
         {
           "id": "long_sma",
@@ -116,10 +116,10 @@
       "mode": "ALL",
       "conditions": [
         {
-          "id": "short_rsi3",
+          "id": "short_rsi_above97",
           "left": "rsi2",
-          "operator": "LT",
-          "value": 3
+          "operator": "GT",
+          "value": 97
         },
         {
           "id": "short_sma",
