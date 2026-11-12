@@ -58,6 +58,26 @@ def build_strategy_prompt(req: AiStrategyPromptRequest) -> str:
             "using the recursive StrategyConfig JSON schema. "
             "Keep dataset_mode, start/end, warmup_candles, warmup_policy, storage_mode, "
             "train_fraction, embargo_bars, replay scenarios and auto-download flags OUTSIDE strategy JSON. "
+            "Generic futures rule_risk now supports stop_mode=FIXED_POINTS with stop_loss_points=500 "
+            "anchored to the slipped/tick-aligned NEXT OPEN entry, for either LONG or SHORT. "
+            "When using this mode, set stop_buffer_atr=0, futures.stop_loss_percent=null "
+            "and futures.take_profit_percent=null. No ATR indicator is required unless "
+            "an ATR stop/buffer or enabled ATR trailing mode needs one. "
+            "Set trailing_enabled=true, trailing_mode=POINTS, trailing_activation_points=500, "
+            "trailing_pullback_points=100, trailing_source=HIGH_LOW, and set "
+            "reward_r_multiple=null and take_profit_points=null for no fixed TP. "
+            "After each completed strategy candle is tested against the PREVIOUS active stop, "
+            "track the favorable highest high / lowest low, activate at +500 BTCUSD points "
+            "and ratchet stop to extreme minus/plus 100 points, never backward. "
+            "The revised stop is effective from the NEXT candle only; same-bar crossing "
+            "cannot assume tick ordering. Stops win ambiguous OHLC events. "
+            "For repeated entries while RSI stays extreme, set max_entries_per_activation=null "
+            "on each direction entry lifecycle, delay_bars=0, cooldown_bars=0 and "
+            "max_wait_bars=null. null is unlimited; the old default of 1 is retained. "
+            "Position exclusivity, no-trade rules, session and daily risk controls still apply. "
+            "Use visualizer/backend/examples/btc-futures-rsi2-sma200-point-trailing.strategy.json. "
+            "Never claim this matches 5m intrabar trailing when strategy timeframe is higher; "
+            "generic rule_risk trailing is evaluated on strategy-timeframe completed OHLC.\\n"
             "Legacy signals and rule-based exits occur at the NEXT candle open, using an adverse slippage proxy. "
             "Opt-in futures.pullback.execution_mode=STOP_MARKET_INTRABAR instead arms a stop order "
             "at the completed setup close; its next 5m candle high/low can trigger the order, "
@@ -434,7 +454,7 @@ Canonical fields are call_entry_lifecycles / put_entry_lifecycles. Each is an or
 - trigger_condition_id: null means the entire directional entry group is the trigger. Otherwise use one condition id inside that side's entry tree (for example MACD > signal).
 - delay_bars: minimum completed candles to wait after the trigger arms. 0 allows immediate entry if the full entry group already passes.
 - max_wait_bars: optional maximum activation age. This is the key A→B workflow: condition A can arm the lifecycle, then the engine waits up to N candles for the FULL entry group (including condition B) to become true. If the window expires, the lifecycle remains expired until its trigger becomes false and later rearms. null = unlimited while the trigger stays true.
-- max_entries_per_activation: maximum successful trades this lifecycle may create while its trigger remains continuously true.
+- max_entries_per_activation: integer 1..100 (legacy default 1), or null for unlimited successful entries while the trigger stays true. EXCLUSIVE position, cooldown and circuit-breakers still apply.
 - cooldown_bars: minimum completed candles after a successful entry before another entry from the same lifecycle.
 Multiple lifecycles on one side are evaluated independently. If more than one lifecycle is ready on the same candle, list order is priority and only one trade can open because position_policy=EXCLUSIVE.
 The legacy call_entry_behavior / put_entry_behavior fields are retained only for older imported strategy compatibility; new strategies should populate the lifecycle lists.
