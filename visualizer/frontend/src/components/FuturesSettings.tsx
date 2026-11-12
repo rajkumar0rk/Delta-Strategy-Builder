@@ -17,10 +17,10 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   swing_lookback_bars:3,stop_buffer_atr:0.1,breakout_buffer_points:0,reward_r_multiple:2,
   size_mode:'RISK_EQUITY' as const,equity_risk_percent:0.5,max_lots:100000,
   max_estimated_risk_multiple:1};
- const ruleDefaults={enabled:false,stop_mode:'SWING' as const,swing_lookback_bars:3,
+ const ruleDefaults={enabled:false,stop_mode:'SWING' as const,stop_loss_points:500,swing_lookback_bars:3,
   atr_indicator_id:'atr14_5m',stop_atr_multiple:1.5,stop_buffer_atr:0.1,
   reward_r_multiple:2,take_profit_points:null as number|null,atr_stop_anchor:'SIGNAL_CLOSE' as const,
-  trailing_enabled:false,trailing_atr_multiple:3,trailing_source:'HIGH_LOW' as const,
+  trailing_enabled:false,trailing_mode:'ATR' as const,trailing_activation_points:500,trailing_pullback_points:100,trailing_atr_multiple:3,trailing_source:'HIGH_LOW' as const,
   size_mode:'RISK_EQUITY' as const,equity_risk_percent:0.5,
   max_lots:100000,max_estimated_risk_multiple:1};
  const ruleRisk={...ruleDefaults,...f.rule_risk};
@@ -175,7 +175,8 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
    onChange={e=>setRuleRisk({enabled:e.target.checked})}/>Enable dynamic stop, R target and risk sizing</label>
   {ruleRisk.enabled&&<div className="form-grid">
    <label>Stop source<select value={ruleRisk.stop_mode} onChange={e=>setRuleRisk({stop_mode:e.target.value as typeof ruleRisk.stop_mode})}>
-    <option value="SWING">Swing extreme</option><option value="SIGNAL_CANDLE">Signal candle</option><option value="ATR">ATR distance</option></select></label>
+    <option value="SWING">Swing extreme</option><option value="SIGNAL_CANDLE">Signal candle</option><option value="ATR">ATR distance</option><option value="FIXED_POINTS">Fixed BTCUSD points from entry fill</option></select></label>
+   {ruleRisk.stop_mode==='FIXED_POINTS'&&ruleNumber('stop_loss_points','Fixed stop distance (BTCUSD points)',0.5,0.5)}
    {ruleNumber('swing_lookback_bars','Completed candles in stop window',1,1)}
    <label>ATR indicator ID<input value={ruleRisk.atr_indicator_id} onChange={e=>setRuleRisk({atr_indicator_id:e.target.value})}/></label>
    {ruleNumber('stop_atr_multiple','ATR stop distance (ATR mode)',0.01,0.1)}
@@ -202,9 +203,13 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
      <input type="number" min="0.01" step="0.1" value={ruleRisk.reward_r_multiple}
        onChange={e=>setRuleRisk({reward_r_multiple:Number(e.target.value)})}/></label>}
    <label className="switch"><input type="checkbox" checked={ruleRisk.trailing_enabled}
-     onChange={e=>setRuleRisk({trailing_enabled:e.target.checked})}/>Enable dynamic ATR trailing stop</label>
+     onChange={e=>setRuleRisk({trailing_enabled:e.target.checked})}/>Enable dynamic trailing stop</label>
+   {ruleRisk.trailing_enabled&&<label>Trailing mode<select value={ruleRisk.trailing_mode??'ATR'} onChange={e=>setRuleRisk({trailing_mode:e.target.value as typeof ruleRisk.trailing_mode})}><option value="ATR">Completed ATR (legacy)</option><option value="POINTS">Activate and trail by BTCUSD points</option></select></label>}
    {ruleRisk.trailing_enabled&&<>
-    {ruleNumber('trailing_atr_multiple','Trailing stop × completed ATR',0.01,0.25)}
+    {(ruleRisk.trailing_mode??'ATR')==='POINTS'?<>
+     {ruleNumber('trailing_activation_points','Activate after favorable BTCUSD points',0.5,0.5)}
+     {ruleNumber('trailing_pullback_points','Trail pullback (BTCUSD points)',0.5,0.5)}
+    </>:ruleNumber('trailing_atr_multiple','Trailing stop × completed ATR',0.01,0.25)}
     <label>Trailing reference<select value={ruleRisk.trailing_source}
       onChange={e=>setRuleRisk({trailing_source:e.target.value as typeof ruleRisk.trailing_source})}>
       <option value="HIGH_LOW">Highest high / lowest low</option>

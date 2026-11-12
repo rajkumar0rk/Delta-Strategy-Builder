@@ -1,5 +1,16 @@
 # Strategy JSON generation prompt — BTC Strategy Lab (OPTIONS or FUTURES)
 
+## Opt-in fixed BTCUSD stop, activated point trailing and unlimited re-entry (November 2026)
+
+For generic FUTURES rule trees, reuse `futures.rule_risk` (do not enable the dedicated `candle_pattern` engine). Set `enabled=true`, `stop_mode="FIXED_POINTS"`, `stop_loss_points=500`, `stop_buffer_atr=0`, `reward_r_multiple=null`, `take_profit_points=null`, `trailing_enabled=true`, `trailing_mode="POINTS"`, `trailing_activation_points=500`, `trailing_pullback_points=100`, `trailing_source="HIGH_LOW"`. Both `futures.stop_loss_percent` and `futures.take_profit_percent` must be null and pullback/adaptive/candle_pattern disabled. Distances are BTCUSD underlying points, NOT dollar P&L, ticks, percent or option premium. Values must be positive and >= futures.tick_size when active. An ATR indicator is only required for ATR stop/buffer/trailing selections; defaults preserve ATR trailing and SWING stops for old strategies.
+
+For LONG, initial SL = actual simulated entry - stop_loss_points; for SHORT, entry + stop_loss_points. The setup signal is based on a completed strategy candle, entry fills at the NEXT open with adverse slippage/tick rounding. On every subsequent OHLC candle, check the existing stop first (including gaps), then measure the current completed high (LONG) / low (SHORT) to activate trailing once the best favorable excursion >= activation points. The trailing floor is best high - pullback points for LONG / best low + pullback points for SHORT, snapped to a valid price tick; it can only tighten, and becomes executable on the NEXT strategy candle. Activation and stop touches in one OHLC candle are inherently ambiguous; no same-candle hindsight stop is executed. When high/low includes a favorable extreme and the old stop is also touched in that candle, the old stop wins. The generic mode does not do 5m child-bar execution when using a 1h strategy timeframe. Historical tick/broker execution is not claimed.
+
+A lifecycle's `max_entries_per_activation=null` means unlimited successful entries during one continuous trigger, without waiting for RSI to reset; numeric 1..100 retains its old capped behavior (default 1). `delay_bars=0`, `cooldown_bars=0`, `max_wait_bars=null` permit the next eligible signal after an exit, still respecting one position at a time, session, no-trade and daily gates. A stop exit candle is never retroactively an entry signal under the existing closed-bar loop; next eligible completed bar can arm the subsequent entry. Applies to OPTIONS lifecycles too because the lifecycle primitive is shared. Existing strategies without these new properties keep their previous behavior.
+
+The implementation is O(1) state per open trade, O(N) overall backtest traversal; no extra OHLC rescans, downloads or dependencies. Futures cache identity increments to 18 so prior cached fills are not reused. Sample `visualizer/backend/examples/btc-futures-rsi2-sma200-point-trailing.strategy.json`, tests `visualizer/backend/tests/test_futures_rule_points_trail_reentry.py`. The sample excludes funding explicitly; include verified funding CSV for funding-inclusive research.
+
+
 ## Optional fixed-point BTCUSD Futures take-profit (November 2026)
 
 The existing opt-in generic `futures.rule_risk` execution supports three **mutually exclusive** target modes:
