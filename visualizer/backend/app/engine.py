@@ -508,7 +508,7 @@ def _cycle_eligible(index: int, behavior, state: EntryCycleState, delay_ready: b
         return False, 'ENTRY_WAIT_WINDOW_EXPIRED'
     if not delay_ready:
         return False, 'WAITING_ENTRY_DELAY'
-    if state.entries >= behavior.max_entries_per_activation:
+    if behavior.max_entries_per_activation is not None and state.entries >= behavior.max_entries_per_activation:
         return False, 'MAX_ENTRIES_FOR_ACTIVATION'
     if state.last_entry_index is not None and index - state.last_entry_index <= behavior.cooldown_bars:
         return False, 'ENTRY_COOLDOWN'
@@ -548,7 +548,8 @@ def _lifecycle_summary(rows) -> dict[str, Any]:
         'activation_age_bars': max((int(x['age']) for x in active), default=0),
         'entry_delay_bars': min((int(x['behavior'].delay_bars) for x in rows), default=0),
         'entries_in_activation': sum(int(x['state'].entries) for x in active),
-        'max_entries_per_activation': sum(int(x['behavior'].max_entries_per_activation) for x in rows),
+        'max_entries_per_activation': (None if any(x['behavior'].max_entries_per_activation is None for x in rows)
+                                       else sum(int(x['behavior'].max_entries_per_activation) for x in rows)),
         'lifecycle_reason': '' if eligible else (';'.join(dict.fromkeys(x['reason'] for x in rows if x['reason'])) or 'NO_ENABLED_LIFECYCLE'),
         'eligible_lifecycle_ids': ','.join(x['behavior'].id for x in eligible),
         'active_lifecycle_ids': ','.join(x['behavior'].id for x in active),
@@ -559,7 +560,7 @@ def _lifecycle_summary(rows) -> dict[str, Any]:
                 'age_bars': int(x['age']), 'delay_bars': int(x['behavior'].delay_bars),
                 'max_wait_bars': x['behavior'].max_wait_bars,
                 'entries': int(x['state'].entries),
-                'max_entries': int(x['behavior'].max_entries_per_activation),
+                'max_entries': x['behavior'].max_entries_per_activation,
                 'expired': bool(x['state'].expired), 'eligible': bool(x['eligible']),
                 'reason': x['reason'],
             } for x in rows
