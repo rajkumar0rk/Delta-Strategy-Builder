@@ -1,5 +1,14 @@
 # Strategy JSON generation prompt — BTC Strategy Lab (OPTIONS or FUTURES)
 
+## RSI(2) + SMA200 1H EMA20/price-action exit sample (November 2026)
+
+For the 1-hour BTCUSD generic futures strategy, use the existing completed-candle `call_exit` and `put_exit` rule trees; do not introduce a separate exit simulator. Sample: `visualizer/backend/examples/btc-futures-rsi2-sma200-1h-ema20-structure-exit.strategy.json`. Keep `strategy.timeframe="1h"`, RSI(2) and SMA(200) entry filters, `futures.rule_risk.enabled=true`, `stop_mode="FIXED_POINTS"`, `stop_loss_points=500`, and `trailing_enabled=false`. Disable both legacy percentage exits and fixed targets (`reward_r_multiple=null`, `take_profit_points=null`). The initial 500-point protective stop remains active. No profit threshold is necessary before condition exits; the recommended 1H reversal exits are independent of favorable excursion.
+
+For LONG `call_exit`: ALL of (1) current completed 1H `close < ema20`, (2) previous completed 1H `close[1] < ema20[1]`, and (3) current `close < low[1]`. For SHORT `put_exit`: reverse all three comparisons, `close > ema20`, `close[1] > ema20[1]`, and `close > high[1]`. Represent prior-candle comparisons using `Condition.left_offset` and `right_offset`, not an unsupported operator or unconfirmed candle. Once an exit rule confirms at the completed 1H close, the preexisting futures engine fills the exit at the NEXT 1H candle OPEN proxy. The emergency stop remains an intrabar OHLC trigger that can exit sooner, with gap/slippage risk.
+
+This exit intentionally replaces the prior 500/100 point trailing behavior *in this sample only*; existing strategies, schema v15 and shared rule-risk features retain their behavior. The earlier optional profit-activation filter is NOT configured here; the reversal signal may close even a losing position. Exit quality and performance must be backtested on the actual archive. 
+
+
 ## Opt-in fixed BTCUSD stop, activated point trailing and unlimited re-entry (November 2026)
 
 For generic FUTURES rule trees, reuse `futures.rule_risk` (do not enable the dedicated `candle_pattern` engine). Set `enabled=true`, `stop_mode="FIXED_POINTS"`, `stop_loss_points=500`, `stop_buffer_atr=0`, `reward_r_multiple=null`, `take_profit_points=null`, `trailing_enabled=true`, `trailing_mode="POINTS"`, `trailing_activation_points=500`, `trailing_pullback_points=100`, `trailing_source="HIGH_LOW"`. Both `futures.stop_loss_percent` and `futures.take_profit_percent` must be null and pullback/adaptive/candle_pattern disabled. Distances are BTCUSD underlying points, NOT dollar P&L, ticks, percent or option premium. Values must be positive and >= futures.tick_size when active. An ATR indicator is only required for ATR stop/buffer/trailing selections; defaults preserve ATR trailing and SWING stops for old strategies.
