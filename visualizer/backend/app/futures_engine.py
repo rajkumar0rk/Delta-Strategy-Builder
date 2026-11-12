@@ -765,7 +765,7 @@ def run_futures_backtest(req, progress=None):
                     'entry_lifecycle_age_bars':int(selected_row['age']),
                     'entry_lifecycle_delay_bars':int(behavior.delay_bars),
                     'entry_lifecycle_entries_before':int(cycle.entries),
-                    'entry_lifecycle_max_entries':int(behavior.max_entries_per_activation),
+                    'entry_lifecycle_max_entries':behavior.max_entries_per_activation,
                     'entry_lifecycle_expired':bool(cycle.expired),
                     'entry_lifecycle_eligible':bool(selected_row['eligible']),
                 }
