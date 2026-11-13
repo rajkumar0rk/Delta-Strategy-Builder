@@ -152,20 +152,26 @@ def test_reference_json_valid():
     assert cfg.put_entry_lifecycles[0].max_entries_per_activation is None
 
 
-def test_5m_rule_stop_and_trailing_inside_hour(tmp_path, monkeypatch):
+@pytest.mark.parametrize("direction", ["LONG", "SHORT"])
+def test_5m_rule_stop_and_trailing_inside_hour(tmp_path, monkeypatch, direction):
     """A 1h entry can trail at 01:20 and stop by 01:25, before 02:00."""
     p = 100000
     bars = [(p, p+20, p-20, p) for _ in range(72)]
     # The first full 1h signal completes at 01:00; trade fills at 01:00.
-    bars[15] = (p, p+600, p-20, p+40)       # 01:20: activate stop at 100500
-    bars[16] = (p+500, p+520, p+480, p+500) # 01:25: trailing stop touched
-    result = _run(tmp_path, monkeypatch, bars, strategy_timeframe="1h",
-                  risk_execution_timeframe="5m")
+    if direction == "LONG":
+        bars[15] = (p, p+600, p-20, p+40)       # 01:20: long activation
+        bars[16] = (p+500, p+520, p+480, p+500) # 01:25: long trailing stop
+    else:
+        bars[15] = (p, p+20, p-600, p-40)       # 01:20: short activation
+        bars[16] = (p-500, p-480, p-520, p-500) # 01:25: short trailing stop
+    result = _run(tmp_path, monkeypatch, bars, direction=direction,
+                  strategy_timeframe="1h", risk_execution_timeframe="5m")
     assert result["metrics"]["trades"] >= 1
     trade = result["trades"][0]
     assert trade["exit_reason"] == "TRAILING_STOP"
-    assert trade["initial_stop_price"] == p-500
-    assert trade["exit_price"] == p+500
+    sign = 1 if direction == "LONG" else -1
+    assert trade["initial_stop_price"] == p-sign*500
+    assert trade["exit_price"] == p+sign*500
     assert pd.Timestamp(trade["exit_time"]) == pd.Timestamp("2026-01-01T01:25:00Z")
     assert result["futures_research"]["rule_risk_execution_timeframe"] == "5m"
 
