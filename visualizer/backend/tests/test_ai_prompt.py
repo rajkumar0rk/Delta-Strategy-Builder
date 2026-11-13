@@ -175,3 +175,13 @@ def test_importable_options_shared_pullback_and_ai_prompt_contract():
                 'BUY CALL/BUY PUT', 'option premium', 'underlying_tick_size',
                 'OPTIONS_PULLBACK_BACKTEST.md'):
         assert key.lower() in p.lower()
+
+
+def test_options_signal_stop_and_futures_schema_remain_documented():
+    from app.ai_prompt import build_strategy_prompt
+    from app.models import AiStrategyPromptRequest, StrategyConfig
+    prompt=build_strategy_prompt(AiStrategyPromptRequest(strategy=StrategyConfig()))
+    assert 'UNDERLYING_SIGNAL_CANDLE' in prompt
+    assert 'signal_candle_execution_timeframe' in prompt
+    assert 'market_type=FUTURES' in prompt
+    assert 'BUY CALL' in prompt
