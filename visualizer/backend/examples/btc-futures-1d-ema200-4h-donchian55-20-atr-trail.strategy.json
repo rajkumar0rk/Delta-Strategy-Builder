@@ -1,0 +1,284 @@
+{
+  "schema_version": 15,
+  "app": "BTC Strategy Lab",
+  "strategy": {
+    "name": "BTCUSD Futures | 1D EMA200 + 4H Donchian55/20 + ATR 2.5/3 (5M Execution)",
+    "market_type": "FUTURES",
+    "timeframe": "4h",
+    "direction_mode": "BOTH",
+    "position_policy": "EXCLUSIVE",
+    "conflict_policy": "SKIP",
+    "call_action": "BUY",
+    "put_action": "BUY",
+    "call_signal_mode": "ORDER_ONLY",
+    "put_signal_mode": "ORDER_ONLY",
+    "futures": {
+      "symbol": "BTCUSD",
+      "contract_btc": 0.001,
+      "quantity_lots": 1,
+      "leverage": 3,
+      "margin_mode": "ISOLATED",
+      "maintenance_margin_percent": 0.25,
+      "taker_fee_percent": 0.05,
+      "gst_percent": 18,
+      "slippage_bps": 2,
+      "tick_size": 0.5,
+      "slippage_ticks": 0,
+      "funding_rate_multiplier": 1,
+      "stop_loss_percent": null,
+      "take_profit_percent": null,
+      "funding_mode": "EXCLUDE_WITH_WARNING",
+      "margin_tier_mode": "FLAT_RESEARCH",
+      "pullback": {
+        "enabled": false
+      },
+      "force_exit_time": null,
+      "extra_half_spread_bps": 0,
+      "rule_risk": {
+        "enabled": true,
+        "stop_mode": "ATR",
+        "swing_lookback_bars": 3,
+        "atr_indicator_id": "atr14_4h",
+        "stop_atr_multiple": 2.5,
+        "stop_buffer_atr": 0,
+        "reward_r_multiple": null,
+        "atr_stop_anchor": "ENTRY_FILL",
+        "trailing_enabled": true,
+        "trailing_atr_multiple": 3,
+        "trailing_source": "HIGH_LOW",
+        "size_mode": "RISK_EQUITY",
+        "equity_risk_percent": 0.5,
+        "max_lots": 100000,
+        "max_estimated_risk_multiple": 1,
+        "take_profit_points": null,
+        "execution_timeframe": "5m",
+        "trailing_mode": "ATR"
+      },
+      "adaptive": {
+        "enabled": false
+      },
+      "candle_pattern": {
+        "enabled": false
+      }
+    },
+    "indicators": [
+      {
+        "id": "ema200_1d",
+        "kind": "EMA",
+        "params": {
+          "period": 200,
+          "source": "close"
+        },
+        "timeframe": "1D",
+        "visible": true,
+        "chart_only": false
+      },
+      {
+        "id": "daily_close",
+        "kind": "EMA",
+        "params": {
+          "period": 1,
+          "source": "close"
+        },
+        "timeframe": "1D",
+        "visible": false,
+        "chart_only": false
+      },
+      {
+        "id": "donchian55_4h",
+        "kind": "DONCHIAN",
+        "params": {
+          "period": 55
+        },
+        "timeframe": "strategy",
+        "visible": true,
+        "chart_only": false
+      },
+      {
+        "id": "donchian20_4h",
+        "kind": "DONCHIAN",
+        "params": {
+          "period": 20
+        },
+        "timeframe": "strategy",
+        "visible": true,
+        "chart_only": false
+      },
+      {
+        "id": "atr14_4h",
+        "kind": "ATR",
+        "params": {
+          "period": 14
+        },
+        "timeframe": "strategy",
+        "visible": true,
+        "chart_only": false
+      }
+    ],
+    "call_entry": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "long_daily_trend",
+          "left": "daily_close",
+          "operator": "GT",
+          "right": "ema200_1d",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        },
+        {
+          "id": "long_donchian55",
+          "left": "close",
+          "operator": "GT",
+          "right": "donchian55_4h.upper",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        }
+      ],
+      "groups": []
+    },
+    "put_entry": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "short_daily_trend",
+          "left": "daily_close",
+          "operator": "LT",
+          "right": "ema200_1d",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        },
+        {
+          "id": "short_donchian55",
+          "left": "close",
+          "operator": "LT",
+          "right": "donchian55_4h.lower",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        }
+      ],
+      "groups": []
+    },
+    "risk": {
+      "starting_balance_usd": 1000,
+      "max_hold_minutes": null,
+      "max_trades_per_day": null,
+      "max_consecutive_losses": null,
+      "max_daily_loss_percent": 1,
+      "stop_trading_after_daily_loss_limit": true,
+      "close_at_session_end": false
+    },
+    "session": {
+      "timezone": "Asia/Kolkata",
+      "start": "00:00",
+      "end": "23:59",
+      "windows": [
+        {
+          "start": "00:00",
+          "end": "23:59"
+        }
+      ],
+      "blocked_weekdays": []
+    },
+    "call_exit": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "long_donchian20_exit",
+          "left": "close",
+          "operator": "LT",
+          "right": "donchian20_4h.lower",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        }
+      ],
+      "groups": []
+    },
+    "put_exit": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "short_donchian20_exit",
+          "left": "close",
+          "operator": "GT",
+          "right": "donchian20_4h.upper",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        }
+      ],
+      "groups": []
+    },
+    "call_entry_lifecycles": [
+      {
+        "id": "long_breakout_once",
+        "name": "One LONG per Donchian breakout activation",
+        "enabled": true,
+        "trigger_condition_id": "long_donchian55",
+        "delay_bars": 0,
+        "max_wait_bars": null,
+        "max_entries_per_activation": 1,
+        "cooldown_bars": 0
+      }
+    ],
+    "put_entry_lifecycles": [
+      {
+        "id": "short_breakout_once",
+        "name": "One SHORT per Donchian breakout activation",
+        "enabled": true,
+        "trigger_condition_id": "short_donchian55",
+        "delay_bars": 0,
+        "max_wait_bars": null,
+        "max_entries_per_activation": 1,
+        "cooldown_bars": 0
+      }
+    ],
+    "call_entry_behavior": {
+      "id": "long_breakout_once",
+      "name": "One LONG per Donchian breakout activation",
+      "enabled": true,
+      "trigger_condition_id": "long_donchian55",
+      "delay_bars": 0,
+      "max_wait_bars": null,
+      "max_entries_per_activation": 1,
+      "cooldown_bars": 0
+    },
+    "put_entry_behavior": {
+      "id": "short_breakout_once",
+      "name": "One SHORT per Donchian breakout activation",
+      "enabled": true,
+      "trigger_condition_id": "short_donchian55",
+      "delay_bars": 0,
+      "max_wait_bars": null,
+      "max_entries_per_activation": 1,
+      "cooldown_bars": 0
+    },
+    "options_pullback": {
+      "enabled": false
+    },
+    "pattern_trade": {
+      "enabled": false
+    }
+  }
+}
