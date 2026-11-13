@@ -129,3 +129,29 @@ def test_rsi2_reversal_thresholds_and_sma_trend_filters():
     assert (short_rsi.left, short_rsi.operator, short_rsi.value) == ("rsi2", "GT", 97)
     assert (long_trend.left, long_trend.operator, long_trend.right) == ("close", "GT", "sma200")
     assert (short_trend.left, short_trend.operator, short_trend.right) == ("close", "LT", "sma200")
+
+
+def test_ema20_entry_gate_is_directional_and_uses_completed_1h_close():
+    cfg = load_strategy()
+    assert cfg.timeframe == "1h"
+    long_ema = cfg.call_entry.conditions[-1]
+    short_ema = cfg.put_entry.conditions[-1]
+    assert (long_ema.id, long_ema.left, long_ema.operator, long_ema.right) == (
+        "long_above_ema20", "close", "GT", "ema20")
+    assert (short_ema.id, short_ema.left, short_ema.operator, short_ema.right) == (
+        "short_below_ema20", "close", "LT", "ema20")
+    # Every entry rule is an ALL-group condition, so this gate is mandatory.
+    assert cfg.call_entry.mode == cfg.put_entry.mode == "ALL"
+    assert len(cfg.call_entry.conditions) == len(cfg.put_entry.conditions) == 3
+    from app.rules import evaluate_group
+    import pandas as pd
+    # RSI and SMA permit LONG, but the EMA gate rejects a close below EMA20.
+    long_frame = pd.DataFrame([{"rsi2": 2, "close": 101, "sma200": 100, "ema20": 102}])
+    assert not evaluate_group(long_frame, 0, cfg.call_entry)["passed"]
+    long_frame.loc[0, "ema20"] = 100.5
+    assert evaluate_group(long_frame, 0, cfg.call_entry)["passed"]
+    # RSI and SMA permit SHORT, but the EMA gate rejects a close above EMA20.
+    short_frame = pd.DataFrame([{"rsi2": 98, "close": 99, "sma200": 100, "ema20": 98}])
+    assert not evaluate_group(short_frame, 0, cfg.put_entry)["passed"]
+    short_frame.loc[0, "ema20"] = 99.5
+    assert evaluate_group(short_frame, 0, cfg.put_entry)["passed"]
