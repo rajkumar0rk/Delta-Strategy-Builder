@@ -549,6 +549,8 @@ stop_loss.mode:
 - OPTION_PERCENT: exits when option return <= -abs(value)%
 - OPTION_POINTS: exits when option bid <= entry - abs(value)
 - UNDERLYING_ATR: direction-aware stop based on entry BTC and the first non-chart-only ATR indicator
+- UNDERLYING_SIGNAL_CANDLE: general option rule-tree entry stop. Freeze the completed signal candle LOW minus signal_candle_buffer_points for BUY CALL/SELL PUT, or HIGH plus buffer for BUY PUT/SELL CALL. signal_candle_trigger=WICK or CLOSE and signal_candle_execution_timeframe=strategy or 5m (all completed BTC bars). Historical wick-touch timing within a candle is UNKNOWN. The first observed eligible pre-expiry option quote at/after the completed stop trigger is used for executable BID/ASK exit; if no quote exists, the position remains unresolved. Never describe the underlying BTC stop as a guaranteed option stop-market fill. Cannot combine this mode with options_pullback or pattern_trade specialized execution.
+- RSI(14)+VWAP picture example for either OPTIONS or FUTURES: long RSI>60 AND close>VWAP; short RSI<40 AND close<VWAP. Suggested exits are long RSI crosses BELOW 60 OR close crosses below VWAP, short RSI crosses ABOVE 40 OR close crosses above VWAP. Image does not specify exits exactly. OPTIONS use BUY CALL for bullish and BUY PUT for bearish; FUTURES use its native risk rule_risk stop_mode=SIGNAL_CANDLE, not option premium risk. Do NOT remove futures schema fields to match options.
 
 take_profit.mode:
 - NONE

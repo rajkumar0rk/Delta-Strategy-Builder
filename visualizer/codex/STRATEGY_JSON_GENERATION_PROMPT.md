@@ -260,3 +260,12 @@ The Futures engine cache identity advances from 16 to 17. Regression
 coverage includes actual fill-based stop placement, doji/entry filtering,
 trail activation/ratcheting, fee reconciliation, and schema checks.
 Market execution remains RESEARCH_ONLY.
+
+
+## Generic OPTIONS RSI(14) + VWAP signal-candle stop (2026-11-13)
+
+This is additive to the existing OPTIONS/FUTURES JSON contract. **Do not replace the FUTURES schema or remove its existing `rule_risk` features.** For `market_type=OPTIONS`, configure non-chart-only RSI(14) and VWAP indicators, BUY CALL / BUY PUT, and entry rule groups `rsi14 GT 60 AND close GT vwap` for CALL, `rsi14 LT 40 AND close LT vwap` for PUT. Suggested signal exits: RSI crossing back below/above 60/40 OR underlying candle closing across VWAP. The image does not define its exit algorithm precisely; these are proposed testable choices.
+
+New options-only `risk.stop_loss.mode=UNDERLYING_SIGNAL_CANDLE`: freeze the COMPLETED strategy entry signal candle's underlying low for BUY CALL/SELL PUT (minus `signal_candle_buffer_points`), or high for BUY PUT/SELL CALL (plus that buffer). The buffer defaults to 0 and must be nonnegative. `signal_candle_trigger=WICK|CLOSE` controls whether the monitoring bar's wick or close crosses the frozen stop. `signal_candle_execution_timeframe=strategy|5m` allows completed 5m monitoring independently of higher strategy timeframe. This is no tick replay: stop trigger time is the monitoring candle's close. The actual option exit uses the first subsequent eligible pre-expiration observed option BID/ASK quote with configured spread/slippage and fees; no valid quote leaves an unresolved open position. The engine does not invent option prices, Greeks, exchange stop-market fills, or guaranteed worst losses. This generic stop is mutually exclusive with specialized `options_pullback` and `pattern_trade` execution. Existing legacy option stops default to OPTION_PERCENT; prior saved strategies retain behavior.
+
+For `market_type=FUTURES` use existing `futures.rule_risk.stop_mode=SIGNAL_CANDLE` when supported by current code; it is a *different* risk engine from the option premium/quote path. Preserve `schema_version=15` and validate against the LIVE `StrategyConfig.model_json_schema()`. Backtest requests, dataset choices, warm-up and cost assumptions remain outside strategy JSON. 5m OHLC monitoring is research-only and cannot identify the exact price/time of an intrabar stop fill.

@@ -72,6 +72,8 @@ class Position:
     underlying_levels: dict[str, Any] | None = None
     underlying_exit_pending: str | None = None
     force_exit_pending: bool = False
+    underlying_stop_level: float | None = None
+    underlying_stop_trigger_time: str | None = None
 
 
 def _finite(v):
@@ -325,7 +327,7 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
 
 def _backtest_cache_key(req: BacktestRequest, paths) -> str:
     payload = {
-        'engine_version': 178,  # observed account risk replay alongside hypothetical strategy backtests
+        'engine_version': 179,  # observed account risk replay alongside hypothetical strategy backtests
         'warmup_candles': req.warmup_candles,
         'warmup_policy': req.warmup_policy,
         'bar_gap_policy': req.bar_gap_policy,
@@ -370,6 +372,22 @@ def _executable_exit_price(pos: Position, q: dict[str, Any], strategy) -> float:
     effective = _effective_quote(q, strategy.execution)
     # Long option exits SELL at bid; short option exits BUY-to-close at ask.
     return max(0.0, float(effective['bid']) - ticks) if pos.action == 'BUY' else float(effective['ask']) + ticks
+
+
+def _signal_candle_stop_level(direction: str, action: str, low: float, high: float, buffer: float) -> float:
+    # A bought CALL or sold PUT is BTC-bullish. The opposite trades are bearish.
+    bullish = (direction == 'CALL') == (action == 'BUY')
+    return low - buffer if bullish else high + buffer
+
+
+def _signal_candle_stop_hit(pos: Position, low: float, high: float, close: float, trigger: str) -> bool:
+    level = pos.underlying_stop_level
+    if level is None:
+        return False
+    bullish = (pos.direction == 'CALL') == (pos.action == 'BUY')
+    if trigger == 'CLOSE':
+        return close <= level if bullish else close >= level
+    return low <= level if bullish else high >= level
 
 
 def _position_return_percent(pos: Position, exit_price: float) -> float:
@@ -1005,6 +1023,20 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
     frame, series_meta = compute_indicators(bars, strategy.indicators, strategy.timeframe,
         daily_source=daily_source, progress=lambda msg: report(msg, 25, 'INDICATORS', 'Prepare option quote indexes'))
     _prepare_strategy_state(frame, strategy)
+    signal_stop_cfg = strategy.risk.stop_loss
+    signal_stop_enabled = signal_stop_cfg.mode == 'UNDERLYING_SIGNAL_CANDLE'
+    # One monotonic index through completed BTC bars; avoid repeated O(N)
+    # history slices and do not invent sub-candle/tick fill timestamps.
+    signal_stop_frame = (
+        store.load_bars_many(bar_parts, req.start, req.end, '5m')
+        if signal_stop_enabled and signal_stop_cfg.signal_candle_execution_timeframe == '5m'
+        else frame
+    )
+    signal_stop_times = signal_stop_frame.index if signal_stop_enabled else ()
+    signal_stop_lows = signal_stop_frame['low'].to_numpy(copy=False) if signal_stop_enabled else ()
+    signal_stop_highs = signal_stop_frame['high'].to_numpy(copy=False) if signal_stop_enabled else ()
+    signal_stop_closes = signal_stop_frame['close'].to_numpy(copy=False) if signal_stop_enabled else ()
+    signal_stop_cursor = 0
     pattern_tracker = None
     pattern_side_events = {}
     options_setup = strategy.options_pullback if strategy.options_pullback.enabled else None
@@ -1294,6 +1326,8 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             'entry_lifecycle_name': pos.entry_lifecycle_name,
             'margin_research': pos.margin,
             'underlying_levels': pos.underlying_levels,
+            'underlying_stop_level': pos.underlying_stop_level,
+            'underlying_stop_trigger_time': pos.underlying_stop_trigger_time,
             'underlying_signal_stop': pos.underlying_levels.get('stop') if pos.underlying_levels else None,
             'underlying_r_target': pos.underlying_levels.get('target') if pos.underlying_levels else None,
             'option_risk_per_unit_usd': pos.underlying_levels.get('per_unit_risk') if pos.underlying_levels else None,
@@ -1392,6 +1426,23 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             else:
                 _update_lifecycles(frame, i, strategy.put_entry, put_behaviors, put_cycles)
 
+        # Evaluate completed underlying stop bars before consuming option quotes,
+        # then compare their trigger timestamps with quotes chronologically.
+        if signal_stop_enabled:
+            while signal_stop_cursor < len(signal_stop_times) and signal_stop_times[signal_stop_cursor] <= ts:
+                stop_at = signal_stop_times[signal_stop_cursor]
+                if (pos is not None and pos.underlying_stop_level is not None
+                        and pos.underlying_stop_trigger_time is None
+                        and stop_at > pd.Timestamp(parse_time(pos.entry_time))):
+                    if _signal_candle_stop_hit(
+                            pos, float(signal_stop_lows[signal_stop_cursor]),
+                            float(signal_stop_highs[signal_stop_cursor]),
+                            float(signal_stop_closes[signal_stop_cursor]),
+                            signal_stop_cfg.signal_candle_trigger):
+                        pos.underlying_stop_trigger_time = stop_at.isoformat()
+                        pos.underlying_exit_pending = 'UNDERLYING_SIGNAL_CANDLE_STOP'
+                signal_stop_cursor += 1
+
         # Quote-driven protective exits up to this completed candle.
         if pos is not None and pos.pattern_levels is not None:
             pattern_levels=pos.pattern_levels
@@ -1434,6 +1485,12 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                     continue
                 stamp = pd.Timestamp(q['timestamp']).isoformat()
                 record_mtm(q, stamp)
+                if (pos.underlying_stop_trigger_time is not None
+                        and pd.Timestamp(q['timestamp']) >= pd.Timestamp(parse_time(pos.underlying_stop_trigger_time))):
+                    close_position(stamp, _executable_exit_price(pos, q, strategy),
+                                   'UNDERLYING_SIGNAL_CANDLE_STOP')
+                    closed_this_candle = True
+                    break
                 health = margin_status(q, stamp)
                 if health is not None and strategy.risk.sell_margin.check_margin_on_quotes and health['breached']:
                     estimated_margin_breaches += 1
@@ -1468,6 +1525,11 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                         _executable_exit_price(pos,quote,strategy),
                         pos.underlying_exit_pending)
                     closed_this_candle=True
+
+        # A triggered stop without an observed executable option quote is
+        # unresolved exposure. Preserve the position and retry future quotes.
+        if pos is not None and pos.underlying_stop_trigger_time is not None:
+            continue
 
         # Force-close clock is independent of entry windows. A missing quote
         # remains an unfilled/retryable exit rather than a fabricated price.
@@ -1877,6 +1939,11 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             entry_lifecycle_id=chosen_behavior.id, entry_lifecycle_name=chosen_behavior.name,
             margin=margin_details,
             pattern_levels=pattern_level,pattern_initial_quantity=qty,
+            underlying_stop_level=(
+                _signal_candle_stop_level(direction, action, float(row.low),
+                    float(row.high), signal_stop_cfg.signal_candle_buffer_points)
+                if signal_stop_enabled else None
+            ),
         )
         if options_setup and filled_stop is not None:
             direction_up=direction=='CALL'
@@ -1975,6 +2042,11 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 continue
             stamp = pd.Timestamp(last_q['timestamp']).isoformat()
             record_mtm(last_q, stamp)
+            if (pos.underlying_stop_trigger_time is not None
+                    and pd.Timestamp(last_q['timestamp']) >= pd.Timestamp(parse_time(pos.underlying_stop_trigger_time))):
+                close_position(stamp, _executable_exit_price(pos, last_q, strategy),
+                               'UNDERLYING_SIGNAL_CANDLE_STOP')
+                break
             health = margin_status(last_q, stamp)
             if health is not None and strategy.risk.sell_margin.check_margin_on_quotes and health['breached']:
                 estimated_margin_breaches += 1
@@ -2006,7 +2078,8 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         allowed_age = strategy.execution.end_of_data_quote_max_age_seconds
         contract_expiry = pd.Timestamp(pos.spec['expiration'])
         expired_before_end = contract_expiry <= pd.Timestamp(end_dt)
-        if not expired_before_end and last is not None and quote_age is not None and 0 <= quote_age <= allowed_age:
+        if (pos.underlying_stop_trigger_time is None and not expired_before_end and last is not None
+                and quote_age is not None and 0 <= quote_age <= allowed_age):
             record_mtm(last.to_dict(), last_ts.isoformat())
             close_position(last_ts.isoformat(), _executable_exit_price(pos, last.to_dict(), strategy), 'END_OF_DATA')
         else:
@@ -2019,7 +2092,11 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 'quote_age_seconds': quote_age,
                 'max_allowed_quote_age_seconds': allowed_age,
                 'expiration': contract_expiry.isoformat(),
-                'reason': 'EXPIRY_SETTLEMENT_UNAVAILABLE' if expired_before_end else 'NO_FRESH_FINAL_QUOTE',
+                'reason': ('EXPIRY_SETTLEMENT_UNAVAILABLE' if expired_before_end else
+                           'STOP_NO_EXECUTABLE_QUOTE' if pos.underlying_stop_trigger_time else
+                           'NO_FRESH_FINAL_QUOTE'),
+                'underlying_stop_level': pos.underlying_stop_level,
+                'underlying_stop_trigger_time': pos.underlying_stop_trigger_time,
             }
 
     wins = sum(t['net_pnl_usd'] > 0 for t in trades)
@@ -2123,6 +2200,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 'Historical account snapshots are audit observations, not counterfactual margin and cannot validate hypothetical Delta orders',
                 'Option quote gaps are reported but cannot be converted into known bid/ask or liquidity',
                 'Opt-in option stop entry: BTC wick trigger is only known at completed-bar close; actual option fills are quote-backed later, not intrabar stop-market fills',
+                'Generic option signal-candle stop: BTC high/low/close trigger is recognized on a completed monitoring candle; subsequent option quote and spread determine realized fill',
                 'Option ATR stop/2R target are BTC underlying price levels; realized option-premium R may differ materially due to delta, time decay, implied volatility and spread',
                 'BUY option risk sizing budgets full premium plus estimated fees, not model-inferred ATR option premium changes',
             ] + (['Warm-up incomplete'] if not warmup['contiguous'] else [])
