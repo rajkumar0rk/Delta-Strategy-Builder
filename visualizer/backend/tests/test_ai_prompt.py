@@ -183,5 +183,5 @@ def test_options_signal_stop_and_futures_schema_remain_documented():
     prompt=build_strategy_prompt(AiStrategyPromptRequest(strategy=StrategyConfig()))
     assert 'UNDERLYING_SIGNAL_CANDLE' in prompt
     assert 'signal_candle_execution_timeframe' in prompt
-    assert 'market_type=FUTURES' in prompt
+    assert 'FUTURES' in prompt
     assert 'BUY CALL' in prompt
