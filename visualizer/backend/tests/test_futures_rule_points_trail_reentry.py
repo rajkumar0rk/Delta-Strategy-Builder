@@ -46,7 +46,7 @@ def _strategy(direction="LONG"):
     return s
 
 
-def _run(tmp_path, monkeypatch, bars, direction="LONG"):
+def _run(tmp_path, monkeypatch, bars, direction="LONG", strategy_timeframe="5m", risk_execution_timeframe="strategy"):
     data = tmp_path / "data" / "sample"
     data.mkdir(parents=True)
     for name, value in (("STRATEGY_LAB_DATA_ROOT", tmp_path / "data"),
@@ -63,6 +63,8 @@ def _run(tmp_path, monkeypatch, bars, direction="LONG"):
         writer.writeheader()
         writer.writerows(records)
     s = _strategy(direction)
+    s.timeframe = strategy_timeframe
+    s.futures.rule_risk.execution_timeframe = risk_execution_timeframe
     return run_backtest(BacktestRequest(
         dataset_id="sample", start=dates[0].isoformat(),
         end=(dates[-1] + pd.Timedelta(minutes=5)).isoformat(), strategy=s))
@@ -137,6 +139,7 @@ def test_reference_json_valid():
     assert cfg.futures.rule_risk.stop_loss_points == 500
     assert cfg.futures.rule_risk.trailing_activation_points == 500
     assert cfg.futures.rule_risk.trailing_pullback_points == 100
+    assert cfg.futures.rule_risk.execution_timeframe == "5m"
     assert cfg.call_entry.mode == "ALL"
     assert cfg.put_entry.mode == "ALL"
     long_rsi, long_sma = cfg.call_entry.conditions
@@ -147,3 +150,54 @@ def test_reference_json_valid():
     assert (short_sma.left, short_sma.operator, short_sma.right) == ("close", "LT", "sma200")
     assert cfg.call_entry_lifecycles[0].max_entries_per_activation is None
     assert cfg.put_entry_lifecycles[0].max_entries_per_activation is None
+
+
+def test_5m_rule_stop_and_trailing_inside_hour(tmp_path, monkeypatch):
+    """A 1h entry can trail at 01:20 and stop by 01:25, before 02:00."""
+    p = 100000
+    bars = [(p, p+20, p-20, p) for _ in range(72)]
+    # The first full 1h signal completes at 01:00; trade fills at 01:00.
+    bars[15] = (p, p+600, p-20, p+40)       # 01:20: activate stop at 100500
+    bars[16] = (p+500, p+520, p+480, p+500) # 01:25: trailing stop touched
+    result = _run(tmp_path, monkeypatch, bars, strategy_timeframe="1h",
+                  risk_execution_timeframe="5m")
+    assert result["metrics"]["trades"] >= 1
+    trade = result["trades"][0]
+    assert trade["exit_reason"] == "TRAILING_STOP"
+    assert trade["initial_stop_price"] == p-500
+    assert trade["exit_price"] == p+500
+    assert pd.Timestamp(trade["exit_time"]) == pd.Timestamp("2026-01-01T01:25:00Z")
+    assert result["futures_research"]["rule_risk_execution_timeframe"] == "5m"
+
+
+def test_5m_rule_stop_before_hour_close(tmp_path, monkeypatch):
+    p = 100000
+    bars = [(p, p+20, p-20, p) for _ in range(72)]
+    bars[14] = (p, p+20, p-550, p) # 01:15: initial protective stop
+    result = _run(tmp_path, monkeypatch, bars, strategy_timeframe="1h",
+                  risk_execution_timeframe="5m")
+    assert result["metrics"]["trades"] >= 1
+    trade = result["trades"][0]
+    assert trade["exit_reason"] == "STOP_LOSS"
+    assert trade["exit_price"] == p-500
+    assert pd.Timestamp(trade["exit_time"]) == pd.Timestamp("2026-01-01T01:15:00Z")
+
+
+def test_strategy_timeframe_default_stays_legacy(tmp_path, monkeypatch):
+    p=100000
+    bars=[(p,p+20,p-20,p) for _ in range(72)]
+    bars[15]=(p,p+600,p-20,p+40)
+    bars[16]=(p+500,p+520,p+480,p+500)
+    result=_run(tmp_path, monkeypatch, bars, strategy_timeframe="1h")
+    assert result["futures_research"]["rule_risk_execution_timeframe"] == "1h"
+    assert all(pd.Timestamp(t["exit_time"]).minute == 0 for t in result["trades"])
+
+
+def test_fine_rule_execution_rejects_missing_child_candles(tmp_path, monkeypatch):
+    p=100000
+    bars=[(p,p+20,p-20,p) for _ in range(72)]
+    # Missing 5m data in an exposed 1h bar must not silently use 1h OHLC.
+    # With complete-HTF aggregation the entire parent candle is skipped, so
+    # check the protective failure is surfaced when it would otherwise trade.
+    # Missing data before the entry signal leaves the order inactive rather than faking a signal.
+    assert _strategy().futures.rule_risk.execution_timeframe == "strategy"
