@@ -42,38 +42,40 @@ def test_one_hour_sample_uses_existing_rule_exit_and_no_trailing():
     assert cfg.futures.funding_mode == "EXCLUDE_WITH_WARNING"
 
 
-def test_long_exit_requires_two_closes_below_ema_and_prior_low_break():
+def test_long_or_exit():
     cfg = load_strategy()
+    assert cfg.call_exit.mode == "ANY"
+    assert len(cfg.call_exit.conditions) == 2
+    rsi, ema = cfg.call_exit.conditions
+    assert (rsi.left, rsi.operator, rsi.value) == ("rsi2", "GTE", 70)
+    assert (ema.left, ema.operator, ema.right) == ("close", "LT", "ema20")
     frame = pd.DataFrame([
-        {"close": 101, "low": 100, "high": 102, "ema20": 100},
-        {"close": 98, "low": 97, "high": 101, "ema20": 100},
-        {"close": 96, "low": 95, "high": 99, "ema20": 99},
+        {"rsi2": 69.0, "close": 101.0, "ema20": 100.0},
+        {"rsi2": 70.0, "close": 101.0, "ema20": 100.0},
+        {"rsi2": 69.0, "close": 99.0, "ema20": 100.0},
+        {"rsi2": 70.0, "close": 99.0, "ema20": 100.0},
     ])
-    assert evaluate_group(frame, 2, cfg.call_exit)["passed"]
-    assert not evaluate_group(frame, 1, cfg.call_exit)["passed"]
-    # No structural close beneath the prior candle's low.
-    frame.loc[2, "close"] = 98
-    assert not evaluate_group(frame, 2, cfg.call_exit)["passed"]
-    frame.loc[2, "close"] = 96
-    # Previous hour did not close beneath EMA20.
-    frame.loc[1, "close"] = 101
-    assert not evaluate_group(frame, 2, cfg.call_exit)["passed"]
+    assert not evaluate_group(frame, 0, cfg.call_exit)["passed"]
+    for i in (1, 2, 3):
+        assert evaluate_group(frame, i, cfg.call_exit)["passed"]
 
 
-def test_short_exit_requires_two_closes_above_ema_and_prior_high_break():
+def test_short_or_exit():
     cfg = load_strategy()
+    assert cfg.put_exit.mode == "ANY"
+    assert len(cfg.put_exit.conditions) == 2
+    rsi, ema = cfg.put_exit.conditions
+    assert (rsi.left, rsi.operator, rsi.value) == ("rsi2", "LTE", 30)
+    assert (ema.left, ema.operator, ema.right) == ("close", "GT", "ema20")
     frame = pd.DataFrame([
-        {"close": 99, "low": 98, "high": 101, "ema20": 100},
-        {"close": 102, "low": 100, "high": 103, "ema20": 101},
-        {"close": 105, "low": 101, "high": 106, "ema20": 102},
+        {"rsi2": 31.0, "close": 99.0, "ema20": 100.0},
+        {"rsi2": 30.0, "close": 99.0, "ema20": 100.0},
+        {"rsi2": 31.0, "close": 101.0, "ema20": 100.0},
+        {"rsi2": 30.0, "close": 101.0, "ema20": 100.0},
     ])
-    assert evaluate_group(frame, 2, cfg.put_exit)["passed"]
-    assert not evaluate_group(frame, 1, cfg.put_exit)["passed"]
-    frame.loc[2, "close"] = 103
-    assert not evaluate_group(frame, 2, cfg.put_exit)["passed"]
-    frame.loc[2, "close"] = 105
-    frame.loc[1, "close"] = 100
-    assert not evaluate_group(frame, 2, cfg.put_exit)["passed"]
+    assert not evaluate_group(frame, 0, cfg.put_exit)["passed"]
+    for i in (1, 2, 3):
+        assert evaluate_group(frame, i, cfg.put_exit)["passed"]
 
 
 def test_one_hour_completed_signal_exits_next_hour_open(tmp_path, monkeypatch):
