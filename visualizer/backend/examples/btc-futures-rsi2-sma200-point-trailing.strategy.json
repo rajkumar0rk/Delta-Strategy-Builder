@@ -37,6 +37,7 @@
       },
       "rule_risk": {
         "enabled": true,
+        "execution_timeframe": "5m",
         "stop_mode": "FIXED_POINTS",
         "stop_loss_points": 500,
         "stop_buffer_atr": 0,
