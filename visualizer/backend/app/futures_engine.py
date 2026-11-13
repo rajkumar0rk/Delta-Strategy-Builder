@@ -166,7 +166,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':18,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':19,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
@@ -182,6 +182,14 @@ def run_futures_backtest(req, progress=None):
         raise ValueError('Insufficient contiguous indicator warmup')
     daily_source=load_daily_source(store,bar_parts,req.start,req.end,strategy.timeframe,warmup_count,strategy.indicators)
     frame,meta=compute_indicators(bars,strategy.indicators,strategy.timeframe,daily_source=daily_source)
+    # Signals remain on strategy candles. Only explicitly opted-in rule-risk
+    # positions use underlying 5m OHLC for protective execution.
+    fine_rule_execution=(cfg.rule_risk.enabled
+        and cfg.rule_risk.execution_timeframe=='5m' and strategy.timeframe!='5m')
+    fine_bars=(store.load_bars_many(bar_parts,req.start,req.end,'5m',
+               warmup_candles={'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'4h':240,'1D':1440}[strategy.timeframe]//5)
+               if fine_rule_execution else None)
+    fine_index=fine_bars.index if fine_bars is not None else None
     _prepare_strategy_state(frame,strategy)
     adaptive=cfg.adaptive if cfg.adaptive.enabled else None
     pullback=adaptive if adaptive else (cfg.pullback if cfg.pullback.enabled else None)
@@ -258,7 +266,7 @@ def run_futures_backtest(req, progress=None):
             stop=float(window.low.min() if sign==1 else window.high.max())-sign*rc.stop_buffer_atr*atr
         return stop if math.isfinite(stop) and stop>0 and (close-stop)*sign>0 else None
 
-    def ratchet_rule_trailing(pos, completed_bar):
+    def ratchet_rule_trailing(pos, completed_bar, atr_snapshot=None):
         """Only completed candle OHLC can tighten a rule-risk stop.
 
         Invoked after this candle's original stop has been evaluated; the
@@ -268,7 +276,8 @@ def run_futures_backtest(req, progress=None):
             return False
         atr=None
         if rule_risk.trailing_mode=='ATR':
-            value=completed_bar.get(rule_risk.atr_indicator_id)
+            value=(atr_snapshot if atr_snapshot is not None else
+                   completed_bar.get(rule_risk.atr_indicator_id))
             try:
                 atr=float(value)
             except (ValueError,TypeError):
@@ -533,59 +542,115 @@ def run_futures_backtest(req, progress=None):
                 decisions.append({'timestamp':at_open.isoformat(),'kind':'TRAIL_UPDATE',
                                   'direction':position['direction'],'passed':True,
                                   'reason':'ATR_RATCHET','stop_price':revised})
-        if position:
+        if position and fine_rule_execution and position.get('rule_risk_position'):
+            # The parent OHLC is not used for stops: it conceals the ordering
+            # of 5m ratchets and subsequent stop touches within an HTF candle.
+            lo=int(fine_index.searchsorted(at_open,side='right'))
+            hi=int(fine_index.searchsorted(ts,side='right'))
+            subbars=fine_bars.iloc[lo:hi]
+            expected=tf//5
+            if (len(subbars)!=expected or subbars.index[0]!=at_open+pd.Timedelta(minutes=5)
+                    or subbars.index[-1]!=ts or
+                    not subbars.index.to_series().diff().iloc[1:].eq(pd.Timedelta(minutes=5)).all()):
+                raise ValueError('FUTURES_RULE_RISK_5M_GAP: missing complete 5m protective bars for '+ts.isoformat())
+            # ATR on higher-timeframe strategies is available only from the
+            # prior completed parent candle. Never use this parent's final ATR.
+            prior_atr=frame.iloc[i-1].get(rule_risk.atr_indicator_id) if i>0 else None
             sign=1 if position['direction']=='LONG' else -1
-            favorable=(float(row.high)-position['entry_price'])/position['entry_price'] if sign==1 else (position['entry_price']-float(row.low))/position['entry_price']
-            adverse=(float(row.low)-position['entry_price'])/position['entry_price'] if sign==1 else (position['entry_price']-float(row.high))/position['entry_price']
-            position['mfe']=max(position['mfe'],favorable)
-            position['mae']=min(position['mae'],adverse)
-            # No OHLC path establishes which intrabar event came first.
-            # A margin breach already at OPEN takes precedence; subsequently
-            # prefer a protective stop over an ambiguous candle extreme.
-            trade_qty=position.get('quantity',qty)
-            worst=(float(row.low) if sign==1 else float(row.high))
-            hit=_exit_level(position,row,cfg)
-            open_breach=_margin_breached(position,float(row.open),balance,trade_qty,cfg)
-            worst_breach=_margin_breached(position,worst,balance,trade_qty,cfg)
-            if open_breach:
-                close(position,at_open,float(row.open),'ESTIMATED_MARGIN_BREACH')
-                position=None;closed=True
-            elif hit or worst_breach:
-                if hit:
-                    if worst_breach:margin_stop_ambiguous+=1
-                    if ((position.get('stop_price') is not None and position.get('target_price') is not None) or (cfg.stop_loss_percent and cfg.take_profit_percent)):
-                        stop=position.get('stop_price') or position['entry_price']*(1-cfg.stop_loss_percent/100*sign)
-                        target=position.get('target_price') or position['entry_price']*(1+cfg.take_profit_percent/100*sign)
-                        if (float(row.low)<=min(stop,target) and float(row.high)>=max(stop,target)):
-                            ambiguous+=1
-                    exit_reason=('PATTERN_TRAILING_STOP' if hit[0]=='STOP_LOSS' and position.get('pattern_profit_active')
-                                 else 'TRAILING_STOP' if hit[0]=='STOP_LOSS' and position.get('trailing_active')
-                                 else hit[0])
-                    close(position,ts,hit[1],exit_reason);position=None;closed=True
-                else:
-                    close(position,ts,worst,'ESTIMATED_MARGIN_BREACH')
+            for child_ts,child in subbars.iterrows():
+                favor=(float(child.high)-position['entry_price'])/position['entry_price'] if sign==1 else (position['entry_price']-float(child.low))/position['entry_price']
+                adverse=(float(child.low)-position['entry_price'])/position['entry_price'] if sign==1 else (position['entry_price']-float(child.high))/position['entry_price']
+                position['mfe']=max(position['mfe'],favor)
+                position['mae']=min(position['mae'],adverse)
+                worst=float(child.low) if sign==1 else float(child.high)
+                trade_qty=position.get('quantity',qty)
+                hit=_exit_level(position,child,cfg)
+                open_breach=_margin_breached(position,float(child.open),balance,trade_qty,cfg)
+                worst_breach=_margin_breached(position,worst,balance,trade_qty,cfg)
+                if open_breach:
+                    close(position,child_ts,float(child.open),'ESTIMATED_MARGIN_BREACH')
                     position=None;closed=True
-            else:
-                if position.get('candle_pattern_position'):
-                    trail_event=update_short_point_trail(position,row,candle_pattern,cfg.tick_size)
-                    if trail_event:
-                        decisions.append({'timestamp':ts.isoformat(),'kind':'TRAIL_UPDATE',
-                            'direction':position['direction'],'passed':True,
-                            'reason':trail_event,'stop_price':position['stop_price']})
-                if ratchet_rule_trailing(position,row):
-                    decisions.append({'timestamp':ts.isoformat(),'kind':'TRAIL_UPDATE',
+                    break
+                if hit or worst_breach:
+                    if hit:
+                        if worst_breach:margin_stop_ambiguous+=1
+                        if position.get('stop_price') is not None and position.get('target_price') is not None:
+                            stop=position['stop_price'];target=position['target_price']
+                            if float(child.low)<=min(stop,target) and float(child.high)>=max(stop,target):
+                                ambiguous+=1
+                        exit_reason=('TRAILING_STOP' if hit[0]=='STOP_LOSS' and position.get('trailing_active')
+                                     else hit[0])
+                        close(position,child_ts,hit[1],exit_reason)
+                    else:
+                        close(position,child_ts,worst,'ESTIMATED_MARGIN_BREACH')
+                    position=None;closed=True
+                    break
+                if ratchet_rule_trailing(position,child,atr_snapshot=prior_atr):
+                    decisions.append({'timestamp':child_ts.isoformat(),'kind':'TRAIL_UPDATE',
                         'direction':position['direction'],'passed':True,
                         'reason':('RULE_POINTS_RATCHET' if rule_risk.trailing_mode=='POINTS' else 'RULE_ATR_RATCHET'),
                         'stop_price':position['stop_price']})
+            if position is not None:
                 if strategy.risk.max_hold_minutes is not None and (ts-pd.Timestamp(position['entry_time'])).total_seconds()/60>=strategy.risk.max_hold_minutes:
                     pending=('CLOSE','TIME_STOP')
                 elif strategy.risk.close_at_session_end and _session_end_due(ts,strategy.session,tf):
                     pending=('CLOSE','SESSION_END_EXIT')
-                elif not candle_pattern and ((position['direction']=='LONG' and strategy.call_exit_signal_mode!='ALERT_ONLY' and evaluate_group(frame,i,strategy.call_exit)['passed'] and strategy.call_exit.configured())
-                   or (position['direction']=='SHORT' and strategy.put_exit_signal_mode!='ALERT_ONLY' and evaluate_group(frame,i,strategy.put_exit)['passed'] and strategy.put_exit.configured())):
-                    # Condition known at this candle's close: cannot execute
-                    # at this candle's close. Next bar open is required.
+                elif ((position['direction']=='LONG' and strategy.call_exit_signal_mode!='ALERT_ONLY' and evaluate_group(frame,i,strategy.call_exit)['passed'] and strategy.call_exit.configured())
+                      or (position['direction']=='SHORT' and strategy.put_exit_signal_mode!='ALERT_ONLY' and evaluate_group(frame,i,strategy.put_exit)['passed'] and strategy.put_exit.configured())):
                     pending=('CLOSE','CONDITION_EXIT')
+        elif position:
+                sign=1 if position['direction']=='LONG' else -1
+                favorable=(float(row.high)-position['entry_price'])/position['entry_price'] if sign==1 else (position['entry_price']-float(row.low))/position['entry_price']
+                adverse=(float(row.low)-position['entry_price'])/position['entry_price'] if sign==1 else (position['entry_price']-float(row.high))/position['entry_price']
+                position['mfe']=max(position['mfe'],favorable)
+                position['mae']=min(position['mae'],adverse)
+                # No OHLC path establishes which intrabar event came first.
+                # A margin breach already at OPEN takes precedence; subsequently
+                # prefer a protective stop over an ambiguous candle extreme.
+                trade_qty=position.get('quantity',qty)
+                worst=(float(row.low) if sign==1 else float(row.high))
+                hit=_exit_level(position,row,cfg)
+                open_breach=_margin_breached(position,float(row.open),balance,trade_qty,cfg)
+                worst_breach=_margin_breached(position,worst,balance,trade_qty,cfg)
+                if open_breach:
+                    close(position,at_open,float(row.open),'ESTIMATED_MARGIN_BREACH')
+                    position=None;closed=True
+                elif hit or worst_breach:
+                    if hit:
+                        if worst_breach:margin_stop_ambiguous+=1
+                        if ((position.get('stop_price') is not None and position.get('target_price') is not None) or (cfg.stop_loss_percent and cfg.take_profit_percent)):
+                            stop=position.get('stop_price') or position['entry_price']*(1-cfg.stop_loss_percent/100*sign)
+                            target=position.get('target_price') or position['entry_price']*(1+cfg.take_profit_percent/100*sign)
+                            if (float(row.low)<=min(stop,target) and float(row.high)>=max(stop,target)):
+                                ambiguous+=1
+                        exit_reason=('PATTERN_TRAILING_STOP' if hit[0]=='STOP_LOSS' and position.get('pattern_profit_active')
+                                     else 'TRAILING_STOP' if hit[0]=='STOP_LOSS' and position.get('trailing_active')
+                                     else hit[0])
+                        close(position,ts,hit[1],exit_reason);position=None;closed=True
+                    else:
+                        close(position,ts,worst,'ESTIMATED_MARGIN_BREACH')
+                        position=None;closed=True
+                else:
+                    if position.get('candle_pattern_position'):
+                        trail_event=update_short_point_trail(position,row,candle_pattern,cfg.tick_size)
+                        if trail_event:
+                            decisions.append({'timestamp':ts.isoformat(),'kind':'TRAIL_UPDATE',
+                                'direction':position['direction'],'passed':True,
+                                'reason':trail_event,'stop_price':position['stop_price']})
+                    if ratchet_rule_trailing(position,row):
+                        decisions.append({'timestamp':ts.isoformat(),'kind':'TRAIL_UPDATE',
+                            'direction':position['direction'],'passed':True,
+                            'reason':('RULE_POINTS_RATCHET' if rule_risk.trailing_mode=='POINTS' else 'RULE_ATR_RATCHET'),
+                            'stop_price':position['stop_price']})
+                    if strategy.risk.max_hold_minutes is not None and (ts-pd.Timestamp(position['entry_time'])).total_seconds()/60>=strategy.risk.max_hold_minutes:
+                        pending=('CLOSE','TIME_STOP')
+                    elif strategy.risk.close_at_session_end and _session_end_due(ts,strategy.session,tf):
+                        pending=('CLOSE','SESSION_END_EXIT')
+                    elif not candle_pattern and ((position['direction']=='LONG' and strategy.call_exit_signal_mode!='ALERT_ONLY' and evaluate_group(frame,i,strategy.call_exit)['passed'] and strategy.call_exit.configured())
+                       or (position['direction']=='SHORT' and strategy.put_exit_signal_mode!='ALERT_ONLY' and evaluate_group(frame,i,strategy.put_exit)['passed'] and strategy.put_exit.configured())):
+                        # Condition known at this candle's close: cannot execute
+                        # at this candle's close. Next bar open is required.
+                        pending=('CLOSE','CONDITION_EXIT')
         if position is not None:
             # Apply historical funding at scheduled candle CLOSE only to
             # positions surviving that entire candle. Never charge a trade
@@ -851,7 +916,7 @@ def run_futures_backtest(req, progress=None):
         'limitations':['No historical futures orderbook/spread or fills',
            'Intrabar stops/targets, slippage and margin breaches are estimates',
            'Stop-market trigger timing is estimated from 5m OHLC; pre-entry extremes within the same bar may cause a conservatively counted stop',
-           'Futures candle patterns use complete UTC 1h groups; point trailing activates on completed eligible 5m closes and updates apply next bar only',
+           'Futures candle patterns use complete UTC 1h groups; rule-risk trailing executes on selected completed strategy or 5m candles, with changes effective next execution candle',
            'Risk-sized trades can exceed the configured estimated loss in stop gaps',
            'Option premium-based profit-protection fields are ignored in Futures mode; use futures price stop/target',
            'Real exchange mark-to-market drawdown cannot be computed; candle-close proxy estimates are supplied separately',
@@ -869,6 +934,7 @@ def run_futures_backtest(req, progress=None):
         'rule_risk_atr_trailing_enabled':bool(rule_risk and rule_risk.trailing_enabled and rule_risk.trailing_mode=='ATR'),
         'rule_risk_point_trailing_enabled':bool(rule_risk and rule_risk.trailing_enabled and rule_risk.trailing_mode=='POINTS'),
         'rule_risk_stop_mode':rule_risk.stop_mode if rule_risk else None,
+        'rule_risk_execution_timeframe':('5m' if fine_rule_execution else strategy.timeframe),
         'rule_risk_trailing_mode':rule_risk.trailing_mode if rule_risk and rule_risk.trailing_enabled else None,
         'candle_pattern_enabled':bool(candle_pattern),
         'candle_pattern_config':candle_pattern.model_dump() if candle_pattern else None,
