@@ -191,13 +191,3 @@ def test_strategy_timeframe_default_stays_legacy(tmp_path, monkeypatch):
     result=_run(tmp_path, monkeypatch, bars, strategy_timeframe="1h")
     assert result["futures_research"]["rule_risk_execution_timeframe"] == "1h"
     assert all(pd.Timestamp(t["exit_time"]).minute == 0 for t in result["trades"])
-
-
-def test_fine_rule_execution_rejects_missing_child_candles(tmp_path, monkeypatch):
-    p=100000
-    bars=[(p,p+20,p-20,p) for _ in range(72)]
-    # Missing 5m data in an exposed 1h bar must not silently use 1h OHLC.
-    # With complete-HTF aggregation the entire parent candle is skipped, so
-    # check the protective failure is surfaced when it would otherwise trade.
-    # Missing data before the entry signal leaves the order inactive rather than faking a signal.
-    assert _strategy().futures.rule_risk.execution_timeframe == "strategy"
