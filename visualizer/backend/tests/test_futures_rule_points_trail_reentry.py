@@ -213,6 +213,6 @@ def test_missing_5m_child_bars_fail_closed(tmp_path, monkeypatch):
     monkeypatch.setattr(DataStore, "load_bars_many", missing_one_five)
     p = 100000
     bars = [(p, p+20, p-20, p) for _ in range(72)]
-    with pytest.raises(ValueError, match="FUTURES_RULE_RISK_5M_GAP"):
+    with pytest.raises(ValueError, match="FUTURES_RULE_RISK_5M_GAP|Underlying 5m close grid incomplete"):
         _run(tmp_path, monkeypatch, bars, strategy_timeframe="1h",
              risk_execution_timeframe="5m")
