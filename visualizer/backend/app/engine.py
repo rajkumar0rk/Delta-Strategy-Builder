@@ -1434,18 +1434,39 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             )
         )
 
-    if pos is not None and pos_quotes is not None and len(pos_quotes):
+    # The last strategy candle may close before the requested backtest end.
+    # Resolve pending stops only from real subsequent quotes inside the range.
+    if pos is not None and pos_quotes is not None and pos.underlying_stop_trigger_time:
+        pending_at = pd.Timestamp(parse_time(pos.underlying_stop_trigger_time))
+        while q_cursor < len(pos_quotes):
+            q = pos_quotes.iloc[q_cursor].to_dict()
+            q_cursor += 1
+            quote_at = pd.Timestamp(q['timestamp'])
+            if quote_at > pd.Timestamp(end_dt):
+                break
+            if quote_at >= pending_at:
+                close_position(quote_at.isoformat(), _executable_exit_price(pos, q, strategy), 'UNDERLYING_SIGNAL_CANDLE_STOP')
+                break
+
+    unresolved_exposure = None
+    if pos is not None and pos.underlying_stop_trigger_time:
+        unresolved_exposure = {
+            'symbol': pos.symbol,
+            'direction': pos.direction,
+            'action': pos.action,
+            'entry_time': pos.entry_time,
+            'underlying_stop_level': pos.underlying_stop_level,
+            'stop_trigger_time': pos.underlying_stop_trigger_time,
+            'reason': 'STOP_NO_EXECUTABLE_QUOTE',
+        }
+        add_marker(pos.underlying_stop_trigger_time, 'reject', pos.direction, 'STOP_NO_EXECUTABLE_QUOTE',
+            _event_details('Unresolved underlying stop', 'STOP_NO_EXECUTABLE_QUOTE', **unresolved_exposure))
+    if pos is not None and pos_quotes is not None and len(pos_quotes) and not pos.underlying_stop_trigger_time:
         last = pos_quotes.iloc[-1]
         last_at = pd.Timestamp(last.timestamp)
-        pending_at = pd.Timestamp(parse_time(pos.underlying_stop_trigger_time)) if pos.underlying_stop_trigger_time else None
-        if pending_at is None and last_at >= pd.Timestamp(parse_time(pos.entry_time)):
-            # Preserve legacy end-of-data behavior for ordinary open positions.
+        if pd.Timestamp(parse_time(pos.entry_time)) <= last_at <= pd.Timestamp(end_dt):
+            # Preserve ordinary legacy end-of-data close (not a stop fill).
             close_position(last_at.isoformat(), _executable_exit_price(pos, last.to_dict(), strategy), 'END_OF_DATA')
-        elif pending_at is not None:
-            add_marker(pending_at.isoformat(), 'reject', pos.direction, 'STOP_NO_EXECUTABLE_QUOTE',
-                _event_details('Unresolved underlying stop', 'STOP_NO_EXECUTABLE_QUOTE',
-                    symbol=pos.symbol, underlying_stop_level=pos.underlying_stop_level,
-                    stop_trigger_time=pos.underlying_stop_trigger_time))
 
     wins = sum(t['net_pnl_usd'] > 0 for t in trades)
     losses = sum(t['net_pnl_usd'] < 0 for t in trades)
@@ -1491,6 +1512,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         'cache_key': cache_key,
         'storage_mode': getattr(req, 'storage_mode', 'ANALYSIS'),
         'preflight': preflight,
+        'unresolved_exposure': unresolved_exposure,
         'fee_model': {
             'name': 'DELTA_OPTIONS',
             'option_notional_fee_rate_percent': strategy.execution.option_notional_fee_rate_percent,
