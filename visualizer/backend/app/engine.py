@@ -51,6 +51,8 @@ class Position:
     entry_rule: dict[str, Any]
     entry_lifecycle_id: str = ''
     entry_lifecycle_name: str = ''
+    underlying_stop_level: float | None = None
+    underlying_stop_trigger_time: str | None = None
     peak_return: float = 0.0
     worst_return: float = 0.0
 
@@ -258,7 +260,7 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
 
 def _backtest_cache_key(req: BacktestRequest, paths) -> str:
     payload = {
-        'engine_version': 151,
+        'engine_version': 152,
         'dataset': _dataset_fingerprint(paths),
         'dataset_id': getattr(req, 'dataset_id', None),
         'dataset_ids': [x.id for x in (paths if isinstance(paths, (list, tuple)) else [paths])],
@@ -299,6 +301,22 @@ def _executable_exit_price(pos: Position, q: dict[str, Any], strategy) -> float:
     ticks = float(strategy.execution.slippage_ticks) * inc
     # Long option exits SELL at bid; short option exits BUY-to-close at ask.
     return max(0.0, float(q['bid']) - ticks) if pos.action == 'BUY' else float(q['ask']) + ticks
+
+
+def _signal_stop_level(direction: str, action: str, low: float, high: float, buffer: float) -> float:
+    """Underlying exposure is bullish for bought CALL/sold PUT, bearish otherwise."""
+    bullish = (direction == 'CALL') == (action == 'BUY')
+    return (low - buffer) if bullish else (high + buffer)
+
+
+def _signal_stop_hit(pos: Position, bar: Any, trigger: str) -> bool:
+    level = pos.underlying_stop_level
+    if level is None:
+        return False
+    bullish = (pos.direction == 'CALL') == (pos.action == 'BUY')
+    if trigger == 'CLOSE':
+        return float(bar.close) <= level if bullish else float(bar.close) >= level
+    return float(bar.low) <= level if bullish else float(bar.high) >= level
 
 
 def _position_return_percent(pos: Position, exit_price: float) -> float:
@@ -881,6 +899,17 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
     strategy = req.strategy
     frame, series_meta = compute_indicators(bars, strategy.indicators, strategy.timeframe)
     _prepare_strategy_state(frame, strategy)
+    signal_stop = strategy.risk.stop_loss
+    signal_stop_active = signal_stop.mode == 'UNDERLYING_SIGNAL_CANDLE'
+    # For HTF strategies, monitoring 5m completed source candles avoids losing
+    # stops occurring within the larger candle.  No tick ordering is inferred.
+    stop_frame = (
+        store.load_bars_many(parts, req.start, req.end, '5m')
+        if signal_stop_active and signal_stop.signal_candle_execution_timeframe == '5m'
+        else frame
+    )
+    stop_rows = tuple(stop_frame.itertuples(index=True, name='StopBar')) if signal_stop_active else ()
+    stop_cursor = 0
     report('Preparing reusable option quote indexes…', 32, 'QUOTE_INDEX', 'Evaluate strategy candles')
     store.ensure_indexes(parts, lambda msg: report(msg, 32, 'QUOTE_INDEX', 'Evaluate strategy candles'))
 
@@ -1031,6 +1060,8 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             'exit_reason': reason,
             'entry_lifecycle_id': pos.entry_lifecycle_id,
             'entry_lifecycle_name': pos.entry_lifecycle_name,
+            'underlying_stop_level': pos.underlying_stop_level,
+            'underlying_stop_trigger_time': pos.underlying_stop_trigger_time,
         }
         trades.append(trade)
         ensure_daily_state(exit_time)
@@ -1088,16 +1119,49 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             else:
                 _update_lifecycles(frame, i, strategy.put_entry, put_behaviors, put_cycles)
 
-        # Quote-driven protective exits up to this completed candle.
+        # Advance completed stop candles just once (linear in candle count).
+        # A stop is actionable at the monitoring candle CLOSE, not at an
+        # imagined intrabar wick timestamp; this is conservative 5m OHLC replay.
+        first_stop_at = None
+        if signal_stop_active:
+            while stop_cursor < len(stop_rows) and stop_rows[stop_cursor].Index <= ts:
+                stop_bar = stop_rows[stop_cursor]
+                stop_cursor += 1
+                if pos is None or pos.underlying_stop_trigger_time is not None:
+                    continue
+                if stop_bar.Index <= pd.Timestamp(parse_time(pos.entry_time)):
+                    continue
+                if _signal_stop_hit(pos, stop_bar, signal_stop.signal_candle_trigger):
+                    first_stop_at = stop_bar.Index
+                    pos.underlying_stop_trigger_time = first_stop_at.isoformat()
+                    break
+            # Consume the remaining completed candles after the first stop.
+            while stop_cursor < len(stop_rows) and stop_rows[stop_cursor].Index <= ts:
+                stop_cursor += 1
+
+        # Merge the stop trigger with observed option quotes in timestamp order.
+        # Quotes before the stop may cause a TP/profit-protection exit; the first
+        # quote at/after a triggered underlying stop executes the option exit.
         if pos is not None and pos_quotes is not None:
             while q_cursor < len(pos_quotes) and pos_quotes.iloc[q_cursor].timestamp <= ts:
                 q = pos_quotes.iloc[q_cursor].to_dict()
                 q_cursor += 1
-                reason, _ = _stop_reason(pos, q, strategy)
-                if reason:
-                    close_position(pd.Timestamp(q['timestamp']).isoformat(), _executable_exit_price(pos, q, strategy), reason)
+                quote_at = pd.Timestamp(q['timestamp'])
+                trigger_at = pd.Timestamp(parse_time(pos.underlying_stop_trigger_time)) if pos.underlying_stop_trigger_time else None
+                if trigger_at is not None and quote_at >= trigger_at:
+                    close_position(quote_at.isoformat(), _executable_exit_price(pos, q, strategy), 'UNDERLYING_SIGNAL_CANDLE_STOP')
                     closed_this_candle = True
                     break
+                reason, _ = _stop_reason(pos, q, strategy)
+                if reason:
+                    close_position(quote_at.isoformat(), _executable_exit_price(pos, q, strategy), reason)
+                    closed_this_candle = True
+                    break
+
+        if pos is not None and pos.underlying_stop_trigger_time is not None:
+            # There is no executable quote yet: retain exposure instead of
+            # inventing a fill, and suppress later indicator-based exits.
+            continue
 
         if pos is not None:
             sl = strategy.risk.stop_loss
@@ -1302,10 +1366,15 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         entry_fee_details = _delta_fee(float(row.close), entry, qty, float(spec['contract_value']), strategy.execution)
         fee = entry_fee_details['total_fee_usd']
         atr = _finite(row[atr_keys[0]]) if atr_keys else None
+        stop_level = (
+            _signal_stop_level(direction, action, float(row.low), float(row.high), signal_stop.signal_candle_buffer_points)
+            if signal_stop_active else None
+        )
         pos = Position(
             direction, action, str(spec['symbol']), spec, q['timestamp'], ts.isoformat(), float(row.close),
             entry, qty, fee, entry_fee_details, atr, chosen_tree,
             entry_lifecycle_id=chosen_behavior.id, entry_lifecycle_name=chosen_behavior.name,
+            underlying_stop_level=stop_level,
         )
         chosen_cycle.entries += 1
         chosen_cycle.last_entry_index = i
@@ -1347,13 +1416,24 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 entry_lifecycle_id=chosen_behavior.id, entry_lifecycle_name=chosen_behavior.name,
                 max_wait_bars=chosen_behavior.max_wait_bars,
                 entry_rule=chosen_tree,
+                underlying_stop_level=pos.underlying_stop_level,
+                underlying_stop_execution_timeframe=signal_stop.signal_candle_execution_timeframe if signal_stop_active else None,
                 big_trend_score=call_score if direction == 'CALL' else put_score,
             )
         )
 
     if pos is not None and pos_quotes is not None and len(pos_quotes):
         last = pos_quotes.iloc[-1]
-        close_position(pd.Timestamp(last.timestamp).isoformat(), _executable_exit_price(pos, last.to_dict(), strategy), 'END_OF_DATA')
+        last_at = pd.Timestamp(last.timestamp)
+        pending_at = pd.Timestamp(parse_time(pos.underlying_stop_trigger_time)) if pos.underlying_stop_trigger_time else None
+        if pending_at is None and last_at >= pd.Timestamp(parse_time(pos.entry_time)):
+            # Preserve legacy end-of-data behavior for ordinary open positions.
+            close_position(last_at.isoformat(), _executable_exit_price(pos, last.to_dict(), strategy), 'END_OF_DATA')
+        elif pending_at is not None:
+            add_marker(pending_at.isoformat(), 'reject', pos.direction, 'STOP_NO_EXECUTABLE_QUOTE',
+                _event_details('Unresolved underlying stop', 'STOP_NO_EXECUTABLE_QUOTE',
+                    symbol=pos.symbol, underlying_stop_level=pos.underlying_stop_level,
+                    stop_trigger_time=pos.underlying_stop_trigger_time))
 
     wins = sum(t['net_pnl_usd'] > 0 for t in trades)
     losses = sum(t['net_pnl_usd'] < 0 for t in trades)
