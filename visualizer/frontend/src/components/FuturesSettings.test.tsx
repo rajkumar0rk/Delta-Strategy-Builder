@@ -20,6 +20,16 @@ describe('BTCUSD perpetual futures market editor',()=>{
   }
   expect(html).not.toContain('SELL collateral &amp; leverage');
  });
+ it('configures a separate opt-in confirmed higher timeframe for new futures entries',()=>{
+   const s=defaultStrategy();s.market_type='FUTURES';s.timeframe='5m';
+   s.entry_evaluation_timeframe='1h';
+   const html=renderToStaticMarkup(<FuturesSettings value={s} onChange={()=>{}}/>);
+   expect(html).toContain('New-entry evaluation timeframe');
+   expect(html).toContain('1h confirmed-candle gate');
+   expect(html).toContain('4h confirmed-candle gate');
+   expect(html).toContain('Every strategy candle (legacy)');
+   expect(html).toContain('entry lifecycle updates still run');
+ });
  it('separates regular missing BTC archive downloads from optional futures observations',()=>{
    // The choice is owned by App (BacktestRequest), not FuturesConfig.
    const s=defaultStrategy();s.market_type='FUTURES';

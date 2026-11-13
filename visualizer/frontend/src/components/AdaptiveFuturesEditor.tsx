@@ -26,7 +26,8 @@ export function AdaptiveFuturesEditor({value,onChange}:{value:Strategy;onChange:
   trailing:{...defaults.trailing,...current?.trailing}};
  const update=(patch:Partial<AdaptiveFuturesConfig>)=>{
   const next={...adaptive,...patch};
-  onChange({...value,futures:{...value.futures!,adaptive:next,
+  onChange({...value,...(next.enabled?{entry_evaluation_timeframe:'strategy' as const}:{}),
+   futures:{...value.futures!,adaptive:next,
    ...(next.enabled?{...(value.futures?.pullback?
       {pullback:{...value.futures.pullback,enabled:false}}:{}),
     ...(value.futures?.rule_risk?{rule_risk:{...value.futures.rule_risk,enabled:false}}:{}),

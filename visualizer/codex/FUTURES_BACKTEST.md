@@ -1,5 +1,15 @@
 # BTCUSD perpetual futures research — six merged implementation milestones
 
+## Configurable completed higher-timeframe entry gate
+
+Generic futures rule trees support optional `strategy.entry_evaluation_timeframe`: default `"strategy"` (backward compatible) or an equal-or-higher exact multiple of base `strategy.timeframe` from `5m`, `10m`, `15m`, `30m`, `1h`, `4h`, `1D`. Dedicated futures pullback, AMRS and candle-pattern engines retain their own timing and reject this override.
+
+A 5m base with `entry_evaluation_timeframe="1h"` evaluates new entries only on the **first completed 5m candle after** each newly confirmed UTC 1h close. A qualifying order fills at the following 5m open using normal slippage, not retrospectively at the 1h close. Position management, lifecycle transitions, normal exits, stop checks, trailing updates and equity marking still run every 5m; no per-hour cooldown or extra history scan is needed. With `max_entries_per_activation=null`, re-entry remains unlimited across qualifying hourly signals, but cannot repeat multiple times from the same hourly confirmation.
+
+Use 1h RSI(2) and 1h SMA200; for confirmed 1h close vs SMA200, add hidden non-chart-only EMA(1) on 1h (e.g. `close1h`) and use `close1h GT sma200` / `close1h LT sma200`. Raw `close` on a 5m strategy would be the 5m close. Configure 5m fixed 500-point SL and +500/100-point trailing independently with `futures.rule_risk.execution_timeframe="5m"`. No guarantee of parity with TradingView's 1m simulation or exchange fills.
+
+Example: `visualizer/backend/examples/btc-futures-rsi2-sma200-1h-confirmed-5m-gate.strategy.json`. Regression: `visualizer/backend/tests/test_futures_entry_evaluation_gate.py`. Audits respect gate-specific entry eligibility; futures cache identity is 20.
+
 ## BTCUSD 1H RSI(2) recovery OR EMA20 invalidation exits (November 2026)
 
 Reuse the existing declarative RuleGroup evaluator for the BTCUSD 1H trend-filtered RSI2 reversal example: `visualizer/backend/examples/btc-futures-rsi2-sma200-1h-ema20-structure-exit.strategy.json`. CALL represents LONG, PUT represents SHORT. Keep all existing entry conditions: LONG RSI(2) < 3 AND 1H close > SMA200 AND 1H close > EMA20; SHORT RSI(2) > 97 AND close < SMA200 AND close < EMA20. Use `call_exit.mode="ANY"` with conditions `rsi2 GTE 70` and `close LT ema20`; use `put_exit.mode="ANY"` with `rsi2 LTE 30` and `close GT ema20`. `mode=ANY` gives true OR logic, including exactly at RSI 70/30, using only the fully completed 1H candle. This replaces earlier two-candle/structure-break exits in this example only. Each exit threshold is independently configurable through the standard condition `value` and the EMA invalidation condition can be removed or disabled via the ordinary rule-tree editor. Do not add unsupported properties, indicators or new engine modes.

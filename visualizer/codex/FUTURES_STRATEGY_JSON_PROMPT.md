@@ -1,5 +1,11 @@
 # Copy-paste prompt — BTCUSD Futures Strategy Lab JSON
 
+## Opt-in confirmed higher-timeframe entry gate (Nov 2026)
+
+For generic futures rule trees only, `strategy.entry_evaluation_timeframe` defaults to `"strategy"`, or is one of `"5m"`, `"10m"`, `"15m"`, `"30m"`, `"1h"`, `"4h"`, `"1D"` with an equal-or-higher duration that is an exact multiple of `strategy.timeframe`. For 1H RSI(2)>97 LONG / <3 SHORT with confirmed 1H SMA200 filtering and 5m execution, use `strategy.timeframe="5m"`, `entry_evaluation_timeframe="1h"`, 1h RSI and SMA indicators, and hidden non-chart-only `EMA(1)` on 1h as `close1h` for close/SMA comparisons. Raw `close` on the 5m base is NOT 1h close. New entries are evaluated only on the first completed 5m candle after the new confirmed hourly candle and fill at next 5m open. Futures rule risk continues its independently configured `execution_timeframe="5m"`, 500-point initial SL, +500 trailing activation, 100-point pullback. Lifecycles and open position exits continue on every 5m candle; unlimited re-entry can happen on subsequent hours but not repeatedly within an hour. Dedicated futures pullback/adaptive/candle-pattern engines do not accept the gate. This does not recreate 1m TradingView fills or live ticks.
+
+Importable example: `visualizer/backend/examples/btc-futures-rsi2-sma200-1h-confirmed-5m-gate.strategy.json`.
+
 ## 1D EMA200 + 4H Donchian55/20, ATR 2.5/3, 5m protective execution (November 2026)
 
 Use the importable research seed `visualizer/backend/examples/btc-futures-1d-ema200-4h-donchian55-20-atr-trail.strategy.json`. This is a **different strategy**, not an update to the 1H RSI2 recovery or earlier 1H Donchian / 4H EMA200 example. Do not silently inherit RSI2 entry thresholds, 200-point fixed TP or unlimited entry lifecycles from another scenario.

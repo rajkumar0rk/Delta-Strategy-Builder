@@ -23,9 +23,11 @@ def build_futures_audit_preview(frame, strategy, req, result):
     # Import inside function to avoid import cycles with engine.chart_payload.
     from .engine import (_entry_behaviors, _entry_ignore_ids, _big_trend_score,
                          _score_entry_pass)
+    from .futures_engine import _entry_evaluation_due
+    from .indicators import _TF_MINUTES
 
     start, end = pd.Timestamp(req.start), pd.Timestamp(req.end)
-    step = pd.Timedelta({"5m":5,"10m":10,"15m":15,"30m":30,"1h":60}[strategy.timeframe], unit="min")
+    step = pd.Timedelta(minutes=_TF_MINUTES[strategy.timeframe])
     trades = list(result.get("trades") or [])
     unresolved = result.get("unresolved_position")
     if unresolved:
@@ -74,7 +76,9 @@ def build_futures_audit_preview(frame, strategy, req, result):
                 if enabled[side]:
                     rules = evaluate_group(frame,index,groups[side],_entry_ignore_ids(strategy,side.upper()))
                     score = _big_trend_score(frame,index,groups[side],score_cfg[side],side.upper())
-                    passing = _score_entry_pass(rules,score,score_cfg[side])
+                    passing = (_score_entry_pass(rules,score,score_cfg[side])
+                               and _entry_evaluation_due(
+                                   ts, strategy.timeframe, strategy.entry_evaluation_timeframe))
                 state[side+"_passed"] = bool(passing)
                 state[side+"_no_trade_active"] = (
                     bool(evaluate_group(frame,index,no_trade_cfg[side])["passed"])

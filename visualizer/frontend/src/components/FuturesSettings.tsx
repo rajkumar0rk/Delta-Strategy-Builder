@@ -7,6 +7,10 @@ const defaults:FuturesConfig={symbol:'BTCUSD',contract_btc:0.001,quantity_lots:1
  funding_mode:'REQUIRE_CSV',margin_tier_mode:'FLAT_RESEARCH'};
 export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Strategy)=>void}){
  const f=value.futures||defaults;
+ const minutes:Record<Strategy['timeframe'],number>={'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'4h':240,'1D':1440};
+ const entryTimeframes=(Object.keys(minutes) as Strategy['timeframe'][]).filter(tf=>
+  minutes[tf]>=minutes[value.timeframe]&&minutes[tf]%minutes[value.timeframe]===0);
+ const dedicatedEntry=!!(f.pullback?.enabled||f.adaptive?.enabled||f.candle_pattern?.enabled);
  const setupDefaults={enabled:false,setup_timeframe:'15m' as const,ema_indicator_id:'ema20_15m',
   atr_indicator_id:'atr14_15m',volume_indicator_id:'volumeSMA20_5m',require_touch:true,
   require_confirmation_color:true,require_volume:true,volume_multiplier:1,max_wait_bars:6,
@@ -34,7 +38,8 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   <label key={key}>{label}<input type="number" min={min} step={step}
    value={Number(ruleRisk[key])} onChange={e=>setRuleRisk({[key]:Number(e.target.value)})}/></label>);
  const pullback={...setupDefaults,...f.pullback};
- const setup=(patch:Partial<typeof pullback>)=>onChange({...value,futures:{...f,
+ const setup=(patch:Partial<typeof pullback>)=>onChange({...value,
+   ...(patch.enabled===true?{entry_evaluation_timeframe:'strategy' as const}:{}),futures:{...f,
    ...(patch.enabled===true?{stop_loss_percent:null,take_profit_percent:null,
       ...(f.candle_pattern?{candle_pattern:{...pattern,enabled:false}}:{})}:{}),
    pullback:{...pullback,...patch},...(patch.enabled===true&&f.adaptive?{adaptive:{...f.adaptive,enabled:false}}:{}),
@@ -54,7 +59,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
  const setPattern=(patch:Partial<FuturesCandlePatternConfig>)=>{
   const enabled=patch.enabled===true;
   onChange({...value,
-   ...(enabled?{market_type:'FUTURES' as const,timeframe:'5m' as const,direction_mode:'PUT' as const,
+   ...(enabled?{market_type:'FUTURES' as const,timeframe:'5m' as const,entry_evaluation_timeframe:'strategy' as const,direction_mode:'PUT' as const,
     put_exit:{mode:'ANY' as const,min_pass:1,conditions:[],groups:[]},
     put_exit_signal_mode:'ORDER_ONLY' as const,
     risk:{...value.risk,max_hold_minutes:null,close_at_session_end:false},
@@ -86,6 +91,13 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
  <p>In unified ARCHIVE backtests, missing completed Delta India 1-minute mark, index and funding-rate candles are automatically downloaded once and reused from the data folder. Rate candles are not verified funding settlements: REQUIRE_CSV still needs validated settlement observations; EXCLUDE_WITH_WARNING leaves funding out. No real historical data has been fetched by this upgrade.</p>
  <div className="form-grid">
   <label>Direction<select value={value.direction_mode} onChange={e=>onChange({...value,direction_mode:e.target.value as Strategy['direction_mode']})}><option value="BOTH">LONG + SHORT</option><option value="CALL">LONG only</option><option value="PUT">SHORT only</option></select></label>
+  <label>New-entry evaluation timeframe<select
+    disabled={dedicatedEntry}
+    value={value.entry_evaluation_timeframe??'strategy'}
+    onChange={e=>onChange({...value,entry_evaluation_timeframe:e.target.value as Strategy['entry_evaluation_timeframe']})}>
+    <option value="strategy">Every strategy candle (legacy)</option>
+    {entryTimeframes.map(tf=><option key={tf} value={tf}>{tf} confirmed-candle gate</option>)}
+   </select></label>
   {number('quantity_lots','Quantity (lots of 0.001 BTC)','1',1)}
   {number('leverage','Assumed leverage ×','1',1)}
   <label>Margin tier assumption<select value={f.margin_tier_mode||'FLAT_RESEARCH'} onChange={e=>set({margin_tier_mode:e.target.value as 'FLAT_RESEARCH'|'DELTA_PUBLISHED_SNAPSHOT'})}>
@@ -106,6 +118,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   {optional('take_profit_percent','Price-based take-profit %')}
   <label>Funding history<select value={f.funding_mode} onChange={e=>set({funding_mode:e.target.value as FuturesConfig['funding_mode']})}><option value="REQUIRE_CSV">Require historical funding CSV</option><option value="EXCLUDE_WITH_WARNING">Exclude funding (research only)</option></select></label>
  </div>
+ <p>New-entry evaluation is independent of protective stop / trailing execution. A higher-timeframe gate evaluates entries once on the first completed strategy candle after the confirmed higher-timeframe close, then fills at the next strategy open. Existing positions, risk exits, and entry lifecycle updates still run every strategy candle. For 1h RSI/SMA on a 5m base, use a 1h EMA(1) close proxy instead of raw 5m close. Dedicated candle-pattern, pullback and adaptive engines use their own entry schedules.</p>
  <div className="form-grid">
   {(['call','put'] as const).map(side=><div key={side}>
    <b>{side==='call'?'LONG':'SHORT'} signal delivery</b>

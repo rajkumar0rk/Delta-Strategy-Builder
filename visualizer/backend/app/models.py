@@ -767,6 +767,9 @@ class StrategyConfig(BaseModel):
     options_force_exit_time: str | None = None
     pattern_trade: PatternTradeConfig = Field(default_factory=PatternTradeConfig)
     timeframe: Literal["5m", "10m", "15m", "30m", "1h", "4h", "1D"] = "5m"
+    # FUTURES rule-tree cadence for NEW entries only; default preserves old behavior.
+    # A confirmed higher-TF close is eligible on the NEXT completed strategy bar.
+    entry_evaluation_timeframe: Literal["strategy", "5m", "10m", "15m", "30m", "1h", "4h", "1D"] = "strategy"
     direction_mode: Literal["CALL", "PUT", "BOTH"] = "BOTH"
     call_action: Literal["BUY", "SELL"] = "BUY"
     put_action: Literal["BUY", "SELL"] = "BUY"
@@ -859,6 +862,21 @@ class StrategyConfig(BaseModel):
     def validate_strategy_references(self):
         tf_minutes = {"5m":5,"10m":10,"15m":15,"30m":30,"1h":60,"4h":240,"1D":1440}
         base = tf_minutes[self.timeframe]
+        if self.entry_evaluation_timeframe != "strategy":
+            entry_minutes = tf_minutes[self.entry_evaluation_timeframe]
+            if self.market_type != "FUTURES":
+                raise ValueError("entry_evaluation_timeframe is available only for FUTURES")
+            if entry_minutes < base or entry_minutes % base != 0:
+                raise ValueError(
+                    f"entry_evaluation_timeframe {self.entry_evaluation_timeframe} must be an exact "
+                    f"multiple of strategy timeframe {self.timeframe}"
+                )
+            if (self.futures.pullback.enabled or self.futures.adaptive.enabled
+                    or self.futures.candle_pattern.enabled):
+                raise ValueError(
+                    "entry_evaluation_timeframe overrides only generic futures rule-tree "
+                    "entries; specialized futures modes require strategy"
+                )
         for indicator in self.indicators:
             if indicator.timeframe == "strategy":
                 continue

@@ -13,7 +13,7 @@ import pandas as pd
 from zoneinfo import ZoneInfo
 from .data_store import DataStore, parse_time, iso
 from .warmup import required_warmup_candles, historical_bar_sources, warmup_diagnostics, load_daily_source
-from .indicators import compute_indicators
+from .indicators import compute_indicators, _TF_MINUTES
 from .alerts import alert_markers
 from .rules import evaluate_group
 from .futures_setups import PullbackBreakoutPlanner, risk_sized_lots, target_at_r, target_at_points
@@ -134,6 +134,19 @@ def _exit_level(pos, bar, config):
     return None
 
 
+def _entry_evaluation_due(timestamp: pd.Timestamp, base_timeframe: str, evaluation_timeframe: str) -> bool:
+    """Return true only on the first completed base candle after an HTF close.
+
+    UTC close stamps are used for constant-time modulo checks; the signal
+    remains confirmed, and no per-signal state/cooldown or future prices leak.
+    """
+    if evaluation_timeframe == "strategy" or evaluation_timeframe == base_timeframe:
+        return True
+    base_ns = _TF_MINUTES[base_timeframe] * 60_000_000_000
+    evaluation_ns = _TF_MINUTES[evaluation_timeframe] * 60_000_000_000
+    return (timestamp.value - base_ns) % evaluation_ns == 0
+
+
 def run_futures_backtest(req, progress=None):
     strategy=req.strategy;cfg=strategy.futures
     if not cfg.adaptive.enabled and ((strategy.call_breakout_retest.enabled and strategy.call_breakout_retest.require_retest_for_entry)
@@ -166,7 +179,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':19,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':20,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
@@ -731,6 +744,12 @@ def run_futures_backtest(req, progress=None):
                                   'direction':'SHORT','passed':True,
                                   'reason':'COMPLETED_1H_BEARISH_PATTERN',
                                   'stop_price':signal['stop_price']})
+            continue
+        # Entry-only gate. Lifecycle state, equity, session/daily checks,
+        # stop touches, trailing updates and regular exits already ran.
+        # No repeated entry can be accepted on the other lower-TF candles
+        # from the same confirmed HTF signal.
+        if not _entry_evaluation_due(ts, strategy.timeframe, strategy.entry_evaluation_timeframe):
             continue
         eligible=[]
         for direction,enabled,group,nt,side in (
