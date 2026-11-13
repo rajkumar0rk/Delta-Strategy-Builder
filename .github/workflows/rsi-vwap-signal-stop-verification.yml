@@ -2,6 +2,8 @@ name: RSI VWAP signal-candle stop verification
 on:
   push:
     branches:
+      - master
+      - working
       - ci/verify-rsi-vwap-signal-stop-20261113
   pull_request:
     paths:
