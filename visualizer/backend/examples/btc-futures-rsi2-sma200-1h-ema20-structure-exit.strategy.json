@@ -2,7 +2,7 @@
   "schema_version": 15,
   "app": "BTC Strategy Lab",
   "strategy": {
-    "name": "BTCUSD RSI2 Reversal + SMA200/EMA20 1H | LONG RSI<3 / SHORT RSI>97 | EMA20 exit",
+    "name": "BTCUSD 1H RSI2 + SMA200/EMA20 | RSI70/30 OR EMA20 exit | SL500",
     "market_type": "FUTURES",
     "timeframe": "1h",
     "direction_mode": "BOTH",
@@ -162,62 +162,42 @@
       "blocked_weekdays": []
     },
     "call_exit": {
-      "mode": "ALL",
+      "mode": "ANY",
+      "min_pass": 1,
       "conditions": [
         {
-          "id": "long_exit_below_ema20_now",
-          "left": "close",
-          "operator": "LT",
-          "right": "ema20",
-          "left_offset": 0,
-          "right_offset": 0
+          "id": "long_exit_rsi_recovery",
+          "left": "rsi2",
+          "operator": "GTE",
+          "value": 70
         },
         {
-          "id": "long_exit_below_ema20_prev",
+          "id": "long_exit_ema20_invalidation",
           "left": "close",
           "operator": "LT",
-          "right": "ema20",
-          "left_offset": 1,
-          "right_offset": 1
-        },
-        {
-          "id": "long_exit_structure_break",
-          "left": "close",
-          "operator": "LT",
-          "right": "low",
-          "left_offset": 0,
-          "right_offset": 1
+          "right": "ema20"
         }
-      ]
+      ],
+      "groups": []
     },
     "put_exit": {
-      "mode": "ALL",
+      "mode": "ANY",
+      "min_pass": 1,
       "conditions": [
         {
-          "id": "short_exit_above_ema20_now",
-          "left": "close",
-          "operator": "GT",
-          "right": "ema20",
-          "left_offset": 0,
-          "right_offset": 0
+          "id": "short_exit_rsi_recovery",
+          "left": "rsi2",
+          "operator": "LTE",
+          "value": 30
         },
         {
-          "id": "short_exit_above_ema20_prev",
+          "id": "short_exit_ema20_invalidation",
           "left": "close",
           "operator": "GT",
-          "right": "ema20",
-          "left_offset": 1,
-          "right_offset": 1
-        },
-        {
-          "id": "short_exit_structure_break",
-          "left": "close",
-          "operator": "GT",
-          "right": "high",
-          "left_offset": 0,
-          "right_offset": 1
+          "right": "ema20"
         }
-      ]
+      ],
+      "groups": []
     },
     "call_entry_lifecycles": [
       {
