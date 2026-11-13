@@ -1,0 +1,60 @@
+name: RSI VWAP signal-candle stop verification
+on:
+  push:
+    branches:
+      - ci/verify-rsi-vwap-signal-stop-20261113
+  pull_request:
+    paths:
+      - 'visualizer/**'
+      - 'backtest/**'
+      - 'tests/**'
+      - '.github/workflows/rsi-vwap-signal-stop-verification.yml'
+
+jobs:
+  backend:
+    name: Backend tests (Python 3.12)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: visualizer/backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: visualizer/backend/requirements.txt
+      - run: pip install -r requirements.txt
+      - run: python -m compileall -q app tests
+      - run: python -m pytest -q
+
+  legacy:
+    name: Legacy backtest tests (Python 3.13)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: python -m pip install 'numpy>=2.0' 'pandas>=2.0' 'pytest>=9.0'
+      - run: python -m compileall -q backtest tests
+      - run: python -m pytest -q tests
+
+  frontend:
+    name: Frontend tests and build (Node 22)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: visualizer/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: visualizer/frontend/package-lock.json
+      - run: npm ci
+      - run: npm run test -- --run
+      - run: npm run build
