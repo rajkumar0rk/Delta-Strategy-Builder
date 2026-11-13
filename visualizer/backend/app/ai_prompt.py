@@ -1,7 +1,7 @@
 from __future__ import annotations
 import json
 from typing import Any
-from .data_store import DataStore
+from .data_store import DataStore, parse_time
 from .indicators import catalog_payload
 from .models import AiStrategyPromptRequest, StrategyConfig
 
@@ -25,18 +25,33 @@ def _dataset_context(req: AiStrategyPromptRequest) -> dict[str, Any] | None:
     except KeyError:
         return {'id': req.dataset_id, 'error': 'Dataset was not found when prompt was generated.'}
     meta = store.metadata(p)
-    return {
+    # Prompt context must not imply that a single 2025 segment covers a 2026
+    # selection. This is informational only; the backtest data resolver owns
+    # downloads, archive selection, and warmup.
+    covered = None
+    if req.start is not None and req.end is not None and meta.get('start') and meta.get('end'):
+        covered = (parse_time(meta['start']) <= parse_time(req.start)
+                   and parse_time(req.end) <= parse_time(meta['end']))
+    context = {
         'id': meta['id'],
         'bars': meta['bar_count'],
         'available_start': meta['start'],
         'available_end': meta['end'],
         'selected_start': req.start,
         'selected_end': req.end,
+        'selected_window_covered': covered,
         'has_options': meta['has_options'],
         'market_files': ['underlying_bars.csv'] + (['option_instruments.csv', 'option_quotes.csv'] if meta['has_options'] else []),
         'underlying_fields': ['timestamp', 'open', 'high', 'low', 'close', 'volume'],
         'option_quote_fields': ['timestamp', 'symbol', 'bid', 'ask', 'bid_size', 'ask_size', 'volume', 'open_interest'] if meta['has_options'] else [],
     }
+    if covered is False:
+        context['coverage_warning'] = (
+            'Selected date range is not fully covered by this dataset. '
+            'Choose a matching dataset or enable the appropriate archive retrieval '
+            'in BacktestRequest; never invent candles or embed dataset settings in StrategyConfig.'
+        )
+    return context
 
 
 def build_strategy_prompt(req: AiStrategyPromptRequest) -> str:
@@ -58,32 +73,12 @@ def build_strategy_prompt(req: AiStrategyPromptRequest) -> str:
             "using the recursive StrategyConfig JSON schema. "
             "Keep dataset_mode, start/end, warmup_candles, warmup_policy, storage_mode, "
             "train_fraction, embargo_bars, replay scenarios and auto-download flags OUTSIDE strategy JSON. "
-            "For the BTCUSD 1H RSI2 trend-filtered mean-reversion strategy, preserve LONG "
-            "entry RSI2 LT 3 with close GT SMA200 and close GT EMA20, and SHORT entry "
-            "RSI2 GT 97 with close LT SMA200 and close LT EMA20. Use the pre-existing "
-            "exit RuleGroup with mode ANY (logical OR), not ALL: call_exit has "
-            "rsi2 GTE 70 and close LT ema20; put_exit has rsi2 LTE 30 and "
-            "close GT ema20. Thresholds 70/30 are editable numeric Condition values "
-            "and the EMA invalidation rule is optional/removable through the normal "
-            "rule editor. Set rule_risk.enabled=true, stop_mode=FIXED_POINTS, "
-            "stop_loss_points=500, trailing_enabled=false, reward_r_multiple=null, "
-            "take_profit_points=null, futures.stop_loss_percent=null, "
-            "futures.take_profit_percent=null; retain 1h and unlimited entry "
-            "lifecycles. A condition signal executes at NEXT completed 1h candle OPEN; "
-            "the stop may exit earlier using candle high/low. Do not invent fields. "
-            "See visualizer/backend/examples/btc-futures-rsi2-sma200-1h-ema20-structure-exit.strategy.json.\\n"
-            "For a BTCUSD 1h RSI2/SMA200 swing strategy that exits on EMA20 price structure "
-            "instead of trailing profit, set timeframe=1h, rule_risk.stop_mode=FIXED_POINTS, "
-            "stop_loss_points=500, trailing_enabled=false, reward_r_multiple=null and "
-            "take_profit_points=null. Add non-chart-only strategy-timeframe EMA period 20 "
-            "with id ema20. LONG call_exit ALL: current close LT ema20, prior close "
-            "(left_offset=1) LT prior ema20 (right_offset=1), and current close LT "
-            "prior low (right_offset=1). SHORT put_exit ALL reverses each comparison "
-            "using GT and prior high. These are existing RuleGroup Condition offsets, "
-            "not novel operators. The confirmed close signals a NEXT 1h open exit. "
-            "The 500-point emergency stop continues to act intrabar, potentially earlier. "
-            "No profit-activation gate is applied to these structure exits. "
-            "Use visualizer/backend/examples/btc-futures-rsi2-sma200-1h-ema20-structure-exit.strategy.json.\\n"
+            "STRATEGY SELECTION: FOLLOW THE USER'S REQUESTED TRADING IDEA. "
+            "The current strategy below is CONTEXT ONLY, not a mandatory RSI2 template. "
+            "When the user requests a NEW strategy, replace incompatible existing indicators, "
+            "entry/exit trees, risk settings and lifecycles; preserve them only for a requested edit. "
+            "RSI2 recovery/EMA20 exits and unlimited re-entry are examples ONLY when the user explicitly requests them. "
+            "For reference see visualizer/backend/examples/btc-futures-rsi2-sma200-1h-ema20-structure-exit.strategy.json.\\n"
             "Rule-tree futures dynamic risk supports execution_timeframe=5m to check stops and "
             "ratchet trailing on sequential 5m OHLC even when strategy timeframe is 1h/4h/1D; "
             "entry and ordinary exit signals still follow the strategy timeframe. "
@@ -99,18 +94,19 @@ def build_strategy_prompt(req: AiStrategyPromptRequest) -> str:
             "Set trailing_enabled=true, trailing_mode=POINTS, trailing_activation_points=500, "
             "trailing_pullback_points=100, trailing_source=HIGH_LOW, and set "
             "reward_r_multiple=null and take_profit_points=null for no fixed TP. "
-            "After each completed strategy candle is tested against the PREVIOUS active stop, "
+            "After each completed execution-timeframe candle is tested against the PREVIOUS active stop, "
             "track the favorable highest high / lowest low, activate at +500 BTCUSD points "
             "and ratchet stop to extreme minus/plus 100 points, never backward. "
             "The revised stop is effective from the NEXT candle only; same-bar crossing "
             "cannot assume tick ordering. Stops win ambiguous OHLC events. "
-            "For repeated entries while RSI stays extreme, set max_entries_per_activation=null "
+            "ONLY when specifically requested: for repeated entries while RSI stays extreme, set max_entries_per_activation=null "
             "on each direction entry lifecycle, delay_bars=0, cooldown_bars=0 and "
             "max_wait_bars=null. null is unlimited; the old default of 1 is retained. "
             "Position exclusivity, no-trade rules, session and daily risk controls still apply. "
             "Use visualizer/backend/examples/btc-futures-rsi2-sma200-point-trailing.strategy.json. "
-            "Never claim this matches 5m intrabar trailing when strategy timeframe is higher; "
-            "generic rule_risk trailing is evaluated on strategy-timeframe completed OHLC.\\n"
+            "With rule_risk.execution_timeframe=5m this trail is evaluated on confirmed 5m OHLC; "
+            "with execution_timeframe=strategy it is evaluated on the strategy timeframe. "
+            "Neither mode reproduces actual tick ordering.\\n"
             "Legacy signals and rule-based exits occur at the NEXT candle open, using an adverse slippage proxy. "
             "Opt-in futures.pullback.execution_mode=STOP_MARKET_INTRABAR instead arms a stop order "
             "at the completed setup close; its next 5m candle high/low can trigger the order, "
@@ -121,7 +117,7 @@ def build_strategy_prompt(req: AiStrategyPromptRequest) -> str:
             "price_source hlc3 or close. Custom reset groups completed candles by their "
             "OPEN timestamps; do not claim arbitrary event-anchored VWAP. "
             "Four-hour 4h strategy and indicator timeframes are supported from complete UTC-anchored 5m groups. "
-            "For a 1h Donchian55 breakout with a completed 4h EMA200 and 1h ADX14 gate, "
+            "REFERENCE EXAMPLE ONLY: for a 1h Donchian55 breakout with a completed 4h EMA200 and 1h ADX14 gate, "
             "reuse futures.rule_risk instead of inventing futures.trend_risk. "
             "Configure stop_mode=ATR, atr_indicator_id matching a non-chart-only strategy-timeframe ATR, "
             "stop_atr_multiple=2, stop_buffer_atr=0, atr_stop_anchor=ENTRY_FILL, "
@@ -136,6 +132,24 @@ def build_strategy_prompt(req: AiStrategyPromptRequest) -> str:
             "Defaults atr_stop_anchor=SIGNAL_CLOSE and numeric reward_r_multiple=2 preserve "
             "existing VWAP rule-risk JSON. "
             "Use visualizer/backend/examples/btc-futures-4h-donchian-atr-trend.strategy.json.\\n"
+            "For the alternative 4h Donchian55/20 + 1D EMA200 trend-following strategy WHEN REQUESTED: "
+            "set timeframe=4h; add non-chart-only 1D EMA200, 1D EMA1 (completed daily-close proxy), "
+            "4h DONCHIAN55, 4h DONCHIAN20 and 4h ATR14. "
+            "LONG enters after a completed 4h close > the PRIOR 55-bar upper band, with the last confirmed "
+            "1D close proxy > the last confirmed 1D EMA200; SHORT reverses both comparisons. "
+            "LONG exits on completed 4h close < the PRIOR 20-bar lower band, SHORT exits on close > "
+            "the PRIOR 20-bar upper band; rule exits fill NEXT 4h OPEN. "
+            "DONCHIAN indicator bands already exclude their current candle; do not shift them twice. "
+            "Use rule_risk.enabled=true, execution_timeframe=5m, stop_mode=ATR, "
+            "atr_indicator_id=atr14_4h, stop_atr_multiple=2.5, stop_buffer_atr=0, "
+            "atr_stop_anchor=ENTRY_FILL, trailing_enabled=true, trailing_mode=ATR, "
+            "trailing_atr_multiple=3, trailing_source=HIGH_LOW, reward_r_multiple=null, "
+            "take_profit_points=null, size_mode=RISK_EQUITY, equity_risk_percent=0.5, "
+            "both legacy percent exits null, and the other futures planner modes disabled. "
+            "Use ONE entry per breakout activation via existing directional lifecycles; "
+            "do not transfer unlimited RSI2 re-entry settings. "
+            "All numeric settings are configurable, not claims of optimal performance. "
+            "See visualizer/backend/examples/btc-futures-1d-ema200-4h-donchian55-20-atr-trail.strategy.json.\\n"
             "Futures rule-risk optional price-point target: for a fixed 200 BTCUSD point take-profit, "
             "set futures.rule_risk.take_profit_points=200 and reward_r_multiple=null. "
             "This is a BTCUSD UNDERLYING PRICE MOVE, not $200 PnL or 200 ticks, "
@@ -368,7 +382,7 @@ def build_strategy_prompt(req: AiStrategyPromptRequest) -> str:
             "Use no future information to generate signals. No real orders are placed. "
             "No actual futures orderbook, maker fills, full historical leverage tiers or accurate "
             "broker liquidation engine exists in the lab.\n"
-            "Current strategy:\n" + json.dumps(current, indent=2) +
+            "Current strategy (context only; user-requested NEW strategy overrides it):\n" + json.dumps(current, indent=2) +
             "\nDataset context:\n" + json.dumps(dataset, indent=2) +
             "\nIndicator catalog:\n" + json.dumps(indicators, indent=2) +
             "\nAllowed rule operators:\n" + json.dumps(OPERATORS) +

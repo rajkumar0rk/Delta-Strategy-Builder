@@ -1,5 +1,12 @@
 # Data and backtest correctness rules
 
+## Daily EMA200 / 4h Donchian futures data accuracy (November 2026)
+
+The `BTCUSD Futures | 1D EMA200 + 4H Donchian55/20 + ATR 2.5/3 (5M Execution)` seed lives in `visualizer/backend/examples/btc-futures-1d-ema200-4h-donchian55-20-atr-trail.strategy.json`. It needs a 200-completed-day Daily EMA200 warmup plus the complete 4h and child 5m candles. The last confirmed 1D EMA1 is used as the Daily close proxy, not the still-forming day. Donchian channels are prior N bars by construction, no extra lookback offset. Signals are decided at completed 4h candle closes; normal exits and entries use next 4h OPEN proxies.
+
+With `futures.rule_risk.execution_timeframe="5m"`, protective stop/ATR trailing use the prior completed 4h ATR snapshot. The active stop is tested on each 5m child before favorable-high/low ratcheting, and its revision is executable only on the following 5m candle. Gaps, missing 5m bars and within-bar path ambiguity must be handled conservatively. Futures fills, funding, margin and liquidation remain RESEARCH_ONLY. A prompt's `selected_window_covered=false` warns about the indicated dataset segment only: choose a matching `BacktestRequest` archive/date range rather than altering strategy settings or inventing market candles.
+
+
 ## Opt-in fixed BTCUSD stop, activated point trailing and unlimited re-entry (November 2026)
 
 For generic FUTURES rule trees, reuse `futures.rule_risk` (do not enable the dedicated `candle_pattern` engine). Set `enabled=true`, `stop_mode="FIXED_POINTS"`, `stop_loss_points=500`, `stop_buffer_atr=0`, `reward_r_multiple=null`, `take_profit_points=null`, `trailing_enabled=true`, `trailing_mode="POINTS"`, `trailing_activation_points=500`, `trailing_pullback_points=100`, `trailing_source="HIGH_LOW"`. Both `futures.stop_loss_percent` and `futures.take_profit_percent` must be null and pullback/adaptive/candle_pattern disabled. Distances are BTCUSD underlying points, NOT dollar P&L, ticks, percent or option premium. Values must be positive and >= futures.tick_size when active. An ATR indicator is only required for ATR stop/buffer/trailing selections; defaults preserve ATR trailing and SWING stops for old strategies.
