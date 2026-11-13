@@ -908,7 +908,12 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         if signal_stop_active and signal_stop.signal_candle_execution_timeframe == '5m'
         else frame
     )
-    stop_rows = tuple(stop_frame.itertuples(index=True, name='StopBar')) if signal_stop_active else ()
+    # Zero-copy column views + one monotonic cursor avoid materializing
+    # per-candle named tuples on multi-year archives.
+    stop_times = stop_frame.index if signal_stop_active else ()
+    stop_lows = stop_frame['low'].to_numpy(copy=False) if signal_stop_active else ()
+    stop_highs = stop_frame['high'].to_numpy(copy=False) if signal_stop_active else ()
+    stop_closes = stop_frame['close'].to_numpy(copy=False) if signal_stop_active else ()
     stop_cursor = 0
     report('Preparing reusable option quote indexes…', 32, 'QUOTE_INDEX', 'Evaluate strategy candles')
     store.ensure_indexes(parts, lambda msg: report(msg, 32, 'QUOTE_INDEX', 'Evaluate strategy candles'))
@@ -1124,19 +1129,18 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         # imagined intrabar wick timestamp; this is conservative 5m OHLC replay.
         first_stop_at = None
         if signal_stop_active:
-            while stop_cursor < len(stop_rows) and stop_rows[stop_cursor].Index <= ts:
-                stop_bar = stop_rows[stop_cursor]
+            while stop_cursor < len(stop_times) and stop_times[stop_cursor] <= ts:
+                stop_at = stop_times[stop_cursor]
+                if pos is not None and pos.underlying_stop_trigger_time is None:
+                    if stop_at > pd.Timestamp(parse_time(pos.entry_time)):
+                        bar_values = SimpleNamespace(low=stop_lows[stop_cursor], high=stop_highs[stop_cursor], close=stop_closes[stop_cursor])
+                        if _signal_stop_hit(pos, bar_values, signal_stop.signal_candle_trigger):
+                            first_stop_at = stop_at
                 stop_cursor += 1
-                if pos is None or pos.underlying_stop_trigger_time is not None:
-                    continue
-                if stop_bar.Index <= pd.Timestamp(parse_time(pos.entry_time)):
-                    continue
-                if _signal_stop_hit(pos, stop_bar, signal_stop.signal_candle_trigger):
-                    first_stop_at = stop_bar.Index
-                    pos.underlying_stop_trigger_time = first_stop_at.isoformat()
+                if first_stop_at is not None:
                     break
-            # Consume the remaining completed candles after the first stop.
-            while stop_cursor < len(stop_rows) and stop_rows[stop_cursor].Index <= ts:
+            # Consume remaining completed candles after the earliest stop.
+            while stop_cursor < len(stop_times) and stop_times[stop_cursor] <= ts:
                 stop_cursor += 1
 
         # Merge the stop trigger with observed option quotes in timestamp order.
@@ -1147,8 +1151,13 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 q = pos_quotes.iloc[q_cursor].to_dict()
                 q_cursor += 1
                 quote_at = pd.Timestamp(q['timestamp'])
-                trigger_at = pd.Timestamp(parse_time(pos.underlying_stop_trigger_time)) if pos.underlying_stop_trigger_time else None
+                trigger_at = (
+                    pd.Timestamp(parse_time(pos.underlying_stop_trigger_time))
+                    if pos.underlying_stop_trigger_time
+                    else first_stop_at
+                )
                 if trigger_at is not None and quote_at >= trigger_at:
+                    pos.underlying_stop_trigger_time = trigger_at.isoformat()
                     close_position(quote_at.isoformat(), _executable_exit_price(pos, q, strategy), 'UNDERLYING_SIGNAL_CANDLE_STOP')
                     closed_this_candle = True
                     break
@@ -1157,6 +1166,9 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                     close_position(quote_at.isoformat(), _executable_exit_price(pos, q, strategy), reason)
                     closed_this_candle = True
                     break
+
+        if pos is not None and first_stop_at is not None and pos.underlying_stop_trigger_time is None:
+            pos.underlying_stop_trigger_time = first_stop_at.isoformat()
 
         if pos is not None and pos.underlying_stop_trigger_time is not None:
             # There is no executable quote yet: retain exposure instead of
