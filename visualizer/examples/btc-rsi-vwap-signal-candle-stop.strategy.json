@@ -1,0 +1,194 @@
+{
+  "schema_version": 15,
+  "app": "BTC Strategy Lab",
+  "strategy": {
+    "name": "BTC RSI14 VWAP Momentum - Signal Candle Stop",
+    "timeframe": "5m",
+    "direction_mode": "BOTH",
+    "call_action": "BUY",
+    "put_action": "BUY",
+    "position_policy": "EXCLUSIVE",
+    "indicators": [
+      {
+        "id": "rsi14",
+        "kind": "RSI",
+        "params": {
+          "period": 14
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "vwap",
+        "kind": "VWAP",
+        "params": {},
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      }
+    ],
+    "call_entry": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "long_rsi",
+          "left": "rsi14",
+          "operator": "GT",
+          "right": null,
+          "value": 60,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "long_vwap",
+          "left": "close",
+          "operator": "GT",
+          "right": "vwap",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        }
+      ],
+      "groups": []
+    },
+    "put_entry": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "short_rsi",
+          "left": "rsi14",
+          "operator": "LT",
+          "right": null,
+          "value": 40,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "short_vwap",
+          "left": "close",
+          "operator": "LT",
+          "right": "vwap",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        }
+      ],
+      "groups": []
+    },
+    "call_exit": {
+      "mode": "ANY",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "long_rsi_exit",
+          "left": "rsi14",
+          "operator": "CROSSES_BELOW",
+          "right": null,
+          "value": 60,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "long_vwap_exit",
+          "left": "close",
+          "operator": "CROSSES_BELOW",
+          "right": "vwap",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        }
+      ],
+      "groups": []
+    },
+    "put_exit": {
+      "mode": "ANY",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "short_rsi_exit",
+          "left": "rsi14",
+          "operator": "CROSSES_ABOVE",
+          "right": null,
+          "value": 40,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "short_vwap_exit",
+          "left": "close",
+          "operator": "CROSSES_ABOVE",
+          "right": "vwap",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        }
+      ],
+      "groups": []
+    },
+    "risk": {
+      "stop_loss": {
+        "mode": "UNDERLYING_SIGNAL_CANDLE",
+        "value": 15,
+        "signal_candle_buffer_points": 0,
+        "signal_candle_trigger": "WICK",
+        "signal_candle_execution_timeframe": "5m"
+      },
+      "take_profit": {
+        "mode": "NONE",
+        "value": 30
+      },
+      "profit_protection": {
+        "mode": "NONE"
+      },
+      "max_hold_minutes": null,
+      "starting_balance_usd": 100,
+      "quantity_mode": "FIXED",
+      "quantity": 1,
+      "budget_usd": 100,
+      "enforce_cash": true,
+      "enforce_trade_budget_strict": true
+    },
+    "execution": {
+      "slippage_ticks": 0,
+      "decision_log_mode": "EVENTS_ONLY"
+    },
+    "session": {
+      "timezone": "Asia/Kolkata",
+      "start": "00:00",
+      "end": "23:59",
+      "windows": [
+        {
+          "start": "00:00",
+          "end": "23:59"
+        }
+      ],
+      "blocked_weekdays": []
+    },
+    "option": {
+      "strike_mode": "ATM",
+      "strike_steps": 0,
+      "min_dte_days": 0.25,
+      "max_dte_days": 3,
+      "max_spread_percent": 5
+    }
+  }
+}

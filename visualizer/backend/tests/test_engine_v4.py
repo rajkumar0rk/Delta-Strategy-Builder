@@ -75,3 +75,63 @@ def test_exclusive_position_skips_opposite_entry_decisions_while_open(tmp_path, 
     put_entries=[r for r in rows if r['kind']=='ENTRY' and r['direction']=='PUT']
     times={r['timestamp'] for r in put_entries}
     assert not any(t.startswith('2026-01-01T00:10:00') or t.startswith('2026-01-01T00:15:00') or t.startswith('2026-01-01T00:20:00') for t in times)
+
+
+def test_underlying_signal_candle_stop_level_respects_option_exposure():
+    from app.engine import _signal_stop_level
+    assert _signal_stop_level('CALL', 'BUY', 90, 110, 2) == 88
+    assert _signal_stop_level('PUT', 'SELL', 90, 110, 2) == 88
+    assert _signal_stop_level('PUT', 'BUY', 90, 110, 2) == 112
+    assert _signal_stop_level('CALL', 'SELL', 90, 110, 2) == 112
+
+
+def test_signal_candle_stop_exits_at_observed_option_quote(tmp_path, monkeypatch):
+    ds = _dataset(tmp_path, monkeypatch)
+    import pandas as pd
+    bars = pd.read_csv(ds / 'underlying_bars.csv')
+    # Enter CALL on the 00:05 signal candle (low=100), then the next
+    # completed 5m candle touches that frozen price with its wick.
+    bars.loc[2, 'low'] = 99
+    bars.to_csv(ds / 'underlying_bars.csv', index=False)
+    strategy = StrategyConfig(
+        name='RSI-VWAP candle stop',
+        direction_mode='CALL',
+        call_entry=RuleGroup(conditions=[Condition(id='long', left='close', operator='GT', value=100)]),
+    )
+    strategy.risk.stop_loss.mode = 'UNDERLYING_SIGNAL_CANDLE'
+    strategy.risk.stop_loss.signal_candle_trigger = 'WICK'
+    strategy.risk.stop_loss.signal_candle_execution_timeframe = '5m'
+    strategy.risk.take_profit.mode = 'NONE'
+    strategy.risk.profit_protection.mode = 'NONE'
+    strategy.risk.max_hold_minutes = None
+    strategy.option.min_dte_days = 0
+    strategy.option.max_dte_days = 3
+    strategy.option.max_spread_percent = 30
+    strategy.risk.quantity = 1
+    result = run_backtest(BacktestRequest(
+        dataset_id='sample', start='2026-01-01T00:00:00Z',
+        end='2026-01-01T00:35:00Z', strategy=strategy,
+    ))
+    assert result['trades']
+    trade = result['trades'][0]
+    assert trade['underlying_stop_level'] == 100
+    assert trade['exit_reason'] == 'UNDERLYING_SIGNAL_CANDLE_STOP'
+    assert trade['exit_time'].startswith('2026-01-01T00:10:00')
+    assert trade['underlying_stop_trigger_time'].startswith('2026-01-01T00:10:00')
+
+
+def test_signal_stop_model_round_trip_and_legacy_default():
+    from app.models import StopLoss
+    baseline = StopLoss()
+    assert baseline.mode == 'OPTION_PERCENT'
+    configured = StopLoss.model_validate({
+        'mode': 'UNDERLYING_SIGNAL_CANDLE',
+        'signal_candle_trigger': 'CLOSE',
+        'signal_candle_execution_timeframe': '5m',
+        'signal_candle_buffer_points': 25,
+    })
+    assert StopLoss.model_validate(configured.model_dump()) == configured
+    import pytest
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        StopLoss(mode='UNDERLYING_SIGNAL_CANDLE', signal_candle_buffer_points=-1)

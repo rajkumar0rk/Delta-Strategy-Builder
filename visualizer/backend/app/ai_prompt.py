@@ -45,7 +45,7 @@ def build_strategy_prompt(req: AiStrategyPromptRequest) -> str:
     current = req.strategy.model_dump()
     dataset = _dataset_context(req)
 
-    return f"""You are designing a BTC options strategy for BTC Strategy Lab V15.1.
+    return f"""You are designing a BTC OPTIONS strategy for BTC Strategy Lab V15.1 (repository master at this revision).\nDo not invent market_type=FUTURES, strategy.futures, options_pullback, 4h/1D strategy timeframes, schema_version changes, or backtest capabilities absent from the exact StrategyConfig schema.\nUse only documented keys from the included live schema. Reject unsupported requested features rather than silently representing them with another mode.
 
 IMPORTANT OUTPUT CONTRACT
 - Return ONE valid JSON object only. Do not return Python, Pine Script, prose around the JSON, markdown fences, comments, NaN, Infinity, or invented fields.
@@ -57,7 +57,7 @@ IMPORTANT OUTPUT CONTRACT
 - Conditions are evaluated on COMPLETED strategy-timeframe candles. Supported strategy timeframes are 5m, 10m, 15m, 30m and 1h. Aggregated bars are built only from complete groups of downloaded 5m candles. There is no look-ahead.
 - Higher-timeframe candles and indicators are anchored to fixed UTC clock-close boundaries, independent of the requested From time. Example: 00:05 + 00:10 form the 10m candle ending 00:10. HTF values become usable only after that HTF candle closes.
 - BUY option entry fills use historical ASK + slippage and exits SELL at historical BID - slippage. SELL option entry fills at historical BID - slippage and exits BUY-to-close at historical ASK + slippage. SELL margin requirements are venue/account specific and are NOT modeled; do not present the result as a margin estimate.
-- Protective stop/take-profit/profit-protection checks are quote driven when applicable.
+- Protective option premium stop/take-profit/profit-protection checks are quote driven; underlying signal-candle stop triggers are completed-candle based, and their fills require real subsequent observed option quotes. A position with no quote after an underlying stop stays unresolved, not an invented exit.
 - A configured NO TRADE group blocks new entries when that group passes. It does not close an already-open position.
 - CALL and PUT have separate exit rule groups.
 - If both CALL and PUT entry groups pass on the same candle, conflict_policy controls the result.
@@ -190,6 +190,8 @@ stop_loss.mode:
 - OPTION_PERCENT: exits when option return <= -abs(value)%
 - OPTION_POINTS: exits when option bid <= entry - abs(value)
 - UNDERLYING_ATR: direction-aware stop based on entry BTC and the first non-chart-only ATR indicator
+- UNDERLYING_SIGNAL_CANDLE: freeze the completed RSI/VWAP entry SIGNAL candle underlying low/high at entry, with configurable nonnegative signal_candle_buffer_points. BUY CALL and SELL PUT are bullish (low-buffer); BUY PUT and SELL CALL are bearish (high+buffer). The actual option exit requires an observed executable bid/ask quote at or after the stop signal. signal_candle_trigger=WICK tests low/high of completed monitoring candles; CLOSE uses the monitoring candle close. signal_candle_execution_timeframe=strategy or 5m uses completed strategy candles or completed 5m BTC candles independently of the indicator timeframe. A wick touch is recognized only at the completed monitoring candle timestamp, not a fabricated tick-time stop fill. Missing exit quotes leave unresolved exposure. Do not combine this mode with conflicting hard-stop promises.
+- RSI/VWAP example: BUY CALL when RSI(14)>60 AND close>session VWAP; BUY PUT when RSI(14)<40 AND close<VWAP. Long exit via RSI crossing below 60 OR close crossing below VWAP; short exit via RSI crossing above 40 OR close crossing above VWAP. These are suggested exit rules; the reference picture does not explicitly specify exact exits. Disable unrelated EMA/volume entry gates when reproducing the picture.
 
 take_profit.mode:
 - NONE

@@ -165,8 +165,13 @@ class ExecutionConfig(BaseModel):
 
 
 class StopLoss(BaseModel):
-    mode: Literal["NONE", "OPTION_PERCENT", "OPTION_POINTS", "UNDERLYING_ATR"] = "OPTION_PERCENT"
+    # Underlying signal-candle stops use BTC OHLC for the trigger, then require
+    # an observed executable-side option quote for the actual option exit.
+    mode: Literal["NONE", "OPTION_PERCENT", "OPTION_POINTS", "UNDERLYING_ATR", "UNDERLYING_SIGNAL_CANDLE"] = "OPTION_PERCENT"
     value: float = 15.0
+    signal_candle_buffer_points: float = Field(default=0.0, ge=0, le=10_000_000)
+    signal_candle_trigger: Literal["WICK", "CLOSE"] = "WICK"
+    signal_candle_execution_timeframe: Literal["strategy", "5m"] = "strategy"
 
 
 class TakeProfit(BaseModel):

@@ -13,6 +13,8 @@ These rules extend `../AGENTS.md` for `backend/`.
 - Research sweeps/walk-forward: `app/research.py`.
 - Historical BIG-vs-fake labels: `app/trend_discovery.py`.
 
+When editing `risk.stop_loss.mode=UNDERLYING_SIGNAL_CANDLE`, preserve the frozen completed signal-candle price anchor, monotonic stop-candle scanning, chronological quote execution, unresolved stop exposure reporting, and directional BUY CALL/SELL PUT vs BUY PUT/SELL CALL rules. Update `visualizer/codex/STRATEGY_JSON_GENERATION_PROMPT.md` and focused backend tests together.
+
 Use UTC internally unless a feature explicitly uses strategy session timezone. Option entry/exit execution must continue to use executable bid/ask sides, not candle midpoint. SELL-option margin remains unmodeled unless real venue/account data becomes available.
 
 For large loops, keep cooperative `progress(...)` checkpoints so the Stop button can cancel safely.

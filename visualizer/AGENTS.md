@@ -6,6 +6,8 @@ Read `codex/PROJECT.md`, `codex/ARCHITECTURE.md`, `codex/DATA_AND_BACKTEST_RULES
 
 This folder is the visual BTC options research/backtesting application inside the larger `Delta-Strategy-Builder` repository. The repository root is the parent of the current source app folder. In the user's current layout the source app folder is named `visualizer/`.
 
+Read `codex/STRATEGY_JSON_GENERATION_PROMPT.md` before changing signal-candle stop, RSI/VWAP or generated AI strategy prompts. Never claim `futures.rule_risk` or unsupported 4h/1D schema fields exist in this branch merely because they appear in an externally pasted newer prompt.
+
 ## Non-negotiable rules
 
 - Preserve completed-candle / no-look-ahead semantics. Never make a signal actionable before all source candles and pivot confirmations required by that signal are complete.

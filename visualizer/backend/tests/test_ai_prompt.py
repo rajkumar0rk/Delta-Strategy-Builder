@@ -13,3 +13,12 @@ def test_ai_prompt_documents_current_v15_1_contract():
     assert 'fixed UTC clock-close boundaries' in text
     assert 'enforce_trade_budget_strict' in text
     assert 'LOW_FIDELITY_SYNTHETIC_BBO' in text
+
+
+def test_ai_prompt_discloses_actual_options_only_signal_stop_contract():
+    prompt = build_strategy_prompt(AiStrategyPromptRequest(strategy=StrategyConfig()))
+    assert 'UNDERLYING_SIGNAL_CANDLE' in prompt
+    assert 'signal_candle_execution_timeframe' in prompt
+    assert '5m BTC candles' in prompt
+    assert 'Do not invent market_type=FUTURES' in prompt
+    assert 'BUY CALL and SELL PUT' in prompt

@@ -60,3 +60,9 @@ Known limitations:
 ```
 
 Do **not** claim "all related files updated" without inspecting the consumers and tests. If a necessary companion change is intentionally deferred, identify it explicitly as incomplete.
+
+## RSI/VWAP underlying signal-candle stop (options engine)
+
+The live `StrategyConfig.risk.stop_loss` schema is in `backend/app/models.py` and must remain synchronized with `backend/app/engine.py` and `frontend/src/components/RiskOptions.tsx`. The generated AI contract is in `backend/app/ai_prompt.py`; the Codex summary is `codex/STRATEGY_JSON_GENERATION_PROMPT.md`. Update `backend/tests/test_engine_v4.py` (or a successor focused test) and `backend/tests/test_ai_prompt.py` together. If changing execution semantics, increment the backtest cache engine version.
+
+Invariant: signal low/high is snapshotted from a completed strategy signal candle at entry. Monotonic scanning of strategy or completed 5m stop bars may only activate AFTER the actual option entry quote time. It never invents the time inside a wick. The first observed option quote after the underlying stop produces the actual quote-based option fill; no quote means unresolved exposure, not a guessed historical execution. Existing premium stops, margin disclosures, fee/GST, and legacy JSON defaults must remain unchanged.
