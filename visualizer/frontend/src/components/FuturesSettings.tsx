@@ -17,7 +17,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   swing_lookback_bars:3,stop_buffer_atr:0.1,breakout_buffer_points:0,reward_r_multiple:2,
   size_mode:'RISK_EQUITY' as const,equity_risk_percent:0.5,max_lots:100000,
   max_estimated_risk_multiple:1};
- const ruleDefaults={enabled:false,stop_mode:'SWING' as const,stop_loss_points:500,swing_lookback_bars:3,
+ const ruleDefaults={enabled:false,execution_timeframe:'strategy' as const,stop_mode:'SWING' as const,stop_loss_points:500,swing_lookback_bars:3,
   atr_indicator_id:'atr14_5m',stop_atr_multiple:1.5,stop_buffer_atr:0.1,
   reward_r_multiple:2,take_profit_points:null as number|null,atr_stop_anchor:'SIGNAL_CLOSE' as const,
   trailing_enabled:false,trailing_mode:'ATR' as const,trailing_activation_points:500,trailing_pullback_points:100,trailing_atr_multiple:3,trailing_source:'HIGH_LOW' as const,
