@@ -137,5 +137,13 @@ def test_reference_json_valid():
     assert cfg.futures.rule_risk.stop_loss_points == 500
     assert cfg.futures.rule_risk.trailing_activation_points == 500
     assert cfg.futures.rule_risk.trailing_pullback_points == 100
+    assert cfg.call_entry.mode == "ALL"
+    assert cfg.put_entry.mode == "ALL"
+    long_rsi, long_sma = cfg.call_entry.conditions
+    short_rsi, short_sma = cfg.put_entry.conditions
+    assert (long_rsi.left, long_rsi.operator, long_rsi.value) == ("rsi2", "LT", 3)
+    assert (short_rsi.left, short_rsi.operator, short_rsi.value) == ("rsi2", "GT", 97)
+    assert (long_sma.left, long_sma.operator, long_sma.right) == ("close", "GT", "sma200")
+    assert (short_sma.left, short_sma.operator, short_sma.right) == ("close", "LT", "sma200")
     assert cfg.call_entry_lifecycles[0].max_entries_per_activation is None
     assert cfg.put_entry_lifecycles[0].max_entries_per_activation is None
