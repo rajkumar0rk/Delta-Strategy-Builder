@@ -125,4 +125,4 @@ def test_specialized_options_cannot_combine_generic_stop():
     with pytest.raises(ValidationError,match='Generic signal-candle'):
         StrategyConfig.model_validate({'market_type':'OPTIONS',
             'risk':{'stop_loss':{'mode':'UNDERLYING_SIGNAL_CANDLE'}},
-            'pattern_trade':{'enabled':True}})
+            'options_pullback':{'enabled':True}})
