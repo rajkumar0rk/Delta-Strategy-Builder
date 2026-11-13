@@ -655,6 +655,8 @@ class FuturesRuleRiskConfig(BaseModel):
     pullback/AMRS planners. Signal snapshots never see the next candle.
     """
     enabled: bool = False
+    # Optional fine-grained protective execution; strategy rule signals stay on their own timeframe.
+    execution_timeframe: Literal["strategy", "5m"] = "strategy"
     stop_mode: Literal["SWING", "SIGNAL_CANDLE", "ATR", "FIXED_POINTS"] = "SWING"
     stop_loss_points: float = Field(default=500.0, gt=0, le=10000000)  # actual entry-price distance
     swing_lookback_bars: int = Field(default=3, ge=1, le=200)

@@ -37,6 +37,7 @@
       },
       "rule_risk": {
         "enabled": true,
+        "execution_timeframe": "5m",
         "stop_mode": "FIXED_POINTS",
         "stop_loss_points": 500,
         "stop_buffer_atr": 0,
@@ -88,10 +89,10 @@
       "mode": "ALL",
       "conditions": [
         {
-          "id": "long_rsi97",
+          "id": "long_rsi3",
           "left": "rsi2",
-          "operator": "GT",
-          "value": 97
+          "operator": "LT",
+          "value": 3
         },
         {
           "id": "long_sma",
@@ -105,10 +106,10 @@
       "mode": "ALL",
       "conditions": [
         {
-          "id": "short_rsi3",
+          "id": "short_rsi97",
           "left": "rsi2",
-          "operator": "LT",
-          "value": 3
+          "operator": "GT",
+          "value": 97
         },
         {
           "id": "short_sma",
