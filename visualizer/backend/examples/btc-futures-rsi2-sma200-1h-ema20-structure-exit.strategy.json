@@ -2,7 +2,7 @@
   "schema_version": 15,
   "app": "BTC Strategy Lab",
   "strategy": {
-    "name": "BTCUSD RSI2 Reversal + SMA200 1H | LONG below 3 SHORT above 97 | EMA20 exit",
+    "name": "BTCUSD RSI2 Reversal + SMA200/EMA20 1H | LONG RSI<3 / SHORT RSI>97 | EMA20 exit",
     "market_type": "FUTURES",
     "timeframe": "1h",
     "direction_mode": "BOTH",
@@ -109,6 +109,12 @@
           "left": "close",
           "operator": "GT",
           "right": "sma200"
+        },
+        {
+          "id": "long_above_ema20",
+          "left": "close",
+          "operator": "GT",
+          "right": "ema20"
         }
       ]
     },
@@ -126,6 +132,12 @@
           "left": "close",
           "operator": "LT",
           "right": "sma200"
+        },
+        {
+          "id": "short_below_ema20",
+          "left": "close",
+          "operator": "LT",
+          "right": "ema20"
         }
       ]
     },
