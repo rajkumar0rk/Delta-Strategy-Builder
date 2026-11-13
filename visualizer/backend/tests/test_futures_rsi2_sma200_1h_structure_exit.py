@@ -84,22 +84,29 @@ def test_one_hour_completed_signal_exits_next_hour_open(tmp_path, monkeypatch):
     monkeypatch.setenv("STRATEGY_LAB_DATA_ROOT", str(root))
     monkeypatch.setenv("STRATEGY_LAB_RESULT_ROOT", str(tmp_path / "results"))
     monkeypatch.setenv("STRATEGY_LAB_CACHE_ROOT", str(tmp_path / "cache"))
-    hours = 211
-    hourly = [100000 + i for i in range(hours)]
-    hourly[206] = 100150
-    hourly[207] = 100100
-    hourly[208] = 100100
-    hourly[209] = 100100
-    hourly[210] = 100100
+    hours = 221
+    # A long-established uptrend keeps price above SMA200 and EMA20
+    # even as RSI(2) becomes oversold after 12 small declining hours.
+    # Two later larger hourly declines confirm the actual EMA20/structure
+    # exit without reaching the entry's 500-point protective stop.
+    hourly = [100000.0 + i * 2 for i in range(hours)]
+    hourly[201] = hourly[200] + 480
+    for hour in range(202, 214):
+        hourly[hour] = hourly[hour - 1] - 2
+    for hour in range(214, hours):
+        hourly[hour] = hourly[hour - 1] - 125
     origin = pd.Timestamp("2026-01-01T00:00:00Z")
     rows = []
     for hour, price in enumerate(hourly):
+        previous = hourly[hour - 1] if hour else price
         for minute in range(1, 13):
             close_ts = origin + pd.Timedelta(hours=hour, minutes=minute * 5)
+            opened = previous + (price - previous) * (minute - 1) / 12
+            closed = previous + (price - previous) * minute / 12
             rows.append({
                 "timestamp": close_ts.isoformat(),
-                "open": float(price), "high": float(price) + 0.1,
-                "low": float(price) - 0.1, "close": float(price), "volume": 100,
+                "open": opened, "high": max(opened, closed) + 0.1,
+                "low": min(opened, closed) - 0.1, "close": closed, "volume": 100,
             })
     with (sample / "underlying_bars.csv").open("w", newline="", encoding="utf-8") as handle:
         w = csv.DictWriter(handle, fieldnames=list(rows[0]))
@@ -123,12 +130,14 @@ def test_one_hour_completed_signal_exits_next_hour_open(tmp_path, monkeypatch):
 
 def test_rsi2_reversal_thresholds_and_sma_trend_filters():
     cfg = load_strategy()
-    long_rsi, long_trend = cfg.call_entry.conditions
-    short_rsi, short_trend = cfg.put_entry.conditions
+    long_rsi, long_trend, long_ema = cfg.call_entry.conditions
+    short_rsi, short_trend, short_ema = cfg.put_entry.conditions
     assert (long_rsi.left, long_rsi.operator, long_rsi.value) == ("rsi2", "LT", 3)
     assert (short_rsi.left, short_rsi.operator, short_rsi.value) == ("rsi2", "GT", 97)
     assert (long_trend.left, long_trend.operator, long_trend.right) == ("close", "GT", "sma200")
     assert (short_trend.left, short_trend.operator, short_trend.right) == ("close", "LT", "sma200")
+    assert (long_ema.left, long_ema.operator, long_ema.right) == ("close", "GT", "ema20")
+    assert (short_ema.left, short_ema.operator, short_ema.right) == ("close", "LT", "ema20")
 
 
 def test_ema20_entry_gate_is_directional_and_uses_completed_1h_close():
@@ -146,12 +155,12 @@ def test_ema20_entry_gate_is_directional_and_uses_completed_1h_close():
     from app.rules import evaluate_group
     import pandas as pd
     # RSI and SMA permit LONG, but the EMA gate rejects a close below EMA20.
-    long_frame = pd.DataFrame([{"rsi2": 2, "close": 101, "sma200": 100, "ema20": 102}])
+    long_frame = pd.DataFrame([{"rsi2": 2.0, "close": 101.0, "sma200": 100.0, "ema20": 102.0}])
     assert not evaluate_group(long_frame, 0, cfg.call_entry)["passed"]
     long_frame.loc[0, "ema20"] = 100.5
     assert evaluate_group(long_frame, 0, cfg.call_entry)["passed"]
     # RSI and SMA permit SHORT, but the EMA gate rejects a close above EMA20.
-    short_frame = pd.DataFrame([{"rsi2": 98, "close": 99, "sma200": 100, "ema20": 98}])
+    short_frame = pd.DataFrame([{"rsi2": 98.0, "close": 99.0, "sma200": 100.0, "ema20": 98.0}])
     assert not evaluate_group(short_frame, 0, cfg.put_entry)["passed"]
     short_frame.loc[0, "ema20"] = 99.5
     assert evaluate_group(short_frame, 0, cfg.put_entry)["passed"]
