@@ -202,6 +202,12 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
    {ruleRisk.take_profit_points==null&&ruleRisk.reward_r_multiple!=null&&<label>Target multiple of entry-stop distance
      <input type="number" min="0.01" step="0.1" value={ruleRisk.reward_r_multiple}
        onChange={e=>setRuleRisk({reward_r_multiple:Number(e.target.value)})}/></label>}
+   <label>Protective stop / trailing execution candles<select value={ruleRisk.execution_timeframe??'strategy'}
+    onChange={e=>setRuleRisk({execution_timeframe:e.target.value as 'strategy'|'5m'})}>
+    <option value="strategy">Strategy timeframe (legacy)</option>
+    <option value="5m">5-minute OHLC (also for higher-timeframe entry rules)</option>
+   </select></label>
+   <p>In 5m mode, entry and condition-exit signals stay on the strategy timeframe. Stops are checked on each 5m OHLC candle; trailing ratchets after a completed 5m candle and applies on the next 5m candle. Missing child candles fail the backtest. Higher-timeframe ATR trails use the last confirmed strategy-candle ATR.</p>
    <label className="switch"><input type="checkbox" checked={ruleRisk.trailing_enabled}
      onChange={e=>setRuleRisk({trailing_enabled:e.target.checked})}/>Enable dynamic trailing stop</label>
    {ruleRisk.trailing_enabled&&<label>Trailing mode<select value={ruleRisk.trailing_mode??'ATR'} onChange={e=>setRuleRisk({trailing_mode:e.target.value as typeof ruleRisk.trailing_mode})}><option value="ATR">Completed ATR (legacy)</option><option value="POINTS">Activate and trail by BTCUSD points</option></select></label>}
