@@ -242,8 +242,13 @@ class ExecutionConfig(BaseModel):
 
 
 class StopLoss(BaseModel):
-    mode: Literal["NONE", "OPTION_PERCENT", "OPTION_POINTS", "UNDERLYING_ATR"] = "OPTION_PERCENT"
+    # Generic options rule-tree risk: BTC signal candle is the frozen stop
+    # anchor, but the actual option exit must use an observed quote.
+    mode: Literal["NONE", "OPTION_PERCENT", "OPTION_POINTS", "UNDERLYING_ATR", "UNDERLYING_SIGNAL_CANDLE"] = "OPTION_PERCENT"
     value: float = 15.0
+    signal_candle_buffer_points: float = Field(default=0.0, ge=0, le=10_000_000)
+    signal_candle_trigger: Literal["WICK", "CLOSE"] = "WICK"
+    signal_candle_execution_timeframe: Literal["strategy", "5m"] = "strategy"
 
 
 class TakeProfit(BaseModel):
@@ -866,6 +871,9 @@ class StrategyConfig(BaseModel):
         if self.options_force_exit_time is not None and not re.fullmatch(
                 r"(?:[01]\d|2[0-3]):[0-5]\d",self.options_force_exit_time):
             raise ValueError("options_force_exit_time must use 24h HH:MM")
+        if self.market_type == "OPTIONS" and self.risk.stop_loss.mode == "UNDERLYING_SIGNAL_CANDLE":
+            if self.pattern_trade.enabled or self.options_pullback.enabled:
+                raise ValueError("Generic signal-candle stop cannot be combined with a specialized option setup engine")
         if self.market_type == "OPTIONS" and self.options_pullback.enabled:
             cfg=self.options_pullback
             if self.timeframe!="5m":
