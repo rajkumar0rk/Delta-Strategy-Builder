@@ -75,3 +75,54 @@ def test_exclusive_position_skips_opposite_entry_decisions_while_open(tmp_path, 
     put_entries=[r for r in rows if r['kind']=='ENTRY' and r['direction']=='PUT']
     times={r['timestamp'] for r in put_entries}
     assert not any(t.startswith('2026-01-01T00:10:00') or t.startswith('2026-01-01T00:15:00') or t.startswith('2026-01-01T00:20:00') for t in times)
+
+
+def test_signal_candle_stop_direction_and_validation():
+    from app.engine import _signal_candle_stop_level, _signal_candle_stop_hit, Position
+    from app.models import StopLoss
+    import pytest
+    from pydantic import ValidationError
+    assert _signal_candle_stop_level('CALL','BUY',90,110,2)==88
+    assert _signal_candle_stop_level('PUT','SELL',90,110,2)==88
+    assert _signal_candle_stop_level('PUT','BUY',90,110,2)==112
+    assert _signal_candle_stop_level('CALL','SELL',90,110,2)==112
+    with pytest.raises(ValidationError):
+        StopLoss(mode='UNDERLYING_SIGNAL_CANDLE', signal_candle_buffer_points=-1)
+    assert StopLoss().mode=='OPTION_PERCENT'
+
+
+def test_signal_candle_stop_real_option_quote(tmp_path, monkeypatch):
+    import pandas as pd
+    _dataset(tmp_path,monkeypatch)
+    bars_path=tmp_path/'data'/'sample'/'underlying_bars.csv'
+    bars=pd.read_csv(bars_path)
+    bars.loc[2,'low']=99
+    bars.to_csv(bars_path,index=False)
+    s=StrategyConfig(name='Signal candle stop',direction_mode='CALL',
+        call_entry=RuleGroup(conditions=[Condition(id='c',left='close',operator='GT',value=100)]))
+    s.risk.stop_loss.mode='UNDERLYING_SIGNAL_CANDLE'
+    s.risk.stop_loss.signal_candle_execution_timeframe='5m'
+    s.risk.take_profit.mode='NONE'
+    s.risk.profit_protection.mode='NONE'
+    s.risk.max_hold_minutes=None
+    s.option.min_dte_days=0
+    s.option.max_dte_days=3
+    s.option.max_spread_percent=30
+    s.risk.quantity=1
+    result=run_backtest(BacktestRequest(dataset_id='sample',
+        start='2026-01-01T00:00:00Z',end='2026-01-01T00:35:00Z',strategy=s))
+    assert result['trades'], result.get('preflight')
+    first=result['trades'][0]
+    assert first['underlying_stop_level']==100
+    assert first['exit_reason']=='UNDERLYING_SIGNAL_CANDLE_STOP'
+    assert first['underlying_stop_trigger_time'].startswith('2026-01-01T00:10:00')
+    assert first['exit_time'].startswith('2026-01-01T00:10:00')
+
+
+def test_specialized_options_cannot_combine_generic_stop():
+    import pytest
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError,match='Generic signal-candle'):
+        StrategyConfig.model_validate({'market_type':'OPTIONS',
+            'risk':{'stop_loss':{'mode':'UNDERLYING_SIGNAL_CANDLE'}},
+            'pattern_trade':{'enabled':True}})
