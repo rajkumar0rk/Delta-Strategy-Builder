@@ -191,3 +191,22 @@ def test_strategy_timeframe_default_stays_legacy(tmp_path, monkeypatch):
     result=_run(tmp_path, monkeypatch, bars, strategy_timeframe="1h")
     assert result["futures_research"]["rule_risk_execution_timeframe"] == "1h"
     assert all(pd.Timestamp(t["exit_time"]).minute == 0 for t in result["trades"])
+
+
+def test_missing_5m_child_bars_fail_closed(tmp_path, monkeypatch):
+    from app.data_store import DataStore
+
+    original = DataStore.load_bars_many
+
+    def missing_one_five(self, parts, start, end, timeframe="5m", warmup_candles=0):
+        frame = original(self, parts, start, end, timeframe, warmup_candles)
+        if timeframe == "5m":
+            return frame.drop(pd.Timestamp("2026-01-01T01:20:00Z"), errors="ignore")
+        return frame
+
+    monkeypatch.setattr(DataStore, "load_bars_many", missing_one_five)
+    p = 100000
+    bars = [(p, p+20, p-20, p) for _ in range(72)]
+    with pytest.raises(ValueError, match="FUTURES_RULE_RISK_5M_GAP"):
+        _run(tmp_path, monkeypatch, bars, strategy_timeframe="1h",
+             risk_execution_timeframe="5m")
