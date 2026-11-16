@@ -1,5 +1,10 @@
 # Copy-paste prompt — BTCUSD Futures Strategy Lab JSON
 
+## Rule-risk compatibility: 15M strategy using confirmed 1H ATR (November 2026)
+
+A generic FUTURES rule tree with `timeframe="15m"` and `futures.rule_risk.stop_mode="ATR"` may retain `atr_indicator_id="atr14_1h"` when `indicators` contains a non-chart-only `ATR` with `id="atr14_1h"`, `params.period=14` and `timeframe="1h"`. ATR can run on the strategy timeframe or an exact-multiple higher timeframe. It is available only after the higher-timeframe candle closes, never from its incomplete bar. Entry-risk snapshots freeze the completed ATR; `execution_timeframe="5m"` preserves conservative protective checks. This expands validation only: it does not change the existing 1H ATR stop multiple or entry/exit rules. Missing, chart-only and wrong-kind indicators remain invalid; incompatible timeframes are rejected.
+
+
 ## Native 1H Supertrend flip + confirmed 4H EMA200 + ADX14 (November 2026)
 
 Importable futures research seed: `visualizer/backend/examples/btc-futures-1h-supertrend-4h-ema200-adx-atr.strategy.json`.

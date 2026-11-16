@@ -1,5 +1,10 @@
 # BTCUSD perpetual futures research — six merged implementation milestones
 
+## Higher-timeframe ATR in generic rule-risk stops (November 2026)
+
+An existing `timeframe="15m"` futures strategy can reference `futures.rule_risk.atr_indicator_id="atr14_1h"` if `atr14_1h` is a non-chart-only `ATR` indicator with `timeframe="1h"`. The strategy schema's general indicator-timeframe check already rejects lower/non-multiple timeframes; this compatibility change removes a redundant strategy-timeframe-only rule-risk restriction. ATR is sampled only from completed higher-timeframe bars, held constant until the next completed higher-timeframe candle; 5m protective execution continues to use the prior strategy snapshot. This is not 5m ATR and does not change ATR multipliers. Backtests still approximate historical stop fills with OHLC, not exchange ticks.
+
+
 ## Configurable completed higher-timeframe entry gate
 
 Generic futures rule trees support optional `strategy.entry_evaluation_timeframe`: default `"strategy"` (backward compatible) or an equal-or-higher exact multiple of base `strategy.timeframe` from `5m`, `10m`, `15m`, `30m`, `1h`, `4h`, `1D`. Dedicated futures pullback, AMRS and candle-pattern engines retain their own timing and reject this override.

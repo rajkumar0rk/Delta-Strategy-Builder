@@ -183,7 +183,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   <p>Enabling this mode selects FUTURES / SHORT-only / 5M, disables legacy percent exits, rule risk, pullback and adaptive. Configure Monday-Friday and the IST entry window in Futures risk and entry sessions. OHLC stop hits are research proxies, not guaranteed intrabar fills.</p>
  </section>
  <section className="card"><h2>Rule-tree futures dynamic risk</h2>
-  <p>Opt-in swing/signal/ATR stops for ordinary CALL=LONG and PUT=SHORT rules, including VWAP strategies. Signal extremes and ATR are frozen at candle close; entry fills at the next open. Size estimates include fees and adverse stop slippage.</p>
+  <p>Opt-in swing/signal/ATR stops for ordinary CALL=LONG and PUT=SHORT rules, including VWAP strategies. ATR may come from this strategy timeframe or a completed, exact-multiple higher timeframe (for example, 1H ATR on 15M). Signal extremes and ATR are frozen at candle close; entry fills at the next open. Size estimates include fees and adverse stop slippage.</p>
   <label className="switch"><input type="checkbox" checked={ruleRisk.enabled}
    onChange={e=>setRuleRisk({enabled:e.target.checked})}/>Enable dynamic stop, R target and risk sizing</label>
   {ruleRisk.enabled&&<div className="form-grid">

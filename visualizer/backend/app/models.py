@@ -982,9 +982,14 @@ class StrategyConfig(BaseModel):
                             or (rcfg.trailing_enabled and rcfg.trailing_mode == "ATR"))
             if requires_atr:
                 found = next((item for item in self.indicators if item.id == rcfg.atr_indicator_id), None)
-                if (found is None or found.kind != "ATR" or found.chart_only
-                        or found.timeframe not in ("strategy", self.timeframe)):
-                    raise ValueError("Futures rule_risk requires a non-chart-only strategy-timeframe ATR indicator with matching atr_indicator_id")
+                # Explicit higher timeframes are already checked above for an
+                # exact-multiple, closed-candle relationship to strategy.timeframe.
+                # The futures engine consumes the causally aligned ATR snapshot.
+                if found is None or found.kind != "ATR" or found.chart_only:
+                    raise ValueError(
+                        "Futures rule_risk requires a matching non-chart-only ATR "
+                        "indicator on the strategy or a completed higher timeframe"
+                    )
         if self.market_type != "FUTURES" and self.futures.adaptive.enabled:
             raise ValueError("AMRS only supports market_type FUTURES")
         if self.market_type == "FUTURES" and self.futures.adaptive.enabled:
