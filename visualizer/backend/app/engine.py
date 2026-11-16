@@ -201,10 +201,19 @@ def _select_option(store, parts, inst, ts, spot, direction, strategy, action: st
         if pd.Timestamp(q['timestamp']) >= pd.Timestamp(row.expiration):
             last = 'QUOTE_AT_OR_AFTER_EXPIRY'
             continue
+        if not _session_allowed(pd.Timestamp(q['timestamp']), strategy.session):
+            last = 'ENTRY_QUOTE_OUTSIDE_SESSION'
+            continue
         ok, why = _quote_ok(_effective_quote(q, strategy.execution), strategy.option, action)
         if not ok:
             last = why
             continue
+        caps = getattr(strategy.execution, 'safety_caps', None)
+        if caps is not None and caps.max_spread_percent is not None:
+            spread = _quote_stats(_effective_quote(q, strategy.execution))['spread_percent']
+            if spread is None or spread > caps.max_spread_percent:
+                last = 'SPREAD_TOO_WIDE'
+                continue
         return row.to_dict(), q, ''
     return None, None, last
 
@@ -300,6 +309,12 @@ def _quantity(strategy, spec, entry_price, entry_spot, balance, action: str = 'B
         return 0.0, cash_required, (
             'INSUFFICIENT_SELL_MARGIN_ESTIMATE' if margin_enabled else 'INSUFFICIENT_CASH'
         )
+    caps = getattr(strategy.execution, 'safety_caps', None)
+    if caps is not None:
+        if caps.per_trade_premium_usd is not None and premium_cost > caps.per_trade_premium_usd + 1e-9:
+            return 0.0, cash_required, 'PER_TRADE_PREMIUM_LIMIT'
+        if caps.account_budget_usd is not None and cash_required > caps.account_budget_usd + 1e-9:
+            return 0.0, cash_required, 'INSUFFICIENT_CASH'
     return qty, cash_required, None
 
 
@@ -327,7 +342,7 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
 
 def _backtest_cache_key(req: BacktestRequest, paths) -> str:
     payload = {
-        'engine_version': 179,  # observed account risk replay alongside hypothetical strategy backtests
+        'engine_version': 181,  # JSON safety caps, actual exit candle and pre-slippage stop triggers
         'warmup_candles': req.warmup_candles,
         'warmup_policy': req.warmup_policy,
         'bar_gap_policy': req.bar_gap_policy,
@@ -402,10 +417,14 @@ def _stop_reason(pos: Position, q: dict[str, Any], strategy) -> tuple[str | None
     pos.peak_return = max(pos.peak_return, ret)
     pos.worst_return = min(pos.worst_return, ret)
     sl = strategy.risk.stop_loss
-    if sl.mode == 'OPTION_PERCENT' and ret <= -abs(sl.value):
+    # A submitted market order's fill slippage cannot cause its own stop trigger.
+    # The decision uses executable BBO; adverse fill slippage remains in realized P&L.
+    trigger_price = float(_effective_quote(q, strategy.execution)['bid' if pos.action == 'BUY' else 'ask'])
+    trigger_return = _position_return_percent(pos, trigger_price)
+    if sl.mode == 'OPTION_PERCENT' and trigger_return <= -abs(sl.value):
         return 'STOP_LOSS', ret
     if sl.mode == 'OPTION_POINTS':
-        hit = exit_price <= pos.entry_price - abs(sl.value) if pos.action == 'BUY' else exit_price >= pos.entry_price + abs(sl.value)
+        hit = trigger_price <= pos.entry_price - abs(sl.value) if pos.action == 'BUY' else trigger_price >= pos.entry_price + abs(sl.value)
         if hit:
             return 'STOP_LOSS', ret
     tp = strategy.risk.take_profit
@@ -421,6 +440,10 @@ def _stop_reason(pos: Position, q: dict[str, Any], strategy) -> tuple[str | None
         if ret <= floor:
             return 'PROFIT_PROTECTION', ret
     return None, ret
+
+
+def _exit_blocks_candle(candle_time: pd.Timestamp, exit_time: pd.Timestamp | None, minutes: int) -> bool:
+    return exit_time is not None and candle_time <= exit_time.ceil(f'{minutes}min')
 
 
 def _flatten_decision(event_id: str, direction, ts, kind, tree, extra=None):
@@ -1076,6 +1099,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
     alert_events = alert_markers(frame, strategy, req.start, req.end)
     markers: list[dict[str, Any]] = list(alert_events)
     pos: Position | None = None
+    last_full_exit_time: pd.Timestamp | None = None
     pos_quotes = None
     q_cursor = 0
     quote_gap_count = 0
@@ -1239,7 +1263,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
 
     def close_position(exit_time: str, exit_price: float, reason: str, exit_rule: dict[str, Any] | None = None,
                        *, settlement: bool = False, index_twap: float | None = None, partial_qty: float | None = None):
-        nonlocal pos, balance, equity, peak_equity, max_dd, max_dd_percent, pos_quotes, q_cursor
+        nonlocal pos, balance, equity, peak_equity, max_dd, max_dd_percent, pos_quotes, q_cursor, last_full_exit_time
         assert pos
         if parse_time(exit_time) >= parse_time(str(pos.spec['expiration'])) and not settlement:
             raise ValueError('Cannot execute a quote-based option exit at or after contract expiry')
@@ -1380,6 +1404,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 pos.entry_fee_details[k]-=allocated_entry_fees[k]
             pos.pattern_remaining_target1=False
         else:
+            last_full_exit_time = pd.Timestamp(exit_time)
             pos = None
             pos_quotes = None
             q_cursor = 0
@@ -1402,7 +1427,8 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             pct = 35.0 + (i / max(1, len(frame))) * 50.0
             report(f'Evaluated {i:,}/{len(frame):,} candles…', pct, 'BACKTEST_LOOP', 'Finalize metrics and write result files')
 
-        closed_this_candle = False
+        closed_this_candle = _exit_blocks_candle(ts, last_full_exit_time,
+            {'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'4h':240,'1D':1440}[strategy.timeframe])
 
         if pos is not None and ts >= pd.Timestamp(pos.spec['expiration']):
             verified = settlement_for(settlements, pos.spec)
@@ -1906,6 +1932,21 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             )
             continue
 
+        # Advanced BUY sizing paths also obey explicit execution caps; they do
+        # not all use _quantity(). Caps never shrink the requested position.
+        caps = getattr(strategy.execution, 'safety_caps', None)
+        cap_reason = None
+        if caps is not None:
+            if caps.per_trade_premium_usd is not None and entry * qty * float(spec['contract_value']) > caps.per_trade_premium_usd + 1e-9:
+                cap_reason = 'PER_TRADE_PREMIUM_LIMIT'
+            elif caps.account_budget_usd is not None and cost > caps.account_budget_usd + 1e-9:
+                cap_reason = 'INSUFFICIENT_CASH'
+        if cap_reason:
+            tree = {'mode':'EXECUTION','passed':False,'passed_count':0,'total':1,'conditions':[],'groups':[]}
+            decisions.append(_flatten_decision(next_event('decision'),direction,ts,'EXECUTION',tree,{'reason':cap_reason}))
+            add_marker(ts.isoformat(),'reject',direction,cap_reason,_event_details('Rejected after signal',cap_reason,requested_cost_usd=cost))
+            continue
+
         edge_ok, edge_reason, edge_details = _fee_edge_check(strategy, spec, effective_entry_quote, float(row.close), entry, qty)
         if not edge_ok:
             decision_tree = {'mode': 'EXECUTION', 'passed': False, 'passed_count': 0, 'total': 1, 'conditions': [], 'groups': []}
@@ -2234,6 +2275,9 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             ),
         },
         'execution_assumptions': {
+            'safety_caps': strategy.execution.safety_caps.model_dump(mode='json') if strategy.execution.safety_caps else None,
+            'stop_trigger_uses_pre_slippage_bbo': True,
+            'closing_candle_uses_actual_exit_timestamp': True,
             'extra_half_spread_percent': strategy.execution.extra_half_spread_percent,
             'slippage_ticks': strategy.execution.slippage_ticks,
             'source': 'SYNTHETIC_BBO_ASSUMPTION',

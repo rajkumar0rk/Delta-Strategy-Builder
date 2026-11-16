@@ -74,3 +74,8 @@ Accepted futures orders consume independent lifecycle limits; pre-range candles 
 6. Internal rule/fill/fee/chart-marker parity audit (`futures_audit.py`).
 
 Merged code is still **RESEARCH_ONLY**. Real historical P&L requires running on an accessible archive. Importable strategies retain schema_version **15**, while backtest request settings are separate. See `FUTURES_BACKTEST.md` and `FUTURES_STRATEGY_JSON_PROMPT.md`.
+
+November 14 options parity source update: optional `execution.safety_caps`,
+actual-fill closing-candle blocking and pre-slippage BBO stop triggers use cache
+181. See [the behavior and verification note](../OPTIONS_DEMO_PARITY.md).
+This source update does not deploy Rust or imply observed broker fills.

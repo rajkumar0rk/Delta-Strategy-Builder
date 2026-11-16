@@ -653,6 +653,12 @@ V15.1 STATEFUL BIG-TREND FEATURES
 - Shared no_trade remains available, plus call_no_trade and put_no_trade for one-direction-only blocking.
 - Fee-aware minimum edge can compare an assumed favorable option-premium move against current bid/ask spread plus estimated Delta round-trip fees. It is an estimate, not a Greeks model.
 
+OPTIONS EXECUTION PARITY
+- Optional execution.safety_caps can carry max_spread_percent, per_trade_premium_usd and account_budget_usd. Omit or use null to keep an existing research strategy unchanged; do not invent cap values. Explicit caps restrict entries in both the lab and the compatible Rust Demo adapter. Broker cash/margin checks remain mandatory; a backtest cannot prove broker margin availability.
+- Option stop decisions use executable bid/ask before simulated fill slippage. Slippage still applies to the actual simulated exit and P&L.
+- A completed option close blocks re-entry through the candle containing its actual fill timestamp, including a fill seconds after the signal candle.
+- Quote/contract eligibility can fall back to another contract; a selected contract's quantity/cash/budget rejection ends that entry signal.
+
 V15.1 RESEARCH TOOLS
 - Identical backtests are cached by dataset fingerprint + selected range + full strategy JSON.
 - The UI can sweep one, two, or three numeric strategy/indicator/condition parameters, render 2D heatmaps (and 3D slices), score monthly consistency, and optionally run expanding walk-forward validation.

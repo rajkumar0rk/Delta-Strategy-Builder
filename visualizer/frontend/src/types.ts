@@ -6,6 +6,7 @@ export type BigTrendScoreComponent={condition_id:string;weight:number;scoring_mo
 export type BigTrendScoreConfig={enabled:boolean;threshold:number;mode:'GATE'|'SCORE_ONLY';components:BigTrendScoreComponent[];persistence_hits?:number;persistence_window?:number;require_current_threshold?:boolean};
 export type TrendPhaseConfig={enabled:boolean;compression_max_score:number;ignition_min_score:number;confirmation_min_score:number;big_trend_min_score:number;exhaustion_below_score:number};
 export type BreakoutRetestConfig={enabled:boolean;breakout_condition_id:string|null;breakout_level_operand:string|null;tolerance_mode:'POINTS'|'PERCENT'|'ATR';tolerance_value:number;atr_operand:string|null;max_retest_wait_bars:number;hold_bars:number;require_retest_for_entry:boolean;false_breakout_window_bars:number;false_breakout_buffer_points:number;block_false_breakout_until_rearm:boolean;max_trend_age_bars:number|null};
+export type ExecutionSafetyCaps={max_spread_percent?:number|null;per_trade_premium_usd?:number|null;account_budget_usd?:number|null};
 export type RuleGroup={mode:'ALL'|'ANY'|'AT_LEAST';min_pass:number;conditions:Condition[];groups:RuleGroup[]};
 export type EntryBehavior={id:string;name:string;enabled:boolean;trigger_condition_id:string|null;delay_bars:number;max_wait_bars:number|null;max_entries_per_activation:number|null;cooldown_bars:number};
 export type SessionWindow={start:string;end:string};

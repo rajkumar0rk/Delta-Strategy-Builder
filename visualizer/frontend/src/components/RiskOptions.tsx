@@ -62,6 +62,11 @@ export function RiskOptions({value,onChange}:{value:Strategy;onChange:(s:Strateg
  const updateWindow=(index:number,key:'start'|'end',value:string)=>setWindows(windows.map((w,i)=>i===index?{...w,[key]:value}:w));
  const moveWindow=(index:number,delta:number)=>{const target=index+delta;if(target<0||target>=windows.length)return;const next=[...windows];[next[index],next[target]]=[next[target],next[index]];setWindows(next)};
  return <>
+ <section className="card"><h2>Execution safety caps</h2>
+ <label className="switch"><input type="checkbox" checked={s.execution.safety_caps!=null} onChange={e=>onChange({...s,execution:{...s.execution,safety_caps:e.target.checked?{max_spread_percent:3,per_trade_premium_usd:10,account_budget_usd:100}:null}})}/><span>Use explicit strategy caps for backtest and Demo</span></label>
+ <p>These caps can restrict entries further. Demo also enforces broker cash, margin and server ceilings. Stop-loss and quantity remain in the strategy risk settings.</p>
+ {s.execution.safety_caps&&<div className="form-grid">{[['max_spread_percent','Maximum spread %'],['per_trade_premium_usd','Maximum entry premium $'],['account_budget_usd','Maximum cash per entry $']].map(([key,label])=><label key={key}>{label}<input type="number" min="0.000001" step="any" value={s.execution.safety_caps[key]??''} onChange={e=>onChange({...s,execution:{...s.execution,safety_caps:{...s.execution.safety_caps,[key]:e.target.value===''?null:Number(e.target.value)}}})}/></label>)}</div>}
+ </section>
  <section className="card"><h2>Direction & option action</h2><p>Choose which directional engine runs and whether each side buys or sells the selected option. Position policy remains exclusive: only one option position can be open at a time.</p><div className="form-grid">
   <label>Directions<select value={s.direction_mode} onChange={e=>onChange({...s,direction_mode:e.target.value as Strategy['direction_mode']})}><option value="BOTH">CALL + PUT</option><option value="CALL">CALL only</option><option value="PUT">PUT only</option></select></label>
   <label>CALL action<select value={s.call_action} disabled={s.direction_mode==='PUT'} onChange={e=>onChange({...s,call_action:e.target.value as 'BUY'|'SELL'})}><option>BUY</option><option>SELL</option></select></label>

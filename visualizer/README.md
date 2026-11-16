@@ -254,3 +254,8 @@ The present public contract snapshot and optional size-tier margin *assumptions*
 The futures engine remains `RESEARCH_ONLY`. It lacks historical exchange bid/ask fills, actual historical margin tiers and INR collateral conversion, true mark-price liquidation, and complete position-aware chart lifecycle parity.
 
 See `codex/FUTURES_BACKTEST.md`, `codex/FUTURES_STRATEGY_JSON_PROMPT.md`, and `examples/btcusd-futures-research.template.json`. Run backend `pytest` and frontend `npm run test -- --run` / `npm run build` after any behavior or schema change.
+
+Options execution parity: optional JSON safety caps, pre-slippage BBO stop
+decisions and actual-fill closing-candle protection are documented in
+[OPTIONS_DEMO_PARITY.md](OPTIONS_DEMO_PARITY.md). Options cache version is 181;
+existing saved reports remain intact.

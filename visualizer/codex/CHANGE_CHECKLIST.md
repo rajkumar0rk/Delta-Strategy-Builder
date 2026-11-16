@@ -42,3 +42,11 @@ Check zero-stress P&L preservation, adverse BUY/SELL cost, invalid-trade coverag
 ## Strategy alert integration verification
 
 When editing strategy alert rules, verify per-alert messages, independent same-candle triggers, ON_ENTER/EVERY_BAR, cooldown, warm-up, chart visibility, saved-result markers, and no effect on trades/P&L. Keep model/engine/preview/frontend/AI prompt/schema consumers aligned. Run backend tests and frontend build/tests.
+
+## Options execution parity
+
+For JSON caps or fill timing changes, check quantity/cash rejection, all entry
+sizing paths, stop decision versus actual fill slippage, final-fill candle
+blocking, JSON roundtrip, execution editor and cache identity. Current scoped
+coverage is `test_execution_parity_repairs.py` and `RiskOptions.test.tsx`; see
+[OPTIONS_DEMO_PARITY.md](../OPTIONS_DEMO_PARITY.md) for verification limits.

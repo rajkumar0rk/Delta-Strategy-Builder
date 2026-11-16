@@ -131,3 +131,9 @@ indicator calculations still materialize in memory, so this change alone
 is not a bounded-RSS or full stateful streaming indicator engine. Test
 accuracy and performance on your laptop's historical archive before
 choosing a production default.
+
+Options execution caps are typed in `models.py`, applied during quote selection,
+ordinary sizing and final advanced-entry checks in `engine.py`, and edited in
+`RiskOptions.tsx`. Stop decisions use executable BBO before fill slippage; final
+exit timestamps control closing-candle exclusion. See
+[OPTIONS_DEMO_PARITY.md](../OPTIONS_DEMO_PARITY.md); options cache is 181.

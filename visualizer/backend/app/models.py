@@ -210,7 +210,16 @@ class FeeEdgeFilterConfig(BaseModel):
     min_net_edge_usd: float = Field(default=0.0, ge=0)
 
 
+class ExecutionSafetyCaps(BaseModel):
+    """Optional, explicit strategy JSON caps shared with Demo execution."""
+    model_config = {"extra": "forbid"}
+    max_spread_percent: float | None = Field(default=None, gt=0, le=100, allow_inf_nan=False)
+    per_trade_premium_usd: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    account_budget_usd: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+
+
 class ExecutionConfig(BaseModel):
+    safety_caps: ExecutionSafetyCaps | None = None
     max_entry_quote_delay_seconds: int = Field(default=90, ge=0, le=3600)
     max_exit_quote_delay_seconds: int = Field(default=90, ge=0, le=3600)
     slippage_ticks: int = Field(default=0, ge=0, le=100)

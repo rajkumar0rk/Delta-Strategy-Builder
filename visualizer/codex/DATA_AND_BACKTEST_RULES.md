@@ -201,3 +201,11 @@ Options and futures support `strategy.timeframe=1D` and `IndicatorInstance.timef
 - `STRATEGY_LAB_MAX_RETAINED_JOBS` defaults to 200 (10..10000) and trims terminal in-memory job records at submission time; on queue overload `POST` job endpoints return HTTP 429 instead of a generic 500. Pinned disk results are unaffected.
 
 - `STRATEGY_LAB_MAX_BACKTEST_DAYS` defaults to 0 (unlimited); when set to a positive finite day count, both options and futures reject longer requested ranges with `BACKTEST_RANGE_LIMIT_EXCEEDED` **before any automatic download**. This is an admission guard, not a guarantee of RAM usage inside a permitted range; startup warm-up can extend the actual loaded data window.
+
+- Options stop triggers use executable BBO before simulated fill slippage;
+  realized fills/P&L still include slippage. Final exit fill time blocks entries
+  through its containing completed candle. Optional `execution.safety_caps`
+  restrict spread, premium notional and required entry cash without shrinking
+  quantity. Explicit matching caps are required for a comparison with Demo
+  server ceilings; broker margin and quote fidelity remain separate evidence.
+  See [OPTIONS_DEMO_PARITY.md](../OPTIONS_DEMO_PARITY.md), cache 181.

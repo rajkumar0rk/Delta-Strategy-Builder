@@ -30,6 +30,17 @@ def iso(d: datetime) -> str:
     return d.astimezone(UTC).isoformat().replace('+00:00', 'Z')
 
 
+def quote_window_bounds(start: datetime, end: datetime) -> tuple[str, str]:
+    """Index-friendly UTC second prefixes, followed by exact time filtering.
+
+    Fractions sort before the integral timestamp's Z suffix in old indexes.
+    A suffix-free lower bound includes them without rebuilding those indexes.
+    """
+    lower = start.astimezone(UTC).replace(microsecond=0)
+    upper = end.astimezone(UTC).replace(microsecond=0) + timedelta(seconds=1)
+    return lower.strftime('%Y-%m-%dT%H:%M:%S'), upper.strftime('%Y-%m-%dT%H:%M:%S')
+
+
 @dataclass(frozen=True)
 class DatasetPaths:
     id: str
@@ -717,11 +728,13 @@ class DataStore:
                 continue
             rows = self._query(
                 p,
-                'SELECT * FROM quotes WHERE symbol=? AND timestamp>=? AND timestamp<=? ORDER BY timestamp LIMIT 1',
-                (symbol, iso(start), iso(end)),
+                'SELECT * FROM quotes WHERE symbol=? AND timestamp>=? AND timestamp<? ORDER BY timestamp',
+                (symbol, *quote_window_bounds(start, end)),
             )
-            if rows and (best is None or str(rows[0]['timestamp']) < str(best['timestamp'])):
-                best = rows[0]
+            for row in rows:
+                stamp = parse_time(str(row['timestamp']))
+                if start <= stamp <= end and (best is None or stamp < parse_time(str(best['timestamp']))):
+                    best = row
         return best
 
     def quotes_between(self, p: DatasetPaths, symbol: str, start: str, end: str) -> pd.DataFrame:
@@ -741,13 +754,14 @@ class DataStore:
                 continue
             all_rows.extend(self._query(
                 p,
-                'SELECT * FROM quotes WHERE symbol=? AND timestamp>=? AND timestamp<=? ORDER BY timestamp',
-                (symbol, iso(s), iso(e)),
+                'SELECT * FROM quotes WHERE symbol=? AND timestamp>=? AND timestamp<? ORDER BY timestamp',
+                (symbol, *quote_window_bounds(s, e)),
             ))
+        all_rows = [row for row in all_rows if s <= parse_time(str(row['timestamp'])) <= e]
         if not all_rows:
             return pd.DataFrame(columns=['timestamp', 'symbol', 'bid', 'ask', 'bid_size', 'ask_size', 'volume', 'open_interest', 'source_event'])
         df = pd.DataFrame(all_rows)
-        df['timestamp'] = pd.to_datetime(df.timestamp, utc=True)
+        df['timestamp'] = pd.to_datetime([parse_time(str(value)) for value in df.timestamp], utc=True)
         return df.sort_values('timestamp').drop_duplicates(subset=['timestamp', 'symbol'], keep='last').reset_index(drop=True)
 
     def close(self) -> None:
