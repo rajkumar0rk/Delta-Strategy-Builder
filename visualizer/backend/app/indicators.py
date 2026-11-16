@@ -45,6 +45,17 @@ CATALOG: dict[str, IndicatorDefinition] = {
     "BOLLINGER": IndicatorDefinition("BOLLINGER", "Bollinger Bands", "Volatility", "overlay", ("middle","upper","lower"), {"period":{"type":"int","default":20,"min":2,"max":500},"stddev":{"type":"float","default":2.0,"min":0.1,"max":10.0}}, "SMA plus/minus standard deviations."),
     "VOLUME_SMA": IndicatorDefinition("VOLUME_SMA", "Volume SMA", "Volume", "pane", ("value",), {"period":{"type":"int","default":20,"min":1,"max":500}}, "Rolling mean of volume."),
     "VOLUME_RATIO": IndicatorDefinition("VOLUME_RATIO", "Volume Ratio", "Volume", "pane", ("value",), {"period":{"type":"int","default":20,"min":1,"max":500}}, "Current volume divided by prior rolling mean volume."),
+    "SUPERTREND": IndicatorDefinition(
+        "SUPERTREND", "Supertrend (Wilder ATR)", "Trend", "overlay",
+        ("line", "direction", "upper", "lower", "bullish_flip", "bearish_flip"),
+        {"atr_period":{"type":"int","default":10,"min":2,"max":200},
+         "multiplier":{"type":"float","default":3.0,"min":0.1,"max":20.0}},
+        "ATR-based recursive trailing bands. direction=+1 bullish / -1 bearish; "
+        "bullish_flip and bearish_flip are 1 only on completed flip candles. "
+        "First ATR-ready candle seeds bearish without emitting a flip. "
+        "Signals use only present/prior closed candles.",
+        ("line",),
+    ),
     "DONCHIAN": IndicatorDefinition("DONCHIAN", "Donchian Channel", "Breakout", "overlay", ("upper","lower","middle"), {"period":{"type":"int","default":20,"min":2,"max":500}}, "Prior N-bar highest high / lowest low channel."),
     "DAY_LEVELS": IndicatorDefinition(
         "DAY_LEVELS", "Previous-day levels & older swings", "Market structure", "overlay", DAY_OUTPUTS,
@@ -172,6 +183,55 @@ def _wilder_rma(values: pd.Series, period: int) -> pd.Series:
         prev = (prev * (period - 1) + float(arr[i])) / period
         out[i] = prev
     return pd.Series(out, index=values.index)
+
+
+def _supertrend(frame: pd.DataFrame, atr_period: int, multiplier: float) -> dict[str, pd.Series]:
+    """Causal Supertrend with Wilder ATR, recursively finalized upper/lower bands.
+
+    The first ATR-ready bar initializes a bearish state (no synthetic flip).
+    +1 is bullish, -1 bearish. Only completed candle prices are referenced.
+    """
+    if not 2 <= atr_period <= 200 or not math.isfinite(multiplier) or not 0.1 <= multiplier <= 20:
+        raise ValueError("Supertrend needs ATR period 2..200 and multiplier 0.1..20")
+    high = frame.high.to_numpy(dtype=float)
+    low = frame.low.to_numpy(dtype=float)
+    close = frame.close.to_numpy(dtype=float)
+    atr = _atr(frame, atr_period).to_numpy(dtype=float)
+    n = len(frame)
+    names = ("line", "direction", "upper", "lower", "bullish_flip", "bearish_flip")
+    outputs = {key: np.full(n, np.nan) for key in names}
+    previous_upper = previous_lower = previous_direction = None
+
+    for i in range(n):
+        if not all(math.isfinite(x) for x in (high[i], low[i], close[i], atr[i])):
+            previous_upper = previous_lower = previous_direction = None
+            continue
+        center = (high[i] + low[i]) / 2.0
+        upper = center + multiplier * atr[i]
+        lower = center - multiplier * atr[i]
+        if previous_direction is None:
+            direction = -1
+            bullish_flip = bearish_flip = 0.0
+        else:
+            # Clamp using the prior *completed* price and finalized bands.
+            if not (upper < previous_upper or close[i - 1] > previous_upper):
+                upper = previous_upper
+            if not (lower > previous_lower or close[i - 1] < previous_lower):
+                lower = previous_lower
+            if previous_direction < 0:
+                direction = 1 if close[i] > upper else -1
+            else:
+                direction = -1 if close[i] < lower else 1
+            bullish_flip = float(previous_direction < 0 and direction > 0)
+            bearish_flip = float(previous_direction > 0 and direction < 0)
+        outputs["upper"][i] = upper
+        outputs["lower"][i] = lower
+        outputs["direction"][i] = direction
+        outputs["line"][i] = lower if direction > 0 else upper
+        outputs["bullish_flip"][i] = bullish_flip
+        outputs["bearish_flip"][i] = bearish_flip
+        previous_upper, previous_lower, previous_direction = upper, lower, direction
+    return {key: pd.Series(values, index=frame.index) for key, values in outputs.items()}
 
 
 def _adx_dmi(frame: pd.DataFrame, period: int) -> tuple[pd.Series, pd.Series, pd.Series]:
@@ -487,6 +547,7 @@ def _instance_label(inst: IndicatorInstance, params: dict[str, Any]) -> str:
     if inst.kind == "DIVERGENCE": return f"Divergence · {params.get('oscillator')}"
     if inst.kind == "MARKET_STRUCTURE": return f"Market structure L{params.get('pivot_left')} R{params.get('pivot_right')}"
     if inst.kind == "SUPPORT_RESISTANCE": return f"Support / Resistance · {params.get('min_touches')} touches"
+    if inst.kind == "SUPERTREND": return f"Supertrend ATR {params.get('atr_period')} × {params.get('multiplier')}"
     if inst.kind == "ADX_DMI": return f"ADX/DMI {params.get('period')}"
     if inst.kind == "CANDLE_STRENGTH": return f"Candle strength · ATR {params.get('atr_period')}"
     if inst.kind == "ATR_EXPANSION": return f"ATR expansion {params.get('atr_period')}/{params.get('sma_period')}"
@@ -551,6 +612,7 @@ def compute_indicators(frame: pd.DataFrame, instances: list[IndicatorInstance], 
             outputs["value"]=pv/total
         elif inst.kind=="RSI": outputs["value"]=_rsi(calc.close,int(p['period']))
         elif inst.kind=="ATR": outputs["value"]=_atr(calc,int(p['period']))
+        elif inst.kind=="SUPERTREND": outputs=_supertrend(calc,int(p["atr_period"]),float(p["multiplier"]))
         elif inst.kind=="ADX_DMI":
             adx,plus,minus=_adx_dmi(calc,int(p['period'])); outputs={"adx":adx,"plus_di":plus,"minus_di":minus}
         elif inst.kind=="CANDLE_STRENGTH": outputs=_candle_strength(calc,int(p['atr_period']))

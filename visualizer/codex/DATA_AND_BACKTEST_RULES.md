@@ -1,5 +1,7 @@
 # Data and backtest correctness rules
 
+Native SUPERTREND uses Wilder ATR and causal recursive finalized bands; the output `direction` is +1 bullish / -1 bearish, and `bullish_flip` / `bearish_flip` are single-bar signals after the completed candle. The initial ATR-ready bar is seeded bearish without a flip. All HTF Supertrend outputs are available only from fully completed UTC-anchored candles; risk execution on 5m remains conservative OHLC approximation. See `backend/examples/btc-futures-1h-supertrend-4h-ema200-adx-atr.strategy.json`.
+
 ## Daily EMA200 / 4h Donchian futures data accuracy (November 2026)
 
 The `BTCUSD Futures | 1D EMA200 + 4H Donchian55/20 + ATR 2.5/3 (5M Execution)` seed lives in `visualizer/backend/examples/btc-futures-1d-ema200-4h-donchian55-20-atr-trail.strategy.json`. It needs a 200-completed-day Daily EMA200 warmup plus the complete 4h and child 5m candles. The last confirmed 1D EMA1 is used as the Daily close proxy, not the still-forming day. Donchian channels are prior N bars by construction, no extra lookback offset. Signals are decided at completed 4h candle closes; normal exits and entries use next 4h OPEN proxies.
