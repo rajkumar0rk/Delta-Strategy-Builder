@@ -19,6 +19,7 @@ from .rules import evaluate_group, evaluate_condition, find_condition
 from .config import result_root, cache_root
 from .storage import write_json_gz, write_csv_gz, load_result, maybe_auto_cleanup
 from .archive_sync import ensure_archive_data
+from .option_chain import load_strike_reference
 from .shared_execution import (
     PendingUnderlyingStop, CompletedHourlyTrendGate, clock_due,
     remaining_daily_risk, stop_trigger_price,
@@ -113,12 +114,14 @@ def _direction_type(direction: str) -> str:
     return 'CE' if direction == 'CALL' else 'PE'
 
 
-def _select_candidates(inst: pd.DataFrame, ts: pd.Timestamp, spot: float, direction: str, cfg) -> pd.DataFrame:
-    """Lock the selected strike, then try eligible expiries in chronological order.
+def _select_candidates(inst: pd.DataFrame, ts: pd.Timestamp, spot: float, direction: str, cfg,
+                       strike_reference: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Choose one strike before evaluating historical contract/quote eligibility.
 
-    Calculate the strike just once from the union of *currently active, DTE-eligible*
-    contract strikes. A missing quote or missing contract at one expiry must not
-    cause a different strike to be selected at that expiry or any later expiry.
+    Full product listings (when cached) can include contracts with no candle
+    history. Missing execution data must never redefine the desired ATM strike.
+    A sparse archive also gets a conservative grid-gap check: a distant
+    closest strike is not a valid ATM substitute.
     """
     x = inst[(inst.activation <= ts) & (inst.expiration > ts) & (inst.option_type == _direction_type(direction))].copy()
     if x.empty:
@@ -128,10 +131,19 @@ def _select_candidates(inst: pd.DataFrame, ts: pd.Timestamp, spot: float, direct
     if x.empty:
         return x
 
-    # Include later eligible expiries when establishing the target strike; the
-    # nearest expiry may have incomplete contract history for that same strike.
-    strikes = sorted(x.strike.unique())
-    atm_i = min(range(len(strikes)), key=lambda i: abs(strikes[i] - spot))
+    reference = strike_reference if strike_reference is not None else inst
+    ref = reference[
+        (reference.activation <= ts) & (reference.expiration > ts) &
+        (reference.option_type == _direction_type(direction))
+    ]
+    ref = ref[
+        ((ref.expiration - ts).dt.total_seconds() / 86400.0 >= cfg.min_dte_days) &
+        ((ref.expiration - ts).dt.total_seconds() / 86400.0 <= cfg.max_dte_days)
+    ]
+    strikes = sorted(ref.strike.dropna().unique())
+    if not strikes:
+        return x.iloc[0:0].copy()
+    atm_i = min(range(len(strikes)), key=lambda i: (abs(strikes[i] - spot), strikes[i]))
     if cfg.strike_mode == 'ATM':
         target_i = atm_i
     else:
@@ -139,9 +151,23 @@ def _select_candidates(inst: pd.DataFrame, ts: pd.Timestamp, spot: float, direct
         target_i = max(0, min(len(strikes) - 1, atm_i + sign * cfg.strike_steps))
     target_strike = strikes[target_i]
 
-    # A failed quote/eligibility check may fall back only to the SAME strike on
-    # another expiry. Never substitute the nearest different strike.
-    out = x[x.strike == target_strike].copy()
+    # Detect a missing ATM grid strike rather than silently trading a far OTM
+    # archived contract. Derive spacing from observed positive increments; no
+    # price, synthetic contract or quote is created by this calculation.
+    if cfg.strike_mode == 'ATM' and len(strikes) >= 2:
+        gaps = [float(high - low) for low, high in zip(strikes, strikes[1:])
+                if high > low]
+        spacing = min(gaps) if gaps else 0.0
+        if spacing > 0 and abs(float(target_strike) - spot) > spacing / 2 + 1e-7:
+            anchor = float(strikes[0])
+            lower_n = math.floor((spot - anchor) / spacing)
+            nearest_grid = min((anchor + lower_n * spacing, anchor + (lower_n + 1) * spacing),
+                               key=lambda value: (abs(value - spot), value))
+            # A theoretical grid target does not authorize using another strike
+            # or generating a contract. No matching historical contract = skip.
+            target_strike = nearest_grid
+
+    out = x[np.isclose(x.strike.astype(float), float(target_strike), rtol=0, atol=1e-7)].copy()
     out['strike_distance'] = 0.0
     out['expiry_rank'] = (out.expiration - ts).dt.total_seconds()
     return out.sort_values(['expiry_rank', 'strike', 'symbol'])
@@ -198,9 +224,10 @@ def _quote_ok(q, cfg, action: str = 'BUY') -> tuple[bool, str]:
     return True, ''
 
 
-def _select_option(store, parts, inst, ts, spot, direction, strategy, action: str = 'BUY') -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
-    candidates = _select_candidates(inst, ts, spot, direction, strategy.option)
-    last = 'NO_OPTION_CANDIDATE'
+def _select_option(store, parts, inst, ts, spot, direction, strategy, action: str = 'BUY',
+                   strike_reference: pd.DataFrame | None = None) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
+    candidates = _select_candidates(inst, ts, spot, direction, strategy.option, strike_reference)
+    last = 'TARGET_STRIKE_NOT_IN_ARCHIVE' if candidates.empty else 'NO_OPTION_CANDIDATE'
     for _, row in candidates.head(30).iterrows():
         q = store.first_quote_many(parts, str(row.symbol), ts.isoformat(), strategy.execution.max_entry_quote_delay_seconds)
         if not q:
@@ -344,13 +371,19 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
                 if candidate.is_file():
                     stat = candidate.stat()
                     entry[str(candidate.resolve())] = {'size': stat.st_size, 'mtime_ns': stat.st_mtime_ns}
+        product_dir = item.root / 'raw' / 'products'
+        if product_dir.is_dir():
+            entry['product_reference_files'] = [
+                (p.name, p.stat().st_size, p.stat().st_mtime_ns)
+                for p in sorted(product_dir.glob('BTC-*.json')) if p.is_file()
+            ]
         out[str(getattr(item, 'id', len(out)))] = entry
     return out
 
 
 def _backtest_cache_key(req: BacktestRequest, paths) -> str:
     payload = {
-        'engine_version': 182,  # strike-first option selection; never change strike on expiry/quote fallback
+        'engine_version': 183,  # prefer full product strike reference and reject sparse ATM substitutions
         'warmup_candles': req.warmup_candles,
         'warmup_policy': req.warmup_policy,
         'bar_gap_policy': req.bar_gap_policy,
@@ -1044,6 +1077,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         )
     report('Loading and de-duplicating option instruments…', 18, 'LOAD_INSTRUMENTS', 'Calculate indicators')
     inst = store.load_instruments_many(parts) if needs_options else pd.DataFrame()
+    strike_reference = load_strike_reference(parts, inst)[0] if needs_options else inst
     settlements = load_option_settlements(parts) if needs_options else {}
     margin_audit = (load_margin_audit(parts)
         if needs_options and req.strategy.risk.sell_margin.audit_against_account_snapshots else {})
@@ -1867,7 +1901,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             option_order_events['triggered']+=1
 
         action = strategy.call_action if direction == 'CALL' else strategy.put_action
-        spec, q, why = _select_option(store, parts, inst, ts, float(row.close), direction, strategy, action)
+        spec, q, why = _select_option(store, parts, inst, ts, float(row.close), direction, strategy, action, strike_reference)
         if options_setup and q and (
                 not _session_allowed(pd.Timestamp(q['timestamp']),strategy.session)
                 or clock_due(pd.Timestamp(q['timestamp']),
