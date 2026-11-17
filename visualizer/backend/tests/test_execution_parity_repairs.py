@@ -68,7 +68,7 @@ def test_selection_checks_json_spread_cap_and_each_quotes_session():
     at = pd.Timestamp('2026-11-14T06:55:00Z')
     inst = pd.DataFrame([
         dict(symbol='first', strike=60000, option_type='CE', activation=at-pd.Timedelta(days=1), expiration=at+pd.Timedelta(days=2)),
-        dict(symbol='second', strike=60200, option_type='CE', activation=at-pd.Timedelta(days=1), expiration=at+pd.Timedelta(days=2)),
+        dict(symbol='second', strike=60000, option_type='CE', activation=at-pd.Timedelta(days=1), expiration=at+pd.Timedelta(days=3)),
     ])
     class Store:
         def first_quote_many(self, parts, symbol, start, delay):
