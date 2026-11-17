@@ -16,7 +16,7 @@ import pandas as pd
 COLUMNS = ("strike", "option_type", "activation", "expiration")
 
 
-def load_strike_reference(parts: list, normalized: pd.DataFrame) -> pd.DataFrame:
+def load_strike_reference(parts: list, normalized: pd.DataFrame) -> tuple[pd.DataFrame, bool]:
     """Combine normalized history with Delta cached *full* product listings.
 
     Raw product listings are metadata-only. This function does not fabricate
@@ -58,10 +58,10 @@ def load_strike_reference(parts: list, normalized: pd.DataFrame) -> pd.DataFrame
                 rows.append(dict(strike=strike, option_type=kind, activation=activation, expiration=expiration))
 
     if not rows:
-        return normalized
+        return normalized, False
 
     reference = pd.concat(
         [normalized.loc[:, list(COLUMNS)], pd.DataFrame(rows, columns=COLUMNS)],
         ignore_index=True,
     )
-    return reference.drop_duplicates(subset=list(COLUMNS), keep="first")
+    return reference.drop_duplicates(subset=list(COLUMNS), keep="first"), True
