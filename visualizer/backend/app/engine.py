@@ -114,6 +114,12 @@ def _direction_type(direction: str) -> str:
 
 
 def _select_candidates(inst: pd.DataFrame, ts: pd.Timestamp, spot: float, direction: str, cfg) -> pd.DataFrame:
+    """Lock the selected strike, then try eligible expiries in chronological order.
+
+    Calculate the strike just once from the union of *currently active, DTE-eligible*
+    contract strikes. A missing quote or missing contract at one expiry must not
+    cause a different strike to be selected at that expiry or any later expiry.
+    """
     x = inst[(inst.activation <= ts) & (inst.expiration > ts) & (inst.option_type == _direction_type(direction))].copy()
     if x.empty:
         return x
@@ -121,22 +127,24 @@ def _select_candidates(inst: pd.DataFrame, ts: pd.Timestamp, spot: float, direct
     x = x[(x.dte >= cfg.min_dte_days) & (x.dte <= cfg.max_dte_days)]
     if x.empty:
         return x
-    ranked = []
-    for _, g in x.groupby('expiration'):
-        strikes = sorted(g.strike.unique())
-        atm_i = min(range(len(strikes)), key=lambda i: abs(strikes[i] - spot))
-        if cfg.strike_mode == 'ATM':
-            target_i = atm_i
-        else:
-            sign = (-1 if direction == 'CALL' else 1) if cfg.strike_mode == 'ITM' else (1 if direction == 'CALL' else -1)
-            target_i = max(0, min(len(strikes) - 1, atm_i + sign * cfg.strike_steps))
-        target = strikes[target_i]
-        gg = g.copy()
-        gg['strike_distance'] = abs(gg.strike - target)
-        ranked.append(gg)
-    out = pd.concat(ranked)
+
+    # Include later eligible expiries when establishing the target strike; the
+    # nearest expiry may have incomplete contract history for that same strike.
+    strikes = sorted(x.strike.unique())
+    atm_i = min(range(len(strikes)), key=lambda i: abs(strikes[i] - spot))
+    if cfg.strike_mode == 'ATM':
+        target_i = atm_i
+    else:
+        sign = (-1 if direction == 'CALL' else 1) if cfg.strike_mode == 'ITM' else (1 if direction == 'CALL' else -1)
+        target_i = max(0, min(len(strikes) - 1, atm_i + sign * cfg.strike_steps))
+    target_strike = strikes[target_i]
+
+    # A failed quote/eligibility check may fall back only to the SAME strike on
+    # another expiry. Never substitute the nearest different strike.
+    out = x[x.strike == target_strike].copy()
+    out['strike_distance'] = 0.0
     out['expiry_rank'] = (out.expiration - ts).dt.total_seconds()
-    return out.sort_values(['expiry_rank', 'strike_distance', 'strike'])
+    return out.sort_values(['expiry_rank', 'strike', 'symbol'])
 
 
 def _quote_stats(q: dict[str, Any]) -> dict[str, float | None]:
@@ -342,7 +350,7 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
 
 def _backtest_cache_key(req: BacktestRequest, paths) -> str:
     payload = {
-        'engine_version': 181,  # JSON safety caps, actual exit candle and pre-slippage stop triggers
+        'engine_version': 182,  # strike-first option selection; never change strike on expiry/quote fallback
         'warmup_candles': req.warmup_candles,
         'warmup_policy': req.warmup_policy,
         'bar_gap_policy': req.bar_gap_policy,
