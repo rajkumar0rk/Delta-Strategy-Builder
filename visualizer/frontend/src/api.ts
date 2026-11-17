@@ -6,7 +6,7 @@ export const api={
  archivePlan:(body:any)=>fetch('/api/archive/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>json<ArchiveSyncPlan>(r)),
  archiveSync:(body:any)=>fetch('/api/archive/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>json<{job_id:string}>(r)),
  indicators:()=>fetch('/api/indicators').then(r=>json<IndicatorDefinition[]>(r)),
- preview:(body:any)=>fetch('/api/chart/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>json<ChartPayload>(r)),
+ preview:(body:any,signal?:AbortSignal)=>fetch('/api/chart/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal}).then(r=>json<ChartPayload>(r)),
  start:(body:any)=>fetch('/api/backtests',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>json<{job_id:string}>(r)),
  job:(id:string)=>fetch(`/api/backtests/${id}`).then(r=>json<JobState>(r)),
  stop:(id:string)=>fetch(`/api/backtests/${id}/cancel`,{method:'POST'}).then(r=>json<JobState>(r)),
