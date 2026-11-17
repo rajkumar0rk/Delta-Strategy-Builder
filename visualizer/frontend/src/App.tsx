@@ -52,6 +52,7 @@ export default function App(){
  const importRef=useRef<HTMLInputElement>(null);
  const chartRequests=useRef(new LatestRequest());
  const busyRef=useRef(false);
+ const skipCompletedStrategyPreview=useRef<Strategy|null>(null);
  const [chartLoading,setChartLoading]=useState(false);
  const [chartError,setChartError]=useState('');
  useEffect(()=>()=>chartRequests.current.cancel(),[]);
@@ -90,7 +91,7 @@ export default function App(){
   }catch(error){if(!quiet)setChartError(String(error))}
  };
  const previewSignature=useMemo(()=>JSON.stringify({market_type:strategy.market_type,futures:strategy.futures,timeframe:strategy.timeframe,entry_evaluation_timeframe:strategy.entry_evaluation_timeframe,direction_mode:strategy.direction_mode,indicators:strategy.indicators,call_entry:strategy.call_entry,put_entry:strategy.put_entry,no_trade:strategy.no_trade,call_no_trade:strategy.call_no_trade,put_no_trade:strategy.put_no_trade,alerts:strategy.alerts,call_signal_mode:strategy.call_signal_mode,put_signal_mode:strategy.put_signal_mode,call_exit_signal_mode:strategy.call_exit_signal_mode,put_exit_signal_mode:strategy.put_exit_signal_mode,call_exit_alert_message:strategy.call_exit_alert_message,put_exit_alert_message:strategy.put_exit_alert_message,call_action:strategy.call_action,put_action:strategy.put_action,call_alert_message:strategy.call_alert_message,put_alert_message:strategy.put_alert_message,call_entry_lifecycles:strategy.call_entry_lifecycles,put_entry_lifecycles:strategy.put_entry_lifecycles,call_big_trend_score:strategy.call_big_trend_score,put_big_trend_score:strategy.put_big_trend_score,call_trend_phase:strategy.call_trend_phase,put_trend_phase:strategy.put_trend_phase,call_breakout_retest:strategy.call_breakout_retest,put_breakout_retest:strategy.put_breakout_retest}),[strategy]);
- useEffect(()=>{if(!start||!end||busyRef.current)return;const timer=window.setTimeout(()=>{if(!busyRef.current)preview(result?.markers||[],true)},350);return()=>window.clearTimeout(timer)},[previewSignature,datasetMode,datasetId,JSON.stringify(datasetIds),start,end]);
+ useEffect(()=>{if(!start||!end||busyRef.current)return;if(skipCompletedStrategyPreview.current===strategy){skipCompletedStrategyPreview.current=null;return}const timer=window.setTimeout(()=>{if(!busyRef.current)preview(result?.markers||[],true)},350);return()=>window.clearTimeout(timer)},[previewSignature,datasetMode,datasetId,JSON.stringify(datasetIds),start,end]);
 
  const refreshArchiveData=async()=>{const [d,a]=await Promise.all([api.datasets(),api.archive()]);setDatasets(d);setArchive(a)};
  const repairArchive=async()=>{if(datasetMode!=='ARCHIVE')return;setBusy(true);setJob(null);setArchivePlan(null);try{const {s,e}=rangeIso();const plan=await api.archivePlan({start:s,end:e,market_type:strategy.market_type||'OPTIONS'});setArchivePlan(plan);if(plan.ready)setStatus('Catalog complete; checking physical 5m candle timestamps…');if(plan.missing_segment_files.some(x=>x.missing.some(name=>name!=='underlying_bars.csv'))){throw new Error(`Existing archive segment files are missing: ${plan.missing_segment_files.map(x=>`${x.name}: ${x.missing.join(', ')}`).join('; ')}. Automatic append will not overwrite an existing migrated segment.`)}setStatus('Checking BTC candle cache and repairing only missing intervals…');const {job_id}=await api.archiveSync({start:s,end:e,market_type:strategy.market_type||'OPTIONS'});setActiveJobId(job_id);let done:JobState;for(;;){await new Promise(r=>setTimeout(r,500));done=await api.job(job_id);setJob(done);setStatus(done.message||done.status);if(['COMPLETE','FAILED','CANCELLED'].includes(done.status))break}if(done.status==='FAILED')throw new Error(done.error||done.message);if(done.status==='CANCELLED'){setStatus('Archive download stopped. Cached raw responses remain reusable.');return}await refreshArchiveData();const after=await api.archivePlan({start:s,end:e,market_type:strategy.market_type||'OPTIONS'});setArchivePlan(after);setStatus(after.ready?'✓ BTC candle cache checked; missing data repaired if needed.':'Archive sync finished, but the selected range still needs attention.')}catch(e){setStatus(`Archive repair failed: ${String(e)}`)}finally{setBusy(false);setActiveJobId(null)}};
@@ -115,6 +116,7 @@ export default function App(){
    if(done.status==='CANCELLED'){setStatus('Backtest stopped. Previous completed result is still available.');return;}
    if(done.status==='FAILED'||!done.result)throw new Error(done.error||done.message);
    const completed=done.result;
+   skipCompletedStrategyPreview.current=completed.strategy;
    setPreflight(completed.preflight||null);setResult(completed);setStrategy(completed.strategy);
    setStatus(`${completed.cache_hit?'⚡ Cache hit':'Backtest complete'}: ${completed.metrics.trades} trades · net $${Number(completed.metrics.net_pnl_usd||0).toFixed(2)} after fees + GST.`);
    // Chart preview is independent post-processing. Unlock Run immediately.
