@@ -647,8 +647,14 @@ def run_futures_backtest(req, progress=None):
                 if hit or worst_breach:
                     if hit:
                         if worst_breach:margin_stop_ambiguous+=1
-                        if position.get('stop_price') is not None and position.get('target_price') is not None:
-                            stop=position['stop_price'];target=position['target_price']
+                        regular_stop=position.get('stop_price')
+                        capital_stop=position.get('capital_stop_price')
+                        stop=(max(regular_stop,capital_stop) if position['direction']=='LONG'
+                              else min(regular_stop,capital_stop)) if (
+                                  regular_stop is not None and capital_stop is not None
+                              ) else (regular_stop if capital_stop is None else capital_stop)
+                        target=position.get('target_price')
+                        if stop is not None and target is not None:
                             if float(child.low)<=min(stop,target) and float(child.high)>=max(stop,target):
                                 ambiguous+=1
                         exit_reason=('TRAILING_STOP' if hit[0]=='STOP_LOSS' and position.get('trailing_active')
@@ -691,10 +697,19 @@ def run_futures_backtest(req, progress=None):
                 elif hit or worst_breach:
                     if hit:
                         if worst_breach:margin_stop_ambiguous+=1
-                        if ((position.get('stop_price') is not None and position.get('target_price') is not None) or (cfg.stop_loss_percent and cfg.take_profit_percent)):
-                            stop=position.get('stop_price') or position['entry_price']*(1-cfg.stop_loss_percent/100*sign)
-                            target=position.get('target_price') or position['entry_price']*(1+cfg.take_profit_percent/100*sign)
-                            if (float(row.low)<=min(stop,target) and float(row.high)>=max(stop,target)):
+                        regular_stop=position.get('stop_price')
+                        if regular_stop is None and cfg.stop_loss_percent is not None:
+                            regular_stop=position['entry_price']*(1-cfg.stop_loss_percent/100*sign)
+                        capital_stop=position.get('capital_stop_price')
+                        stop=(max(regular_stop,capital_stop) if sign==1
+                              else min(regular_stop,capital_stop)) if (
+                                  regular_stop is not None and capital_stop is not None
+                              ) else (regular_stop if capital_stop is None else capital_stop)
+                        target=position.get('target_price')
+                        if target is None and cfg.take_profit_percent is not None:
+                            target=position['entry_price']*(1+cfg.take_profit_percent/100*sign)
+                        if stop is not None and target is not None:
+                            if float(row.low)<=min(stop,target) and float(row.high)>=max(stop,target):
                                 ambiguous+=1
                         exit_reason=('PATTERN_TRAILING_STOP' if hit[0]=='STOP_LOSS' and position.get('pattern_profit_active')
                                      else 'TRAILING_STOP' if hit[0]=='STOP_LOSS' and position.get('trailing_active')
