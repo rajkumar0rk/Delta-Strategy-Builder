@@ -1067,6 +1067,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
 
     def close_position(exit_time: str, exit_price: float, reason: str, exit_rule: dict[str, Any] | None = None):
         nonlocal pos, balance, equity, peak_equity, max_dd, max_dd_percent, pos_quotes, q_cursor
+        nonlocal mtm_peak_equity, max_mtm_dd, max_mtm_dd_percent
         assert pos
         cv = float(pos.spec['contract_value'])
         exit_spot = spot_at(exit_time)
@@ -1076,7 +1077,6 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         net = gross - pos.entry_fee - exit_fee
         balance += net
         equity = balance
-        nonlocal mtm_peak_equity, max_mtm_dd, max_mtm_dd_percent
         mtm_peak_equity = max(mtm_peak_equity, balance)
         peak_equity = max(peak_equity, equity)
         current_dd = peak_equity - equity
@@ -1540,7 +1540,8 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             'reason': 'STOP_NO_EXECUTABLE_QUOTE',
         }
         add_marker(pos.underlying_stop_trigger_time, 'reject', pos.direction, 'STOP_NO_EXECUTABLE_QUOTE',
-            _event_details('Unresolved underlying stop', 'STOP_NO_EXECUTABLE_QUOTE', **unresolved_exposure))
+            _event_details('Unresolved underlying stop', 'STOP_NO_EXECUTABLE_QUOTE',
+                           **{k: v for k, v in unresolved_exposure.items() if k != 'reason'}))
     if pos is not None and pos_quotes is not None and len(pos_quotes) and not pos.underlying_stop_trigger_time:
         last = pos_quotes.iloc[-1]
         last_at = pd.Timestamp(last.timestamp)
@@ -1558,7 +1559,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         }
         add_marker(pos.entry_time, 'reject', pos.direction, 'END_OF_DATA_UNCLOSED',
                    _event_details('Unclosed option position', 'END_OF_DATA_UNCLOSED',
-                                  **unresolved_exposure))
+                                  **{k: v for k, v in unresolved_exposure.items() if k != 'reason'}))
 
     wins = sum(t['net_pnl_usd'] > 0 for t in trades)
     losses = sum(t['net_pnl_usd'] < 0 for t in trades)
