@@ -1531,70 +1531,84 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             )
         )
 
-    # The last strategy candle may close before the requested backtest end.
-    # Resolve pending stops only from real subsequent quotes inside the range.
-    if pos is not None and pos_quotes is not None and pos.underlying_stop_trigger_time:
-        pending_at = pd.Timestamp(parse_time(pos.underlying_stop_trigger_time))
-        while q_cursor < len(pos_quotes):
-            q = pos_quotes.iloc[q_cursor].to_dict()
-            q_cursor += 1
-            quote_at = pd.Timestamp(q['timestamp'])
-            if quote_at > pd.Timestamp(end_dt):
-                break
-            if quote_at >= pending_at:
-                close_position(quote_at.isoformat(), _executable_exit_price(pos, q, strategy), 'UNDERLYING_SIGNAL_CANDLE_STOP')
-                break
+    # Stop monitoring and option quotes continue up to the replay cutoff, even
+    # if the final 5m bar does not form a complete strategy-timeframe candle.
+    # Only completed monitoring candles may trigger an underlying stop.
+    tail_stop_at = (
+        pd.Timestamp(parse_time(pos.underlying_stop_trigger_time))
+        if pos is not None and pos.underlying_stop_trigger_time else None
+    )
+    if pos is not None and signal_stop_active and tail_stop_at is None:
+        entry_at = pd.Timestamp(parse_time(pos.entry_time))
+        monitor_minutes = (
+            5 if signal_stop.signal_candle_execution_timeframe == '5m'
+            else {'5m': 5, '10m': 10, '15m': 15, '30m': 30, '1h': 60}[strategy.timeframe]
+        )
+        while stop_cursor < len(stop_times) and stop_times[stop_cursor] < pd.Timestamp(end_dt):
+            at = stop_times[stop_cursor]
+            if at > entry_at:
+                fully_post_entry = at - pd.Timedelta(minutes=monitor_minutes) >= entry_at
+                candle = SimpleNamespace(
+                    low=stop_lows[stop_cursor], high=stop_highs[stop_cursor],
+                    close=stop_closes[stop_cursor],
+                )
+                if (signal_stop.signal_candle_trigger == 'CLOSE' or fully_post_entry) and _signal_stop_hit(
+                    pos, candle, signal_stop.signal_candle_trigger
+                ):
+                    tail_stop_at = at
+                    break
+            stop_cursor += 1
 
-    unresolved_exposure = None
-    if pos is not None and pos.underlying_stop_trigger_time:
-        unresolved_exposure = {
-            'symbol': pos.symbol,
-            'direction': pos.direction,
-            'action': pos.action,
-            'entry_time': pos.entry_time,
-            'underlying_stop_level': pos.underlying_stop_level,
-            'stop_trigger_time': pos.underlying_stop_trigger_time,
-            'reason': 'STOP_NO_EXECUTABLE_QUOTE',
-        }
-        add_marker(pos.underlying_stop_trigger_time, 'reject', pos.direction, 'STOP_NO_EXECUTABLE_QUOTE',
-            _event_details('Unresolved underlying stop', 'STOP_NO_EXECUTABLE_QUOTE',
-                           **{k: v for k, v in unresolved_exposure.items() if k != 'reason'}))
-    # Option-price stops remain active up to the requested end, including
-    # quotes after the final completed strategy candle. Those quotes may not
-    # create a new signal, but can close an already-open position.
-    if pos is not None and pos_quotes is not None and not pos.underlying_stop_trigger_time:
+    # Merge post-candle quote-driven premium stops and the completed underlying
+    # trigger in chronological order. Price can only exit at an actual quote.
+    if pos is not None and pos_quotes is not None:
         while q_cursor < len(pos_quotes):
             quote = pos_quotes.iloc[q_cursor].to_dict()
             q_cursor += 1
             at = pd.Timestamp(quote['timestamp'])
-            if at > pd.Timestamp(end_dt):
+            if at >= pd.Timestamp(end_dt):
                 break
             record_mark(quote)
-            reason, _ = _stop_reason(pos, quote, strategy)
-            if reason:
-                close_position(at.isoformat(), _executable_exit_price(pos, quote, strategy), reason)
+            if tail_stop_at is not None and at >= tail_stop_at:
+                pos.underlying_stop_trigger_time = tail_stop_at.isoformat()
+                close_position(at.isoformat(), _executable_exit_price(pos, quote, strategy), 'UNDERLYING_SIGNAL_CANDLE_STOP')
                 break
+            if tail_stop_at is None or at < tail_stop_at:
+                reason, _ = _stop_reason(pos, quote, strategy)
+                if reason:
+                    close_position(at.isoformat(), _executable_exit_price(pos, quote, strategy), reason)
+                    break
 
+    if pos is not None and tail_stop_at is not None:
+        pos.underlying_stop_trigger_time = tail_stop_at.isoformat()
+
+    # End-of-data valuation is allowed only if the last quote is fresh enough
+    # and strictly later than entry. Otherwise retain unresolved exposure.
     if pos is not None and pos_quotes is not None and len(pos_quotes) and not pos.underlying_stop_trigger_time:
         last = pos_quotes.iloc[-1]
         last_at = pd.Timestamp(last.timestamp)
         seconds_stale = (pd.Timestamp(end_dt) - last_at).total_seconds()
-        # Mark to market only on a quote recent enough to represent the
-        # requested end. An old quote is NOT an executable EOD liquidation.
-        if (pd.Timestamp(parse_time(pos.entry_time)) < last_at <= pd.Timestamp(end_dt)
+        if (pd.Timestamp(parse_time(pos.entry_time)) < last_at < pd.Timestamp(end_dt)
                 and 0 <= seconds_stale <= strategy.execution.max_exit_quote_delay_seconds):
+            record_mark(last.to_dict())
             close_position(last_at.isoformat(), _executable_exit_price(pos, last.to_dict(), strategy), 'END_OF_DATA')
-    if pos is not None and unresolved_exposure is None:
+
+    unresolved_exposure = None
+    if pos is not None:
+        reason = 'STOP_NO_EXECUTABLE_QUOTE' if pos.underlying_stop_trigger_time else 'END_OF_DATA_UNCLOSED'
         unresolved_exposure = {
             'symbol': pos.symbol, 'direction': pos.direction, 'action': pos.action,
-            'entry_time': pos.entry_time, 'reason': 'END_OF_DATA_UNCLOSED',
+            'entry_time': pos.entry_time, 'reason': reason,
+            'underlying_stop_level': pos.underlying_stop_level,
+            'stop_trigger_time': pos.underlying_stop_trigger_time,
             'last_quote_time': (
                 pd.Timestamp(pos_quotes.iloc[-1].timestamp).isoformat()
                 if pos_quotes is not None and len(pos_quotes) else None
             ),
         }
-        add_marker(pos.entry_time, 'reject', pos.direction, 'END_OF_DATA_UNCLOSED',
-                   _event_details('Unclosed option position', 'END_OF_DATA_UNCLOSED',
+        timestamp = pos.underlying_stop_trigger_time or pos.entry_time
+        add_marker(timestamp, 'reject', pos.direction, reason,
+                   _event_details('Unresolved option exposure', reason,
                                   **{k: v for k, v in unresolved_exposure.items() if k != 'reason'}))
 
     wins = sum(t['net_pnl_usd'] > 0 for t in trades)
