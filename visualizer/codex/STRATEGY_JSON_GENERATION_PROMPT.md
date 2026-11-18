@@ -51,3 +51,17 @@ The actual trade is an **option**. When BTC stop triggers, exit at the first **s
   that estimate as verified exchange margin or a liquidation calculation.
 - Report quote-observed mark-to-market maximum drawdown **separately** from
   closed-trade drawdown. Synthetic quote gaps and missing depth remain.
+
+
+### More conservative replay constraints
+
+The backtest interval is `[start,end)`. No quote exactly at end may be used.
+A valid 5m monitoring bar after the last larger strategy candle can still
+trigger an underlying stop; the option then needs a later valid executable-side
+quote strictly before end. Option premium stops are also checked after the
+last completed strategy candle. Never use a quote older than
+`execution.max_exit_quote_delay_seconds` to force an `END_OF_DATA` close.
+An enabled user-supplied short margin guard remains enforced even when
+`enforce_cash=false`. Chart pages are contiguous 30,000-candle windows,
+independent of the backtest range, and must not be used to infer exact tick
+ordering.
