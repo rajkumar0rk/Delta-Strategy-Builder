@@ -146,13 +146,20 @@ def _quote_ok(q, cfg, action: str = 'BUY') -> tuple[bool, str]:
     return True, ''
 
 
-def _select_option(store, parts, inst, ts, spot, direction, strategy, action: str = 'BUY') -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
+def _select_option(store, parts, inst, ts, spot, direction, strategy, action: str = 'BUY', backtest_end: str | None = None) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
     candidates = _select_candidates(inst, ts, spot, direction, strategy.option)
     last = 'NO_OPTION_CANDIDATE'
     for _, row in candidates.head(250).iterrows():
         q = store.first_quote_many(parts, str(row.symbol), ts.isoformat(), strategy.execution.max_entry_quote_delay_seconds)
         if not q:
             last = 'NO_FRESH_QUOTE'
+            continue
+        actual_entry = parse_time(str(q['timestamp']))
+        if backtest_end is not None and actual_entry > parse_time(backtest_end):
+            last = 'QUOTE_AFTER_BACKTEST_END'
+            continue
+        if actual_entry >= pd.Timestamp(row.expiration).to_pydatetime():
+            last = 'CONTRACT_EXPIRED_AT_FILL'
             continue
         ok, why = _quote_ok(q, strategy.option, action)
         if not ok:
@@ -1044,6 +1051,14 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             return float(frame.iloc[idx].close)
         return float(frame.iloc[0].close)
 
+    def quote_for_exit(symbol: str, at: str) -> dict[str, Any] | None:
+        quote = store.first_quote_many(
+            parts, symbol, at, strategy.execution.max_exit_quote_delay_seconds
+        )
+        if quote is not None and parse_time(str(quote['timestamp'])) > end_dt:
+            return None
+        return quote
+
     def record_mark(q: dict[str, Any]) -> None:
         nonlocal mtm_peak_equity, max_mtm_dd, max_mtm_dd_percent
         if pos is None:
@@ -1258,14 +1273,14 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 else:
                     hit = row.close >= pos.entry_spot + distance if pos.action == 'BUY' else row.close <= pos.entry_spot - distance
                 if hit:
-                    q = store.first_quote_many(parts, pos.symbol, ts.isoformat(), strategy.execution.max_exit_quote_delay_seconds)
+                    q = quote_for_exit(pos.symbol, ts.isoformat())
                     if q:
                         close_position(q['timestamp'], _executable_exit_price(pos, q, strategy), 'UNDERLYING_ATR_STOP')
                         closed_this_candle = True
 
             if pos is not None and strategy.risk.max_hold_minutes is not None:
                 if (ts.to_pydatetime() - parse_time(pos.entry_time)).total_seconds() >= strategy.risk.max_hold_minutes * 60:
-                    q = store.first_quote_many(parts, pos.symbol, ts.isoformat(), strategy.execution.max_exit_quote_delay_seconds)
+                    q = quote_for_exit(pos.symbol, ts.isoformat())
                     if q:
                         close_position(q['timestamp'], _executable_exit_price(pos, q, strategy), 'TIME_STOP')
                         closed_this_candle = True
@@ -1277,7 +1292,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                     if strategy.execution.decision_log_mode == 'FULL' or tree['passed']:
                         decisions.append(_flatten_decision(next_event('decision'), pos.direction, ts, 'EXIT', tree, {'close': _finite(row.close)}))
                     if tree['passed']:
-                        q = store.first_quote_many(parts, pos.symbol, ts.isoformat(), strategy.execution.max_exit_quote_delay_seconds)
+                        q = quote_for_exit(pos.symbol, ts.isoformat())
                         if q:
                             close_position(q['timestamp'], _executable_exit_price(pos, q, strategy), 'CONDITION_EXIT', tree)
                             closed_this_candle = True
@@ -1418,7 +1433,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             continue
 
         action = strategy.call_action if direction == 'CALL' else strategy.put_action
-        spec, q, why = _select_option(store, parts, inst, ts, float(row.close), direction, strategy, action)
+        spec, q, why = _select_option(store, parts, inst, ts, float(row.close), direction, strategy, action, iso(end_dt))
         if not spec or not q:
             decision_tree = {'mode': 'EXECUTION', 'passed': False, 'passed_count': 0, 'total': 1, 'conditions': [], 'groups': []}
             decisions.append(_flatten_decision(next_event('decision'), direction, ts, 'EXECUTION', decision_tree, {'close': _finite(row.close), 'reason': why}))
