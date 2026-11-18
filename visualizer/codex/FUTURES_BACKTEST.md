@@ -1,5 +1,15 @@
 # BTCUSD perpetual futures research — six merged implementation milestones
 
+## Optional futures capital-based net USD stop
+
+`strategy.futures.capital_stop` is an opt-in config (`enabled=false` by default). `capital_basis=FIXED_USD` with `capital_usd=10` and `loss_percent=15` makes a $1.50 net-loss target independent of lot count. `ENTRY_MARGIN` and `ACCOUNT_EQUITY` derive the initial capital basis at entry, not dynamically on later equity changes.
+
+At entry, determine actual simulated quantity, entry fees, and margin; solve price for desired net USD P&L using estimated exit taker fee + GST, adverse slippage, and tick rounding. Reject if no protective stop is possible. Record `capital_stop_price`, `capital_basis_usd`, `capital_stop_loss_usd`, and `CAPITAL_STOP_LOSS`; keep normal EMA/VWAP next-open exits and separate stop/target behavior. Recompute only if funding is charged; avoid per-bar state scans. This changes futures cache version (20 to 21).
+
+A price gap or breach can cause losses greater than the cap; these are research-only OHLC approximations. The $10 capital reference does not imply $10 is sufficient margin to open 10 BTC lots, nor does futures reproduce option premiums. 
+
+
+
 ## Higher-timeframe ATR in generic rule-risk stops (November 2026)
 
 An existing `timeframe="15m"` futures strategy can reference `futures.rule_risk.atr_indicator_id="atr14_1h"` if `atr14_1h` is a non-chart-only `ATR` indicator with `timeframe="1h"`. The strategy schema's general indicator-timeframe check already rejects lower/non-multiple timeframes; this compatibility change removes a redundant strategy-timeframe-only rule-risk restriction. ATR is sampled only from completed higher-timeframe bars, held constant until the next completed higher-timeframe candle; 5m protective execution continues to use the prior strategy snapshot. This is not 5m ATR and does not change ATR multipliers. Backtests still approximate historical stop fills with OHLC, not exchange ticks.

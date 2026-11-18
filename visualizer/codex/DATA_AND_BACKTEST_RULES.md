@@ -1,5 +1,11 @@
 # Data and backtest correctness rules
 
+## Futures capital stop invariants
+
+`futures.capital_stop` is opt-in and disabled for old strategy JSON. Entry capital basis may be fixed USD, initial estimated margin, or available account balance, frozen per trade. Calculate the *net USD* exit trigger from entry fill/quantity/entry fee plus predicted exit taker fee, GST and slip, never a percent of BTC price or options premium. Reject non-protective stops. Check via existing OHLC gap-aware stop routine; stricter stops win. Funding shifts update the trigger only after a recorded settlement close. Persist the per-trade basis, limit and capital stop reason. Increment futures cache version on behavior changes. Research-only OHLC cannot guarantee a loss ceiling.
+
+
+
 Native SUPERTREND uses Wilder ATR and causal recursive finalized bands; the output `direction` is +1 bullish / -1 bearish, and `bullish_flip` / `bearish_flip` are single-bar signals after the completed candle. The initial ATR-ready bar is seeded bearish without a flip. All HTF Supertrend outputs are available only from fully completed UTC-anchored candles; risk execution on 5m remains conservative OHLC approximation. See `backend/examples/btc-futures-1h-supertrend-4h-ema200-adx-atr.strategy.json`.
 
 ## Daily EMA200 / 4h Donchian futures data accuracy (November 2026)

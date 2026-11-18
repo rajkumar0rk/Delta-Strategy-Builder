@@ -116,6 +116,44 @@ def _margin_breached(pos, price, balance, qty, cfg):
     return stressed<=maintenance
 
 
+def _capital_stop_level(entry_price, direction, quantity, entry_fee, funding_usd,
+                        loss_limit_usd, config, execution_slippage_bps):
+    """Compute a fee-aware net-USD loss stop; O(1) per entry/funding event.
+
+    The trigger is a candle OHLC proxy, not a real stop execution guarantee.
+    Reject a position if even a valid immediate stop cannot meet its budget.
+    """
+    sign = 1 if direction == 'LONG' else -1
+    rate = config.taker_fee_percent / 100 * (1 + config.gst_percent / 100)
+    denominator = quantity * (sign - rate)
+    if quantity <= 0 or loss_limit_usd <= 0 or abs(denominator) < 1e-12:
+        return None
+    desired_exit = (sign * entry_price * quantity + entry_fee
+                    - funding_usd - loss_limit_usd) / denominator
+    divisor = 1 - sign * execution_slippage_bps / 10000
+    if desired_exit <= 0 or divisor <= 0:
+        return None
+    raw = (desired_exit + sign * config.slippage_ticks * config.tick_size) / divisor
+    if not math.isfinite(raw) or raw <= 0:
+        return None
+    units = raw / config.tick_size
+    # Round the trigger towards entry, leaving room for conservative
+    # tick-rounded adverse execution and the anticipated exit taker fees.
+    stop = (math.ceil(units - 1e-10) if sign == 1
+            else math.floor(units + 1e-10)) * config.tick_size
+    for _ in range(4):
+        if stop <= 0 or (entry_price - stop) * sign < 0:
+            return None
+        exit_px = _slipped(stop, direction, False, execution_slippage_bps,
+                           config.tick_size, config.slippage_ticks)
+        projected_net = ((exit_px - entry_price) * quantity * sign - entry_fee
+                         - exit_px * quantity * rate + funding_usd)
+        if projected_net >= -loss_limit_usd - 1e-9:
+            return round(stop, 10)
+        stop += sign * config.tick_size
+    return None
+
+
 def _exit_level(pos, bar, config):
     """Adverse stop first on ambiguous stop+target; gaps fill at open."""
     long=pos['direction']=='LONG'
@@ -124,11 +162,16 @@ def _exit_level(pos, bar, config):
     tp=pos.get('target_price')
     if sl is None:
         sl=(entry*(1-config.stop_loss_percent/100) if long else entry*(1+config.stop_loss_percent/100)) if config.stop_loss_percent else None
+    stop_reason='STOP_LOSS'
+    capital_sl=pos.get('capital_stop_price')
+    if capital_sl is not None and (sl is None or (capital_sl>sl if long else capital_sl<sl)):
+        sl=capital_sl
+        stop_reason='CAPITAL_STOP_LOSS'
     if tp is None:
         tp=(entry*(1+config.take_profit_percent/100) if long else entry*(1-config.take_profit_percent/100)) if config.take_profit_percent else None
     opened=float(bar.open);high=float(bar.high);low=float(bar.low)
     if sl is not None and ((low<=sl) if long else (high>=sl)):
-        return ('STOP_LOSS',min(opened,sl) if long else max(opened,sl))
+        return (stop_reason,min(opened,sl) if long else max(opened,sl))
     if tp is not None and ((high>=tp) if long else (low<=tp)):
         return ('TAKE_PROFIT',min(opened,tp) if not long else max(opened,tp))
     return None
@@ -179,7 +222,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':20,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':21,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
@@ -347,6 +390,9 @@ def run_futures_backtest(req, progress=None):
           'holding_minutes':(pd.Timestamp(exit_time)-pd.Timestamp(pos['entry_time'])).total_seconds()/60,
           'mfe_percent':pos['mfe']*100,'mae_percent':pos['mae']*100,
           'stop_price':pos.get('stop_price'),'target_price':pos.get('target_price'),
+          'capital_stop_price':pos.get('capital_stop_price'),
+          'capital_basis_usd':pos.get('capital_basis_usd'),
+          'capital_stop_loss_usd':pos.get('capital_stop_loss_usd'),
           'risk_per_lot_usd':pos.get('risk_per_lot_usd'),
           'initial_stop_price':pos.get('initial_stop_price'),
           'r_multiple_net':net/r_at_risk if r_at_risk>0 else None,
@@ -498,6 +544,17 @@ def run_futures_backtest(req, progress=None):
                         entry_rejection='FIXED_SIZE_RISK_EXCEEDED'
             margin=assumed_initial_margin_usd(px,trade_qty,cfg) if trade_qty>0 else float('inf')
             start_fee=fee(px,trade_qty) if trade_qty>0 else 0.0
+            capital_basis_usd=None;capital_loss_limit_usd=None;capital_stop_price=None
+            if cfg.capital_stop.enabled and trade_qty>0 and entry_rejection is None:
+                cap=cfg.capital_stop
+                capital_basis_usd=(cap.capital_usd if cap.capital_basis=='FIXED_USD'
+                    else margin if cap.capital_basis=='ENTRY_MARGIN' else balance)
+                capital_loss_limit_usd=capital_basis_usd*cap.loss_percent/100
+                capital_stop_price=_capital_stop_level(
+                    px,direction,trade_qty,start_fee,0.0,capital_loss_limit_usd,
+                    cfg,effective_slippage_bps)
+                if capital_stop_price is None:
+                    entry_rejection='CAPITAL_STOP_UNAVAILABLE'
             if entry_rejection:
                 rejection_reasons[entry_rejection]=rejection_reasons.get(entry_rejection,0)+1
                 decisions.append({'timestamp':at_open.isoformat(),'kind':'EXECUTION','direction':direction,'passed':False,'reason':entry_rejection})
@@ -529,6 +586,9 @@ def run_futures_backtest(req, progress=None):
                 position={'direction':direction,'entry_time':at_open.isoformat(),'entry_price':px,
                     'entry_fee':start_fee,'margin':margin,'funding_usd':0.0,
                     'quantity':trade_qty,'stop_price':stop_price,'target_price':target_price,
+                    'capital_stop_price':capital_stop_price,
+                    'capital_basis_usd':capital_basis_usd,
+                    'capital_stop_loss_usd':capital_loss_limit_usd,
                     'risk_per_lot_usd':risk_per_lot,
                     'adaptive_module':execution_setup.get('module') if adaptive and execution_setup else None,
                     'adaptive_regime':execution_setup.get('regime') if adaptive and execution_setup else None,
@@ -587,8 +647,14 @@ def run_futures_backtest(req, progress=None):
                 if hit or worst_breach:
                     if hit:
                         if worst_breach:margin_stop_ambiguous+=1
-                        if position.get('stop_price') is not None and position.get('target_price') is not None:
-                            stop=position['stop_price'];target=position['target_price']
+                        regular_stop=position.get('stop_price')
+                        capital_stop=position.get('capital_stop_price')
+                        stop=(max(regular_stop,capital_stop) if position['direction']=='LONG'
+                              else min(regular_stop,capital_stop)) if (
+                                  regular_stop is not None and capital_stop is not None
+                              ) else (regular_stop if capital_stop is None else capital_stop)
+                        target=position.get('target_price')
+                        if stop is not None and target is not None:
                             if float(child.low)<=min(stop,target) and float(child.high)>=max(stop,target):
                                 ambiguous+=1
                         exit_reason=('TRAILING_STOP' if hit[0]=='STOP_LOSS' and position.get('trailing_active')
@@ -631,10 +697,19 @@ def run_futures_backtest(req, progress=None):
                 elif hit or worst_breach:
                     if hit:
                         if worst_breach:margin_stop_ambiguous+=1
-                        if ((position.get('stop_price') is not None and position.get('target_price') is not None) or (cfg.stop_loss_percent and cfg.take_profit_percent)):
-                            stop=position.get('stop_price') or position['entry_price']*(1-cfg.stop_loss_percent/100*sign)
-                            target=position.get('target_price') or position['entry_price']*(1+cfg.take_profit_percent/100*sign)
-                            if (float(row.low)<=min(stop,target) and float(row.high)>=max(stop,target)):
+                        regular_stop=position.get('stop_price')
+                        if regular_stop is None and cfg.stop_loss_percent is not None:
+                            regular_stop=position['entry_price']*(1-cfg.stop_loss_percent/100*sign)
+                        capital_stop=position.get('capital_stop_price')
+                        stop=(max(regular_stop,capital_stop) if sign==1
+                              else min(regular_stop,capital_stop)) if (
+                                  regular_stop is not None and capital_stop is not None
+                              ) else (regular_stop if capital_stop is None else capital_stop)
+                        target=position.get('target_price')
+                        if target is None and cfg.take_profit_percent is not None:
+                            target=position['entry_price']*(1+cfg.take_profit_percent/100*sign)
+                        if stop is not None and target is not None:
+                            if float(row.low)<=min(stop,target) and float(row.high)>=max(stop,target):
                                 ambiguous+=1
                         exit_reason=('PATTERN_TRAILING_STOP' if hit[0]=='STOP_LOSS' and position.get('pattern_profit_active')
                                      else 'TRAILING_STOP' if hit[0]=='STOP_LOSS' and position.get('trailing_active')
@@ -675,6 +750,18 @@ def run_futures_backtest(req, progress=None):
                 position['funding_usd']+=funding
                 balance+=funding
                 fund_total+=funding
+                if position.get('capital_stop_loss_usd') is not None:
+                    updated=_capital_stop_level(
+                        position['entry_price'],position['direction'],
+                        position.get('quantity',qty),position['entry_fee'],
+                        position['funding_usd'],position['capital_stop_loss_usd'],
+                        cfg,effective_slippage_bps)
+                    if updated is None:
+                        # Funding is known only at settlement close; do not
+                        # invent a fill inside an already completed candle.
+                        if pending is None:pending=('CLOSE','CAPITAL_STOP_LOSS')
+                    else:
+                        position['capital_stop_price']=updated
             # Keep the active direction's lifecycle re-armed/reset on every bar,
             # matching the exclusive-position options engine.
             side='CALL' if position['direction']=='LONG' else 'PUT'
@@ -911,6 +998,7 @@ def run_futures_backtest(req, progress=None):
       'avg_mfe_percent':sum(t['mfe_percent'] for t in trades)/len(trades) if trades else 0,
       'avg_mae_percent':sum(t['mae_percent'] for t in trades)/len(trades) if trades else 0,
       'estimated_margin_breaches':sum(t['exit_reason']=='ESTIMATED_MARGIN_BREACH' for t in trades),
+      'capital_stop_exits':sum(t['exit_reason']=='CAPITAL_STOP_LOSS' for t in trades),
       'unresolved_position_count':int(unresolved is not None),
       'alerts_triggered':sum(m['kind']=='alert' for m in markers),'daily_risk_blocks':daily['blocks'],
       'insufficient_margin_rejections':margin_rejects,'rejection_reasons':rejection_reasons,
@@ -936,7 +1024,8 @@ def run_futures_backtest(req, progress=None):
            'Intrabar stops/targets, slippage and margin breaches are estimates',
            'Stop-market trigger timing is estimated from 5m OHLC; pre-entry extremes within the same bar may cause a conservatively counted stop',
            'Futures candle patterns use complete UTC 1h groups; rule-risk trailing executes on selected completed strategy or 5m candles, with changes effective next execution candle',
-           'Risk-sized trades can exceed the configured estimated loss in stop gaps',
+           'Capital-stopped and risk-sized positions can lose more than the estimated limit in gaps, funding, slippage or liquidation',
+           'Capital loss stop is based on configured USD, not an option premium percentage or a guaranteed cash floor',
            'Option premium-based profit-protection fields are ignored in Futures mode; use futures price stop/target',
            'Real exchange mark-to-market drawdown cannot be computed; candle-close proxy estimates are supplied separately',
            'Cash balance includes accrued funding and entry fees of any unresolved futures position; closed-trade net PnL excludes its open price exposure',
@@ -952,6 +1041,7 @@ def run_futures_backtest(req, progress=None):
         'adaptive_enabled':bool(adaptive),
         'rule_risk_atr_trailing_enabled':bool(rule_risk and rule_risk.trailing_enabled and rule_risk.trailing_mode=='ATR'),
         'rule_risk_point_trailing_enabled':bool(rule_risk and rule_risk.trailing_enabled and rule_risk.trailing_mode=='POINTS'),
+        'capital_stop':cfg.capital_stop.model_dump(),
         'rule_risk_stop_mode':rule_risk.stop_mode if rule_risk else None,
         'rule_risk_execution_timeframe':('5m' if fine_rule_execution else strategy.timeframe),
         'rule_risk_trailing_mode':rule_risk.trailing_mode if rule_risk and rule_risk.trailing_enabled else None,
