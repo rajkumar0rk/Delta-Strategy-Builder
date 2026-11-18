@@ -1,5 +1,25 @@
 # BTCUSD perpetual futures research — six merged implementation milestones
 
+## Configurable futures allocated-capital stop (November 2026)
+
+Use `strategy.futures.capital_stop` to cap **estimated net futures loss** relative to a selected USD capital basis. Example: 10 lots, `capital_basis="FIXED_USD"`, `capital_usd=10`, `loss_percent=15`: $1.50 modeled loss allowance, not 15% BTC price movement or 15% option premium.
+
+```json
+"capital_stop": {
+  "enabled": true,
+  "capital_basis": "FIXED_USD",
+  "capital_usd": 10,
+  "loss_percent": 15
+}
+```
+
+- `capital_basis`: `FIXED_USD` (explicit dollar amount), `ENTRY_MARGIN` (estimated required initial margin for that position), or `ACCOUNT_EQUITY` (available account balance before entry). `capital_usd` applies only to fixed USD basis. Quantity/leverage remain configured independently; the $10 allocation does not substitute for the exchange margin required to open 10 lots.
+- At the simulated entry, a one-time price threshold is computed using **actual simulated quantity and fill, paid entry fee, anticipated exit taker fee + GST, and adverse exit slippage/tick rounding**. Funding settlements update the threshold without rescanning candles. If a protective stop cannot be calculated (e.g. costs already exceed the loss allowance), reject the entry with `CAPITAL_STOP_UNAVAILABLE`.
+- Stops use the existing OHLC, stop-first, and gap-at-open logic. `CAPITAL_STOP_LOSS` is reported as an exit reason; the report records capital base, loss budget and trigger. Other configured protective stops and take-profit exits retain their independent behavior; the closer stop wins. Existing EMA/VWAP condition exits remain next-open.
+- To use this as the **only protective stop** with the 24-candle futures breakout, set `futures.stop_loss_percent=null`, `futures.take_profit_percent=null`, `futures.rule_risk.enabled=false`, `risk.max_hold_minutes=null`, `risk.close_at_session_end=false`, `futures.force_exit_time=null`. Keep existing entry and EMA/VWAP reversal rules. The normal margin-breach safety model still applies.
+- **Not a guaranteed $8.50 balance**: historical OHLC does not reveal tick sequence or executable depth. Price gaps, liquidity/slippage, funding, margin breach and liquidation can exceed the $1.50 modeled stop. Funding excluded with warning is not a real paid funding simulation. No historical price-precision guarantee is claimed.
+- Keep prior saved futures and options strategies unchanged: this feature is opt-in, defaults `enabled=false`, and uses the existing strategy schema version 15. Backend calculation is constant-time per entry and each funding event.
+
 ## Optional fixed-point BTCUSD Futures take-profit (November 2026)
 
 The existing opt-in generic `futures.rule_risk` execution supports three **mutually exclusive** target modes:
