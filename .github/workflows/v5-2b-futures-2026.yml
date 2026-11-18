@@ -1,0 +1,41 @@
+name: V5.2B frozen BTCUSD futures validation 2026
+on:
+  push:
+    branches:
+      - research/v52b-2026-futures-20261118
+    paths:
+      - ".github/workflows/v5-2b-futures-2026.yml"
+      - "research/v5_2b_2026/**"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: v52b-futures-2026-independent
+  cancel-in-progress: false
+jobs:
+  backtest:
+    name: Original Strategy Lab engine replay Jan-Oct 2026
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: visualizer/backend/requirements.txt
+      - name: Install original Lab backend
+        run: python -m pip install -r visualizer/backend/requirements.txt
+      - name: Backtest frozen V5.2B futures 2026
+        run: python research/v5_2b_2026/run.py
+      - name: Archive report and trade ledger
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v52b-futures-2026-original-engine
+          path: |
+            research/v5_2b_2026/outputs/RESEARCH_REPORT.md
+            research/v5_2b_2026/outputs/summary_2026.json
+            research/v5_2b_2026/outputs/monthly_2026_IST.csv
+            research/v5_2b_2026/outputs/trades_2026.csv
+          if-no-files-found: warn
