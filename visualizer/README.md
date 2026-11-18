@@ -239,3 +239,44 @@ Frontend production build when dependencies are installed:
 Set-Location C:\projects\workspace\Delta-Strategy-Builder\visualizer\frontend
 npm run build
 ```
+
+## Working-branch backtest correctness fixes (November 2026)
+
+The `fix/visualizer-backtest-logic-20261118` branch addresses the following
+replay semantics. They are **not** proof of live executability:
+
+- **Strike-first option selection:** a single ATM/ITM/OTM target strike is derived
+  from the eligible contract universe. The engine searches that strike across
+  eligible expiries before considering a different strike. Missing quotes are
+  never fabricated.
+- **Indicator warm-up:** strategy and chart indicator calculations read past
+  candles before the requested From date, then trim to the requested trade
+  interval. In archive/auto mode the warm-up can include preceding segments.
+  If the archive begins too recently, indicators still have incomplete history.
+  Exponential smoothing has finite warm-up approximation, not mathematically
+  identical initialization for all possible start dates.
+- **Quote quality:** execution rejects zero/negative bids and crossed bid/ask.
+  The next valid timestamp within the configured quote delay may be used.
+- **Wick stop timing:** for OHLC-based `UNDERLYING_SIGNAL_CANDLE` stops, a
+  candle that began before the actual option entry cannot establish whether
+  its wick breached the stop after entry. Such ambiguous partial candles are
+  skipped for WICK triggers. Choose the 5m monitoring timeframe to reduce
+  uncertainty; no timestamp of an intrabar wick is invented.
+- **Unclosed positions:** the entry quote can never be reused for a fictional
+  end-of-data exit. A still-open position is disclosed as unresolved and not
+  included in completed-trade profit factor/net P&L.
+- **Intratrade drawdown:** reports add quote-observed executable-side
+  mark-to-market maximum drawdown, separate from the legacy closed-trade
+  drawdown. In between observed quotes, worse prices could have occurred.
+- **SELL risk guard:** optionally require a user-supplied USD/contract margin
+  estimate; this enforces approximate available cash, not actual Delta Exchange
+  margin, maintenance margin, liquidation or portfolio margin.
+- **Holding-time default:** newly created strategies have no implicit
+  four-hour time stop. Existing strategy JSON explicitly specifying 240 minutes
+  remains unchanged.
+
+Causal replay still cannot infer tick sequencing from historical 5m OHLC,
+guarantee fills at synthetic bid/ask, or compute actual options margin.
+Changing the backtest cache semantics increments the engine cache identity.
+Regression tests live in
+`backend/tests/test_backtest_correctness_20261118.py`.
