@@ -38,6 +38,17 @@ describe('BTCUSD perpetual futures market editor',()=>{
    expect(html).toContain('Funding history');
    expect(html).not.toContain('auto_sync_futures_observations');
  });
+ it('renders the imported capital-based stop without silently discarding it',()=>{
+  const s=defaultStrategy();s.market_type='FUTURES';
+  s.futures={...s.futures!,capital_stop:{
+   enabled:true,capital_basis:'FIXED_USD',capital_usd:10,loss_percent:15}};
+  const html=renderToStaticMarkup(<FuturesSettings value={s} onChange={()=>{}}/>);
+  for(const token of ['Futures allocated-capital stop','Fixed allocated USD',
+     'Estimated initial margin per position','Available account balance at entry',
+     'Allocated capital (USD)','Max net loss','15%','$1.50','Maximum hold']){
+   expect(html).toContain(token);
+  }
+ });
  it('clearly labels simulated futures fills in result report',()=>{
   const s=defaultStrategy();s.market_type='FUTURES';
   const result:BacktestResult={run_id:'test',result_dir:'test',storage_mode:'COMPACT',strategy:s,
