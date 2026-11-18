@@ -1711,6 +1711,28 @@ def _score(tree: dict[str, Any]) -> tuple[int, int, bool]:
     return int(tree.get('passed_count', 0)), int(tree.get('total', 0)), bool(tree.get('passed'))
 
 
+CHART_MAX_BARS = 30000
+
+
+def _chart_page(frame: pd.DataFrame, offset: int = 0, limit: int = CHART_MAX_BARS):
+    """Page contiguous, full-fidelity historical candles; never skip individual candles."""
+    total = len(frame)
+    clamped = min(max(0, int(offset)), max(0, total - 1))
+    end_index = total - clamped
+    start_index = max(0, end_index - limit)
+    page = frame.iloc[start_index:end_index]
+    window = {
+        'total_bars': total,
+        'shown_bars': len(page),
+        'offset_from_latest_bars': clamped,
+        'has_older': start_index > 0,
+        'has_newer': end_index < total,
+        'first_timestamp': page.index[0].isoformat() if len(page) else None,
+        'last_timestamp': page.index[-1].isoformat() if len(page) else None,
+    }
+    return page, window
+
+
 def chart_payload(req, run_result=None):
     store = DataStore()
     parts = store.resolve_request(req, require_options=False)
@@ -1731,11 +1753,7 @@ def chart_payload(req, run_result=None):
         _prepare_strategy_state(frame, strategy)
     frame = frame[(frame.index >= pd.Timestamp(parse_time(req.start))) &
                   (frame.index < pd.Timestamp(parse_time(req.end)))]
-    if len(frame) > 30000:
-        raise ValueError(
-            f'Chart range contains {len(frame):,} source candles. Narrow the chart date range below 30,000 candles; '
-            'the backtest itself may use longer ranges.'
-        )
+    frame, chart_window = _chart_page(frame, getattr(req, 'chart_offset_bars', 0))
     chart_bars = [
         {'time': int(ts.timestamp()), 'open': float(r.open), 'high': float(r.high), 'low': float(r.low), 'close': float(r.close), 'volume': float(r.volume)}
         for ts, r in frame.iterrows()
@@ -1871,6 +1889,7 @@ def chart_payload(req, run_result=None):
             })
 
     return {
+        'window': chart_window,
         'bars': chart_bars,
         'series': series,
         'markers': (run_result or {}).get('markers', []),
