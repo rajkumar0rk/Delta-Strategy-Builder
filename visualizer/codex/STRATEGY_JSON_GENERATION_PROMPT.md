@@ -1,5 +1,15 @@
 # Strategy JSON generation prompt — BTC Strategy Lab (OPTIONS or FUTURES)
 
+## Current futures capital-based stop contract
+
+Use `strategy.futures.capital_stop={"enabled":true,"capital_basis":"FIXED_USD","capital_usd":10,"loss_percent":15}` for an estimated **$1.50 net loss cap** per futures position, based on an explicit $10 risk allocation. The allocation does not create margin or guarantee that 10 BTCUSD lots can be opened with $10. Alternative bases: `ENTRY_MARGIN` (estimated opening margin) and `ACCOUNT_EQUITY` (available balance at entry). Percent is a fraction of the chosen USD capital basis, not option premium, BTC price, or leverage percentage.
+
+The futures engine converts the selected dollar risk to a BTC stop price using actual executed quantity, entry fee, anticipated exit taker fee, GST, slip and conservative tick round. Funding events reprice the stop. The existing stop/gap execution path applies the closer of any regular and capital stop, while EMA/VWAP exits remain on next candle open. `CAPITAL_STOP_LOSS` is the distinct exit reason. Set `rule_risk.enabled=false`, `stop_loss_percent=null`, `take_profit_percent=null`, `risk.max_hold_minutes=null`, `risk.close_at_session_end=false`, `force_exit_time=null` to avoid extra exits on a reversal-only breakout. Reuse schema version 15; do not invent a `risk.stop_loss` futures mode.
+
+Backtested OHLC fills may exceed the loss cap through gaps, slippage, funding or estimated liquidation. This cannot reproduce SELL option premium returns or the old premium-based 15% stop. Never promise identical P&L between different instruments.
+
+
+
 ## Market-aware futures generation and Daily EMA / Donchian example (November 2026)
 
 The in-app AI prompt is generated in `visualizer/backend/app/ai_prompt.py`. For `market_type=FUTURES` it must treat the current strategy as **context**, not as a mandatory template. Prior 1H RSI2 and 1H Donchian examples are optional reference strategies. When a user requests a new idea, replace incompatible entry/exit trees, indicator IDs, lifecycle triggers and risk settings, and preserve them only when the user asks to edit the existing strategy. Never carry options-only entry/exit execution claims into futures; CALL maps to LONG, PUT to SHORT.
