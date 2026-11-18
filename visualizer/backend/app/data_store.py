@@ -648,7 +648,7 @@ class DataStore:
                 continue
             rows = self._query(
                 p,
-                'SELECT * FROM quotes WHERE symbol=? AND timestamp>=? AND timestamp<=? ORDER BY timestamp LIMIT 1',
+                'SELECT * FROM quotes WHERE symbol=? AND timestamp>=? AND timestamp<=? AND bid>0 AND ask>=bid ORDER BY timestamp LIMIT 1',
                 (symbol, iso(start), iso(end)),
             )
             if rows and (best is None or str(rows[0]['timestamp']) < str(best['timestamp'])):
@@ -672,7 +672,7 @@ class DataStore:
                 continue
             all_rows.extend(self._query(
                 p,
-                'SELECT * FROM quotes WHERE symbol=? AND timestamp>=? AND timestamp<=? ORDER BY timestamp',
+                'SELECT * FROM quotes WHERE symbol=? AND timestamp>=? AND timestamp<=? AND bid>0 AND ask>=bid ORDER BY timestamp',
                 (symbol, iso(s), iso(e)),
             ))
         if not all_rows:
