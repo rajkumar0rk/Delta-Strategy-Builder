@@ -1,0 +1,65 @@
+name: ETHUSD V5.2B original futures strategy replay 2025 2026
+on:
+  push:
+    branches:
+      - research/v52b-eth-2025-2026-20261118
+    paths:
+      - ".github/workflows/v52b-eth-futures-2025-2026.yml"
+      - "research/v5_2b_eth/**"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: v52b-eth-futures-2025-2026
+  cancel-in-progress: false
+jobs:
+  eth_2025:
+    name: ETHUSD 2025 with 2024 warmup
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: visualizer/backend/requirements.txt
+      - run: pip install -r visualizer/backend/requirements.txt
+      - name: Run 2025 ETHUSD V5.2B
+        run: python research/v5_2b_eth/run.py 2025
+      - name: Upload 2025 research
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eth-v52b-2025
+          path: |
+            research/v5_2b_eth/outputs/2025/RESEARCH_REPORT_2025.md
+            research/v5_2b_eth/outputs/2025/summary_2025.json
+            research/v5_2b_eth/outputs/2025/monthly_2025_IST.csv
+            research/v5_2b_eth/outputs/2025/trades_2025.csv
+          if-no-files-found: warn
+  eth_2026:
+    name: ETHUSD Jan-Oct 2026 full warmup
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: visualizer/backend/requirements.txt
+      - run: pip install -r visualizer/backend/requirements.txt
+      - name: Run 2026 ETHUSD V5.2B
+        run: python research/v5_2b_eth/run.py 2026
+      - name: Upload 2026 research
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eth-v52b-2026
+          path: |
+            research/v5_2b_eth/outputs/2026/RESEARCH_REPORT_2026.md
+            research/v5_2b_eth/outputs/2026/summary_2026.json
+            research/v5_2b_eth/outputs/2026/monthly_2026_IST.csv
+            research/v5_2b_eth/outputs/2026/trades_2026.csv
+          if-no-files-found: warn
