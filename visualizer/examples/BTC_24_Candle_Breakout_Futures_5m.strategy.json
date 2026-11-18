@@ -438,7 +438,13 @@
         "max_lots": 1,
         "max_estimated_risk_multiple": 1
       },
-      "force_exit_time": null
+      "force_exit_time": null,
+      "capital_stop": {
+        "enabled": true,
+        "capital_basis": "FIXED_USD",
+        "capital_usd": 10,
+        "loss_percent": 15
+      }
     },
     "risk": {
       "stop_loss": {
