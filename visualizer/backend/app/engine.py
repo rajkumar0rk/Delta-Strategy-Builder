@@ -155,7 +155,7 @@ def _select_option(store, parts, inst, ts, spot, direction, strategy, action: st
             last = 'NO_FRESH_QUOTE'
             continue
         actual_entry = parse_time(str(q['timestamp']))
-        if backtest_end is not None and actual_entry > parse_time(backtest_end):
+        if backtest_end is not None and actual_entry >= parse_time(backtest_end):
             last = 'QUOTE_AFTER_BACKTEST_END'
             continue
         if actual_entry >= pd.Timestamp(row.expiration).to_pydatetime():
@@ -1057,7 +1057,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         quote = store.first_quote_many(
             parts, symbol, at, strategy.execution.max_exit_quote_delay_seconds
         )
-        if quote is not None and parse_time(str(quote['timestamp'])) > end_dt:
+        if quote is not None and parse_time(str(quote['timestamp'])) >= end_dt:
             return None
         return quote
 
