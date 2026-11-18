@@ -180,3 +180,13 @@ def test_invalid_quote_is_skipped_for_next_valid_quote(tmp_path, monkeypatch):
         assert quote['bid'] == 9
     finally:
         store.close()
+
+
+def test_saved_strategy_can_be_loaded_from_project_folder(tmp_path, monkeypatch):
+    from app.main import load_strategy, save_strategy
+    from app.models import SaveStrategyRequest
+    monkeypatch.setenv('STRATEGY_LAB_PROJECT_ROOT', str(tmp_path))
+    saved = save_strategy(SaveStrategyRequest(strategy=StrategyConfig(name='Strategy load smoke')))
+    assert Path(saved['path']).exists()
+    loaded = load_strategy('strategy-load-smoke')
+    assert loaded['strategy']['name'] == 'Strategy load smoke'
