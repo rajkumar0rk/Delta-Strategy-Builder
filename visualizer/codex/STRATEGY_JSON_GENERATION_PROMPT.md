@@ -27,3 +27,27 @@ The actual trade is an **option**. When BTC stop triggers, exit at the first **s
 - Cache version must change whenever exit semantics change. Preserve old strategy defaults and analyze trade markers, missing quotes, end-of-data, slippage, fees, and no-lookahead behavior.
 - To generate the full authoritative prompt, invoke the backend AI prompt endpoint; it appends the current full `StrategyConfig.model_json_schema()`, not a hand-maintained schema copy.
 - Verify with `python -m pytest -q` under `visualizer/backend` and `npm run build` under `visualizer/frontend`. Do not claim successful verification unless actually executed.
+
+## Corrected backtest replay (working branch, November 2026)
+
+- Prefer the **intended strike** across eligible expiries; do not change strike
+  merely because a front-expiry contract is unavailable.
+- Historical signal indicators include past warm-up bars when available;
+  generated strategies must never trade before the requested From timestamp.
+- A WICK trigger on a candle that began before the option entry is ambiguous.
+  The revised engine skips such partial-candle WICK triggers instead of
+  assuming the wick occurred after entry. 5m completed-bar monitoring remains
+  configurable; exact tick-level stop timing remains unknown.
+- Quote validation skips zero bid or crossed bid/ask observations. A quote
+  outside the requested replay interval or after contract expiry cannot fill.
+- A position with no post-entry quote cannot be force-closed using its own
+  entry quote. An unresolved open position makes realized P&L incomplete.
+- A new strategy has `max_hold_minutes=null` unless the user asks for a
+  time-based exit. Explicit existing strategy values stay unchanged.
+- SELL option margin is not known from the public archive. The optional
+  `risk.require_sell_margin_estimate` and
+  `risk.sell_margin_per_contract_usd` fields may enforce a user-entered
+  estimate against cash when `enforce_cash` is enabled; never describe
+  that estimate as verified exchange margin or a liquidation calculation.
+- Report quote-observed mark-to-market maximum drawdown **separately** from
+  closed-trade drawdown. Synthetic quote gaps and missing depth remain.
