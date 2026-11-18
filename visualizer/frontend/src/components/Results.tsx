@@ -1,5 +1,5 @@
 import type {BacktestResult} from '../types';
-const f=(v:any,d=2)=>{const n=Number(v);return Number.isFinite(n)?n.toFixed(d):'—'};
+const f=(v:any,d=2)=>{if(v==null||v==='')return '—';const n=Number(v);return Number.isFinite(n)?n.toFixed(d):'—'};
 const money=(v:any)=>{const n=Number(v);return Number.isFinite(n)?`${n>0?'+':''}$${n.toFixed(2)}`:'—'};
 const signClass=(v:any)=>Number(v)>0?'metric-good':Number(v)<0?'metric-bad':'metric-neutral';
 const pfClass=(v:any)=>{const n=Number(v);return Number.isFinite(n)?n>=1?'metric-good':'metric-bad':'metric-neutral'};
