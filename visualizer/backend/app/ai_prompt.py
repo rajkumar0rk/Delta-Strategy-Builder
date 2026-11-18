@@ -45,7 +45,7 @@ def build_strategy_prompt(req: AiStrategyPromptRequest) -> str:
     current = req.strategy.model_dump()
     dataset = _dataset_context(req)
 
-    return f"""You are designing a BTC OPTIONS strategy for BTC Strategy Lab V15.1 (repository master at this revision).\nDo not invent market_type=FUTURES, strategy.futures, options_pullback, 4h/1D strategy timeframes, schema_version changes, or backtest capabilities absent from the exact StrategyConfig schema.\nUse only documented keys from the included live schema. Reject unsupported requested features rather than silently representing them with another mode.
+    return f"""You are designing a BTC OPTIONS strategy for BTC Strategy Lab V15.1 (using this repository's validated StrategyConfig contract).\nDo not invent market_type=FUTURES, strategy.futures, options_pullback, 4h/1D strategy timeframes, schema_version changes, or backtest capabilities absent from the exact StrategyConfig schema.\nUse only documented keys from the included live schema. Reject unsupported requested features rather than silently representing them with another mode.
 
 IMPORTANT OUTPUT CONTRACT
 - Return ONE valid JSON object only. Do not return Python, Pine Script, prose around the JSON, markdown fences, comments, NaN, Infinity, or invented fields.
@@ -55,9 +55,10 @@ IMPORTANT OUTPUT CONTRACT
 - Use only data and indicators explicitly supported below. Do not invent historical IV, Greeks, funding, order-flow, or external/news data.
 - Indicators marked chart_only=true are visual research indicators and MUST NOT be referenced by CALL entry, PUT entry, CALL exit, PUT exit, or NO TRADE rules.
 - Conditions are evaluated on COMPLETED strategy-timeframe candles. Supported strategy timeframes are 5m, 10m, 15m, 30m and 1h. Aggregated bars are built only from complete groups of downloaded 5m candles. There is no look-ahead.
-- Higher-timeframe candles and indicators are anchored to fixed UTC clock-close boundaries, independent of the requested From time. Example: 00:05 + 00:10 form the 10m candle ending 00:10. HTF values become usable only after that HTF candle closes.
-- BUY option entry fills use historical ASK + slippage and exits SELL at historical BID - slippage. SELL option entry fills at historical BID - slippage and exits BUY-to-close at historical ASK + slippage. SELL margin requirements are venue/account specific and are NOT modeled; do not present the result as a margin estimate.
-- Protective option premium stop/take-profit/profit-protection checks are quote driven; underlying signal-candle stop triggers are completed-candle based, and their fills require real subsequent observed option quotes. A position with no quote after an underlying stop stays unresolved, not an invented exit.
+- Strategy indicators use earlier historical warm-up candles before the requested From time when available, and never trade during warm-up. Higher-timeframe candles and indicators are anchored to fixed UTC clock-close boundaries, independent of the requested From time. Example: 00:05 + 00:10 form the 10m candle ending 00:10. HTF values become usable only after that HTF candle closes.
+- BUY option entry fills use historical ASK + slippage and exits SELL at historical BID - slippage. SELL option entry fills at historical BID - slippage and exits BUY-to-close at historical ASK + slippage. SELL margin requirements are venue/account specific. An optional user-supplied USD-per-contract estimate can be checked against available cash; this is NOT a real exchange margin model.
+- Protective option premium stop/take-profit/profit-protection checks are quote driven; underlying signal-candle stop triggers are completed-candle based, and their fills require real subsequent observed option quotes. A position with no quote after an underlying stop stays unresolved, not an invented exit. A final entry quote is never reused as an end-of-data exit. WICK stops skip the first partially elapsed monitoring candle when its low/high could predate option entry.
+- Replay times are half-open [start,end). Option premium stops and completed 5m underlying stops still run through the end cutoff even if the final 5m candle cannot form a complete strategy-timeframe bar. Quotes exactly at end are not executable in that replay. END_OF_DATA requires a fresh strictly post-entry quote no older than max_exit_quote_delay_seconds. Chart previews can page contiguous 30,000-candle windows; paging does not change historical backtesting.
 - A configured NO TRADE group blocks new entries when that group passes. It does not close an already-open position.
 - CALL and PUT have separate exit rule groups.
 - If both CALL and PUT entry groups pass on the same candle, conflict_policy controls the result.
@@ -204,7 +205,7 @@ profit_protection.mode:
 - TRAILING_PERCENT: activates at activation_percent; protected floor = peak_return - trail_percent_points
 
 Other risk controls:
-- max_hold_minutes: integer or null
+- max_hold_minutes: integer or null (null means unlimited; default for NEW strategies)
 - starting_balance_usd
 - quantity_mode: FIXED | BUDGET
 - quantity
@@ -212,6 +213,8 @@ Other risk controls:
 - enforce_trade_budget_strict: when true, a valid minimum/fixed quantity is rejected if premium-notional + entry fee exceeds budget_usd. When false, BUDGET mode may step up to the minimum valid quantity even above budget.
 - min_quantity and size_increment from the selected contract are ALWAYS enforced; invalid FIXED quantities are rejected regardless of budget setting.
 - enforce_cash
+- require_sell_margin_estimate: optional boolean guard (false preserves existing SELL replay behavior)
+- sell_margin_per_contract_usd: optional positive user-entered estimate, multiplied by contract quantity; NOT verified venue/account margin
 
 SESSION
 - timezone is normally Asia/Kolkata
@@ -233,12 +236,12 @@ DATASET CONTEXT FOR THIS PROMPT
 
 DATA LIMITATIONS
 - The unified Delta archive is LOW_FIDELITY_SYNTHETIC_BBO: option bid/ask is reconstructed from 1m option candle closes using an estimated spread, and bid/ask sizes are synthetic. Backtest P&L is research/estimated P&L, NOT proof of historically executable fills.
-- SELL margin/collateral/liquidation requirements are not modeled.
+- SELL account margin/collateral/liquidation cannot be modeled exactly; optional margin estimate is a conservative, user-supplied cash check only.\n- Backtest results distinguish closed-trade drawdown and quote-observed mark-to-market drawdown; unseen intrabar losses may be worse.\n- Option contract selection prefers the same intended strike across eligible expiries before considering a different strike.
 - Existing underlying data provides OHLCV.
 - Existing normalized option quote data can provide bid, ask, bid_size, ask_size, volume, and open_interest when present in the source rows.
 - V15.1 does NOT provide historical IV, delta, gamma, theta, vega, or rho. Do not reference them.
 - V15.1 can optionally append uncovered completed UTC days from the repository history archive before a backtest; strategy logic itself never fetches or uses future/incomplete data.
-- strategy.timeframe supports "5m" and "10m". 10m candles are aggregated from complete source 5m pairs; incomplete pairs are discarded.
+- strategy.timeframe supports 5m, 10m, 15m, 30m and 1h. Higher bars are formed only from complete aligned groups of 5m source candles; incomplete buckets are discarded.
 
 V15.1 STATEFUL BIG-TREND FEATURES
 - Big Trend score supports BINARY and CONTINUOUS components. CONTINUOUS maps a numeric left operand from zero_at to full_at and gives partial weight between them.

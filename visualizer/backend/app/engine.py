@@ -1,7 +1,7 @@
 from __future__ import annotations
 import csv, json, math, re, hashlib, uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Callable
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -96,22 +96,20 @@ def _select_candidates(inst: pd.DataFrame, ts: pd.Timestamp, spot: float, direct
     x = x[(x.dte >= cfg.min_dte_days) & (x.dte <= cfg.max_dte_days)]
     if x.empty:
         return x
-    ranked = []
-    for _, g in x.groupby('expiration'):
-        strikes = sorted(g.strike.unique())
-        atm_i = min(range(len(strikes)), key=lambda i: abs(strikes[i] - spot))
-        if cfg.strike_mode == 'ATM':
-            target_i = atm_i
-        else:
-            sign = (-1 if direction == 'CALL' else 1) if cfg.strike_mode == 'ITM' else (1 if direction == 'CALL' else -1)
-            target_i = max(0, min(len(strikes) - 1, atm_i + sign * cfg.strike_steps))
-        target = strikes[target_i]
-        gg = g.copy()
-        gg['strike_distance'] = abs(gg.strike - target)
-        ranked.append(gg)
-    out = pd.concat(ranked)
-    out['expiry_rank'] = (out.expiration - ts).dt.total_seconds()
-    return out.sort_values(['expiry_rank', 'strike_distance', 'strike'])
+    # Select the strike from the union of *eligible* strikes first, then search
+    # expiry dates for the same strike.  A missing front-expiry contract must not
+    # silently redefine ATM/ITM/OTM and choose an unrelated strike.
+    strikes = sorted(x.strike.unique())
+    atm_i = min(range(len(strikes)), key=lambda i: (abs(strikes[i] - spot), strikes[i]))
+    if cfg.strike_mode == 'ATM':
+        target_i = atm_i
+    else:
+        sign = (-1 if direction == 'CALL' else 1) if cfg.strike_mode == 'ITM' else (1 if direction == 'CALL' else -1)
+        target_i = max(0, min(len(strikes) - 1, atm_i + sign * cfg.strike_steps))
+    target = strikes[target_i]
+    x['strike_distance'] = (x.strike - target).abs()
+    x['expiry_rank'] = (x.expiration - ts).dt.total_seconds()
+    return x.sort_values(['strike_distance', 'expiry_rank', 'strike'])
 
 
 def _quote_stats(q: dict[str, Any]) -> dict[str, float | None]:
@@ -133,7 +131,8 @@ def _quote_ok(q, cfg, action: str = 'BUY') -> tuple[bool, str]:
     stats = _quote_stats(q)
     premium = stats['ask'] if action == 'BUY' else stats['bid']
     spread = stats['spread_percent']
-    assert premium is not None
+    if premium is None or not math.isfinite(premium) or premium <= 0 or stats['bid'] is None or stats['bid'] <= 0 or stats['ask'] is None or stats['ask'] < stats['bid']:
+        return False, 'INVALID_BID_ASK'
     if cfg.min_premium is not None and premium < cfg.min_premium:
         return False, 'PREMIUM_TOO_LOW'
     if cfg.max_premium is not None and premium > cfg.max_premium:
@@ -147,13 +146,20 @@ def _quote_ok(q, cfg, action: str = 'BUY') -> tuple[bool, str]:
     return True, ''
 
 
-def _select_option(store, parts, inst, ts, spot, direction, strategy, action: str = 'BUY') -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
+def _select_option(store, parts, inst, ts, spot, direction, strategy, action: str = 'BUY', backtest_end: str | None = None) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
     candidates = _select_candidates(inst, ts, spot, direction, strategy.option)
     last = 'NO_OPTION_CANDIDATE'
-    for _, row in candidates.head(30).iterrows():
+    for _, row in candidates.head(250).iterrows():
         q = store.first_quote_many(parts, str(row.symbol), ts.isoformat(), strategy.execution.max_entry_quote_delay_seconds)
         if not q:
             last = 'NO_FRESH_QUOTE'
+            continue
+        actual_entry = parse_time(str(q['timestamp']))
+        if backtest_end is not None and actual_entry >= parse_time(backtest_end):
+            last = 'QUOTE_AFTER_BACKTEST_END'
+            continue
+        if actual_entry >= pd.Timestamp(row.expiration).to_pydatetime():
+            last = 'CONTRACT_EXPIRED_AT_FILL'
             continue
         ok, why = _quote_ok(q, strategy.option, action)
         if not ok:
@@ -236,10 +242,18 @@ def _quantity(strategy, spec, entry_price, entry_spot, balance, action: str = 'B
 
     premium_cost = entry_price * qty * cv
     entry_fee = _delta_fee(entry_spot, entry_price, qty, cv, strategy.execution)['total_fee_usd']
-    # Long options require premium + fee cash. Short-option margin is venue/account
-    # specific and is intentionally not invented here; SELL checks entry fees only.
-    cash_required = premium_cost + entry_fee if action == 'BUY' else entry_fee
-    if strategy.risk.enforce_cash and cash_required > balance + 1e-9:
+    # A user-supplied SELL margin estimate is a conservative cash guard, not an
+    # exchange/account risk-engine calculation. Never invent missing margin.
+    if action == 'SELL':
+        margin_per_contract = getattr(strategy.risk, 'sell_margin_per_contract_usd', None)
+        if getattr(strategy.risk, 'require_sell_margin_estimate', False) and margin_per_contract is None:
+            return 0.0, 0.0, 'SELL_MARGIN_ESTIMATE_REQUIRED'
+        cash_required = entry_fee + (float(margin_per_contract) * qty if margin_per_contract is not None else 0.0)
+    else:
+        cash_required = premium_cost + entry_fee
+    # A requested SELL margin guard is not bypassed by the general cash toggle.
+    if (strategy.risk.enforce_cash or
+            (action == 'SELL' and getattr(strategy.risk, 'require_sell_margin_estimate', False))) and cash_required > balance + 1e-9:
         return 0.0, cash_required, 'INSUFFICIENT_CASH'
     return qty, cash_required, None
 
@@ -258,10 +272,34 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
     return out
 
 
-def _backtest_cache_key(req: BacktestRequest, paths) -> str:
+def _warmup_start(req: BacktestRequest) -> str:
+    """Load past bars *before* the trading interval to stabilize causal indicators.
+
+    Exponential indicators depend on their seed, so include at least 10x their
+    configured periods on their native timeframe, plus a baseline 1000 strategy
+    candles for derived state/long-lookback rules. Never backfill with future data.
+    """
+    tf_minutes = {'5m': 5, '10m': 10, '15m': 15, '30m': 30, '1h': 60}
+    base = tf_minutes[req.strategy.timeframe]
+    required_minutes = 1000 * base
+    period_keys = {
+        'period', 'length', 'fast', 'slow', 'signal', 'ema_period',
+        'atr_period', 'sma_period', 'stoch_period', 'rsi_period',
+        'k_period', 'd_period', 'lookback_bars', 'left', 'right',
+    }
+    for indicator in req.strategy.indicators:
+        tf = tf_minutes.get(indicator.timeframe, base)
+        for key, value in indicator.params.items():
+            if key in period_keys and isinstance(value, (int, float)) and value > 0:
+                required_minutes = max(required_minutes, 10 * int(value) * tf)
+    return iso(parse_time(req.start) - timedelta(minutes=required_minutes))
+
+
+def _backtest_cache_key(req: BacktestRequest, paths, warmup_paths=None) -> str:
     payload = {
-        'engine_version': 152,
+        'engine_version': 154,
         'dataset': _dataset_fingerprint(paths),
+        'warmup_dataset': _dataset_fingerprint(warmup_paths if warmup_paths is not None else paths),
         'dataset_id': getattr(req, 'dataset_id', None),
         'dataset_ids': [x.id for x in (paths if isinstance(paths, (list, tuple)) else [paths])],
         'dataset_mode': getattr(req, 'dataset_mode', 'SINGLE'),
@@ -873,11 +911,16 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
 
     report('Resolving downloaded datasets…', 9 if getattr(req, 'auto_download_missing_data', False) else 2, 'DATA_SELECTION', 'Preflight data validation')
     parts = store.resolve_request(req, require_options=True)
+    warmup_start = _warmup_start(req)
+    warmup_parts = (
+        store.auto_select(warmup_start, req.end, require_options=False)
+        if getattr(req, 'dataset_mode', 'SINGLE') in {'ARCHIVE', 'AUTO'} else parts
+    )
 
     # Cache lookup happens before expensive CSV preflight. The key fingerprints
     # every selected source file, so a cached result is reused only while the
     # downloaded inputs remain byte/mtime-identical.
-    cache_key = _backtest_cache_key(req, parts)
+    cache_key = _backtest_cache_key(req, parts, warmup_parts)
     cached = _cached_result(cache_key)
     if cached is not None:
         report(f"Cache hit — reused identical V15.1 backtest {cached.get('run_id', '')}.", 100, 'CACHE_HIT', 'Complete')
@@ -892,13 +935,18 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         raise ValueError('Preflight failed: ' + '; '.join(preflight['errors']))
 
     report('Loading and merging underlying bars…', 12, 'LOAD_BARS', 'Load option instruments')
-    bars = store.load_bars_many(parts, req.start, req.end, req.strategy.timeframe)
+    bars = store.load_bars_many(warmup_parts, warmup_start, req.end, req.strategy.timeframe)
     report('Loading and de-duplicating option instruments…', 18, 'LOAD_INSTRUMENTS', 'Calculate indicators')
     inst = store.load_instruments_many(parts)
     report('Calculating selected indicators and V15.1 trend state…', 25, 'INDICATORS', 'Prepare option quote indexes')
     strategy = req.strategy
     frame, series_meta = compute_indicators(bars, strategy.indicators, strategy.timeframe)
     _prepare_strategy_state(frame, strategy)
+    # All warm-up rows are informational only; never trade outside the request.
+    frame = frame[(frame.index >= pd.Timestamp(parse_time(req.start))) &
+                  (frame.index < pd.Timestamp(parse_time(req.end)))]
+    if frame.empty:
+        raise ValueError('No completed strategy candles in the selected backtest interval')
     signal_stop = strategy.risk.stop_loss
     signal_stop_active = signal_stop.mode == 'UNDERLYING_SIGNAL_CANDLE'
     # For HTF strategies, monitoring 5m completed source candles avoids losing
@@ -923,6 +971,11 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
     peak_equity = equity
     max_dd = 0.0
     max_dd_percent = 0.0
+    # Quote-observed mark-to-market drawdown complements closed-trade drawdown.
+    # It uses executable liquidation-side prices plus estimated exit fees.
+    mtm_peak_equity = balance
+    max_mtm_dd = 0.0
+    max_mtm_dd_percent = 0.0
     equity_curve: list[dict[str, Any]] = [{
         'timestamp': req.start,
         'equity_usd': equity,
@@ -994,13 +1047,44 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
 
     def spot_at(timestamp_text: str) -> float:
         target = pd.Timestamp(parse_time(timestamp_text))
-        eligible = frame.loc[frame.index <= target, 'close']
-        if len(eligible):
-            return float(eligible.iloc[-1])
+        # Binary search avoids re-scanning the entire history for every quote.
+        idx = int(frame.index.searchsorted(target, side='right')) - 1
+        if idx >= 0:
+            return float(frame.iloc[idx].close)
         return float(frame.iloc[0].close)
+
+    def quote_for_exit(symbol: str, at: str) -> dict[str, Any] | None:
+        quote = store.first_quote_many(
+            parts, symbol, at, strategy.execution.max_exit_quote_delay_seconds
+        )
+        if quote is not None and parse_time(str(quote['timestamp'])) >= end_dt:
+            return None
+        return quote
+
+    def record_mark(q: dict[str, Any]) -> None:
+        nonlocal mtm_peak_equity, max_mtm_dd, max_mtm_dd_percent
+        if pos is None:
+            return
+        liquidation_price = _executable_exit_price(pos, q, strategy)
+        cv = float(pos.spec['contract_value'])
+        exit_fee = _delta_fee(
+            spot_at(str(q['timestamp'])), liquidation_price,
+            pos.quantity, cv, strategy.execution
+        )['total_fee_usd']
+        unrealized = (
+            (liquidation_price - pos.entry_price) if pos.action == 'BUY'
+            else (pos.entry_price - liquidation_price)
+        ) * pos.quantity * cv - pos.entry_fee - exit_fee
+        marked_equity = balance + unrealized
+        mtm_peak_equity = max(mtm_peak_equity, marked_equity)
+        drawdown = max(0.0, mtm_peak_equity - marked_equity)
+        max_mtm_dd = max(max_mtm_dd, drawdown)
+        if mtm_peak_equity > 0:
+            max_mtm_dd_percent = max(max_mtm_dd_percent, 100.0 * drawdown / mtm_peak_equity)
 
     def close_position(exit_time: str, exit_price: float, reason: str, exit_rule: dict[str, Any] | None = None):
         nonlocal pos, balance, equity, peak_equity, max_dd, max_dd_percent, pos_quotes, q_cursor
+        nonlocal mtm_peak_equity, max_mtm_dd, max_mtm_dd_percent
         assert pos
         cv = float(pos.spec['contract_value'])
         exit_spot = spot_at(exit_time)
@@ -1010,6 +1094,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         net = gross - pos.entry_fee - exit_fee
         balance += net
         equity = balance
+        mtm_peak_equity = max(mtm_peak_equity, balance)
         peak_equity = max(peak_equity, equity)
         current_dd = peak_equity - equity
         current_dd_percent = (current_dd / peak_equity * 100.0) if peak_equity > 0 else 0.0
@@ -1132,9 +1217,14 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             while stop_cursor < len(stop_times) and stop_times[stop_cursor] <= ts:
                 stop_at = stop_times[stop_cursor]
                 if pos is not None and pos.underlying_stop_trigger_time is None:
-                    if stop_at > pd.Timestamp(parse_time(pos.entry_time)):
+                    entry_at = pd.Timestamp(parse_time(pos.entry_time))
+                    if stop_at > entry_at:
+                        # A wick on a partially elapsed candle could have occurred
+                        # before the option was bought/sold. Do not infer its time.
+                        monitor_minutes = 5 if signal_stop.signal_candle_execution_timeframe == '5m' else {'5m': 5, '10m': 10, '15m': 15, '30m': 30, '1h': 60}[strategy.timeframe]
+                        fully_post_entry = stop_at - pd.Timedelta(minutes=monitor_minutes) >= entry_at
                         bar_values = SimpleNamespace(low=stop_lows[stop_cursor], high=stop_highs[stop_cursor], close=stop_closes[stop_cursor])
-                        if _signal_stop_hit(pos, bar_values, signal_stop.signal_candle_trigger):
+                        if (signal_stop.signal_candle_trigger == 'CLOSE' or fully_post_entry) and _signal_stop_hit(pos, bar_values, signal_stop.signal_candle_trigger):
                             first_stop_at = stop_at
                 stop_cursor += 1
                 if first_stop_at is not None:
@@ -1151,6 +1241,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 q = pos_quotes.iloc[q_cursor].to_dict()
                 q_cursor += 1
                 quote_at = pd.Timestamp(q['timestamp'])
+                record_mark(q)
                 trigger_at = (
                     pd.Timestamp(parse_time(pos.underlying_stop_trigger_time))
                     if pos.underlying_stop_trigger_time
@@ -1184,14 +1275,14 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 else:
                     hit = row.close >= pos.entry_spot + distance if pos.action == 'BUY' else row.close <= pos.entry_spot - distance
                 if hit:
-                    q = store.first_quote_many(parts, pos.symbol, ts.isoformat(), strategy.execution.max_exit_quote_delay_seconds)
+                    q = quote_for_exit(pos.symbol, ts.isoformat())
                     if q:
                         close_position(q['timestamp'], _executable_exit_price(pos, q, strategy), 'UNDERLYING_ATR_STOP')
                         closed_this_candle = True
 
             if pos is not None and strategy.risk.max_hold_minutes is not None:
                 if (ts.to_pydatetime() - parse_time(pos.entry_time)).total_seconds() >= strategy.risk.max_hold_minutes * 60:
-                    q = store.first_quote_many(parts, pos.symbol, ts.isoformat(), strategy.execution.max_exit_quote_delay_seconds)
+                    q = quote_for_exit(pos.symbol, ts.isoformat())
                     if q:
                         close_position(q['timestamp'], _executable_exit_price(pos, q, strategy), 'TIME_STOP')
                         closed_this_candle = True
@@ -1203,7 +1294,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                     if strategy.execution.decision_log_mode == 'FULL' or tree['passed']:
                         decisions.append(_flatten_decision(next_event('decision'), pos.direction, ts, 'EXIT', tree, {'close': _finite(row.close)}))
                     if tree['passed']:
-                        q = store.first_quote_many(parts, pos.symbol, ts.isoformat(), strategy.execution.max_exit_quote_delay_seconds)
+                        q = quote_for_exit(pos.symbol, ts.isoformat())
                         if q:
                             close_position(q['timestamp'], _executable_exit_price(pos, q, strategy), 'CONDITION_EXIT', tree)
                             closed_this_candle = True
@@ -1344,7 +1435,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             continue
 
         action = strategy.call_action if direction == 'CALL' else strategy.put_action
-        spec, q, why = _select_option(store, parts, inst, ts, float(row.close), direction, strategy, action)
+        spec, q, why = _select_option(store, parts, inst, ts, float(row.close), direction, strategy, action, iso(end_dt))
         if not spec or not q:
             decision_tree = {'mode': 'EXECUTION', 'passed': False, 'passed_count': 0, 'total': 1, 'conditions': [], 'groups': []}
             decisions.append(_flatten_decision(next_event('decision'), direction, ts, 'EXECUTION', decision_tree, {'close': _finite(row.close), 'reason': why}))
@@ -1356,7 +1447,12 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
 
         inc = float(spec['price_increment'])
         slip = strategy.execution.slippage_ticks * inc
-        entry = float(q['ask']) + slip if action == 'BUY' else max(0.0, float(q['bid']) - slip)
+        entry = float(q['ask']) + slip if action == 'BUY' else float(q['bid']) - slip
+        if not math.isfinite(entry) or entry <= 0:
+            add_marker(ts.isoformat(), 'reject', direction, 'INVALID_EXECUTION_PRICE',
+                       _event_details('Invalid option entry price', 'INVALID_EXECUTION_PRICE',
+                                      symbol=str(spec['symbol']), entry_price=entry))
+            continue
         qty, cost, quantity_reject = _quantity(strategy, spec, entry, float(row.close), balance, action)
         if qty <= 0:
             why = quantity_reject or 'INSUFFICIENT_CASH'
@@ -1388,6 +1484,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             entry_lifecycle_id=chosen_behavior.id, entry_lifecycle_name=chosen_behavior.name,
             underlying_stop_level=stop_level,
         )
+        record_mark(q)
         chosen_cycle.entries += 1
         chosen_cycle.last_entry_index = i
         if chosen_breakout_origin is not None:
@@ -1434,39 +1531,85 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             )
         )
 
-    # The last strategy candle may close before the requested backtest end.
-    # Resolve pending stops only from real subsequent quotes inside the range.
-    if pos is not None and pos_quotes is not None and pos.underlying_stop_trigger_time:
-        pending_at = pd.Timestamp(parse_time(pos.underlying_stop_trigger_time))
-        while q_cursor < len(pos_quotes):
-            q = pos_quotes.iloc[q_cursor].to_dict()
-            q_cursor += 1
-            quote_at = pd.Timestamp(q['timestamp'])
-            if quote_at > pd.Timestamp(end_dt):
-                break
-            if quote_at >= pending_at:
-                close_position(quote_at.isoformat(), _executable_exit_price(pos, q, strategy), 'UNDERLYING_SIGNAL_CANDLE_STOP')
-                break
+    # Stop monitoring and option quotes continue up to the replay cutoff, even
+    # if the final 5m bar does not form a complete strategy-timeframe candle.
+    # Only completed monitoring candles may trigger an underlying stop.
+    tail_stop_at = (
+        pd.Timestamp(parse_time(pos.underlying_stop_trigger_time))
+        if pos is not None and pos.underlying_stop_trigger_time else None
+    )
+    if pos is not None and signal_stop_active and tail_stop_at is None:
+        entry_at = pd.Timestamp(parse_time(pos.entry_time))
+        monitor_minutes = (
+            5 if signal_stop.signal_candle_execution_timeframe == '5m'
+            else {'5m': 5, '10m': 10, '15m': 15, '30m': 30, '1h': 60}[strategy.timeframe]
+        )
+        while stop_cursor < len(stop_times) and stop_times[stop_cursor] < pd.Timestamp(end_dt):
+            at = stop_times[stop_cursor]
+            if at > entry_at:
+                fully_post_entry = at - pd.Timedelta(minutes=monitor_minutes) >= entry_at
+                candle = SimpleNamespace(
+                    low=stop_lows[stop_cursor], high=stop_highs[stop_cursor],
+                    close=stop_closes[stop_cursor],
+                )
+                if (signal_stop.signal_candle_trigger == 'CLOSE' or fully_post_entry) and _signal_stop_hit(
+                    pos, candle, signal_stop.signal_candle_trigger
+                ):
+                    tail_stop_at = at
+                    break
+            stop_cursor += 1
 
-    unresolved_exposure = None
-    if pos is not None and pos.underlying_stop_trigger_time:
-        unresolved_exposure = {
-            'symbol': pos.symbol,
-            'direction': pos.direction,
-            'action': pos.action,
-            'entry_time': pos.entry_time,
-            'underlying_stop_level': pos.underlying_stop_level,
-            'stop_trigger_time': pos.underlying_stop_trigger_time,
-            'reason': 'STOP_NO_EXECUTABLE_QUOTE',
-        }
-        add_marker(pos.underlying_stop_trigger_time, 'reject', pos.direction, 'STOP_NO_EXECUTABLE_QUOTE',
-            _event_details('Unresolved underlying stop', 'STOP_NO_EXECUTABLE_QUOTE', **unresolved_exposure))
+    # Merge post-candle quote-driven premium stops and the completed underlying
+    # trigger in chronological order. Price can only exit at an actual quote.
+    if pos is not None and pos_quotes is not None:
+        while q_cursor < len(pos_quotes):
+            quote = pos_quotes.iloc[q_cursor].to_dict()
+            q_cursor += 1
+            at = pd.Timestamp(quote['timestamp'])
+            if at >= pd.Timestamp(end_dt):
+                break
+            record_mark(quote)
+            if tail_stop_at is not None and at >= tail_stop_at:
+                pos.underlying_stop_trigger_time = tail_stop_at.isoformat()
+                close_position(at.isoformat(), _executable_exit_price(pos, quote, strategy), 'UNDERLYING_SIGNAL_CANDLE_STOP')
+                break
+            if tail_stop_at is None or at < tail_stop_at:
+                reason, _ = _stop_reason(pos, quote, strategy)
+                if reason:
+                    close_position(at.isoformat(), _executable_exit_price(pos, quote, strategy), reason)
+                    break
+
+    if pos is not None and tail_stop_at is not None:
+        pos.underlying_stop_trigger_time = tail_stop_at.isoformat()
+
+    # End-of-data valuation is allowed only if the last quote is fresh enough
+    # and strictly later than entry. Otherwise retain unresolved exposure.
     if pos is not None and pos_quotes is not None and len(pos_quotes) and not pos.underlying_stop_trigger_time:
         last = pos_quotes.iloc[-1]
         last_at = pd.Timestamp(last.timestamp)
-        if pd.Timestamp(parse_time(pos.entry_time)) <= last_at <= pd.Timestamp(end_dt):
-            # Preserve ordinary legacy end-of-data close (not a stop fill).
+        seconds_stale = (pd.Timestamp(end_dt) - last_at).total_seconds()
+        if (pd.Timestamp(parse_time(pos.entry_time)) < last_at < pd.Timestamp(end_dt)
+                and 0 <= seconds_stale <= strategy.execution.max_exit_quote_delay_seconds):
+            record_mark(last.to_dict())
             close_position(last_at.isoformat(), _executable_exit_price(pos, last.to_dict(), strategy), 'END_OF_DATA')
+
+    unresolved_exposure = None
+    if pos is not None:
+        reason = 'STOP_NO_EXECUTABLE_QUOTE' if pos.underlying_stop_trigger_time else 'END_OF_DATA_UNCLOSED'
+        unresolved_exposure = {
+            'symbol': pos.symbol, 'direction': pos.direction, 'action': pos.action,
+            'entry_time': pos.entry_time, 'reason': reason,
+            'underlying_stop_level': pos.underlying_stop_level,
+            'stop_trigger_time': pos.underlying_stop_trigger_time,
+            'last_quote_time': (
+                pd.Timestamp(pos_quotes.iloc[-1].timestamp).isoformat()
+                if pos_quotes is not None and len(pos_quotes) else None
+            ),
+        }
+        timestamp = pos.underlying_stop_trigger_time or pos.entry_time
+        add_marker(timestamp, 'reject', pos.direction, reason,
+                   _event_details('Unresolved option exposure', reason,
+                                  **{k: v for k, v in unresolved_exposure.items() if k != 'reason'}))
 
     wins = sum(t['net_pnl_usd'] > 0 for t in trades)
     losses = sum(t['net_pnl_usd'] < 0 for t in trades)
@@ -1487,6 +1630,9 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         'return_percent': (balance / strategy.risk.starting_balance_usd - 1) * 100,
         'max_closed_trade_drawdown_usd': max_dd,
         'max_closed_trade_drawdown_percent': max_dd_percent,
+        'max_mark_to_market_drawdown_usd': max_mtm_dd,
+        'max_mark_to_market_drawdown_percent': max_mtm_dd_percent,
+        'open_positions_at_end': 1 if pos is not None else 0,
         'avg_mfe_percent': (sum(t['mfe_percent'] for t in trades) / len(trades) if trades else 0),
         'avg_mae_percent': (sum(t['mae_percent'] for t in trades) / len(trades) if trades else 0),
         'daily_risk_blocks': int(daily_state['blocked_count']),
@@ -1579,21 +1725,49 @@ def _score(tree: dict[str, Any]) -> tuple[int, int, bool]:
     return int(tree.get('passed_count', 0)), int(tree.get('total', 0)), bool(tree.get('passed'))
 
 
+CHART_MAX_BARS = 30000
+
+
+def _chart_page(frame: pd.DataFrame, offset: int = 0, limit: int = CHART_MAX_BARS):
+    """Page contiguous, full-fidelity historical candles; never skip individual candles."""
+    total = len(frame)
+    clamped = min(max(0, int(offset)), max(0, total - 1))
+    end_index = total - clamped
+    start_index = max(0, end_index - limit)
+    page = frame.iloc[start_index:end_index]
+    window = {
+        'total_bars': total,
+        'shown_bars': len(page),
+        'offset_from_latest_bars': clamped,
+        'has_older': start_index > 0,
+        'has_newer': end_index < total,
+        'first_timestamp': page.index[0].isoformat() if len(page) else None,
+        'last_timestamp': page.index[-1].isoformat() if len(page) else None,
+    }
+    return page, window
+
+
 def chart_payload(req, run_result=None):
     store = DataStore()
     parts = store.resolve_request(req, require_options=False)
     strategy = getattr(req, 'strategy', None)
     timeframe = strategy.timeframe if strategy is not None else getattr(req, 'timeframe', '5m')
-    bars = store.load_bars_many(parts, req.start, req.end, timeframe)
     instances = strategy.indicators if strategy is not None else req.indicators
+    context = SimpleNamespace(start=req.start, strategy=(
+        strategy if strategy is not None else SimpleNamespace(timeframe=timeframe, indicators=instances)
+    ))
+    warmup_start = _warmup_start(context)
+    warmup_parts = (
+        store.auto_select(warmup_start, req.end, require_options=False)
+        if getattr(req, 'dataset_mode', 'SINGLE') in {'ARCHIVE', 'AUTO'} else parts
+    )
+    bars = store.load_bars_many(warmup_parts, warmup_start, req.end, timeframe)
     frame, meta = compute_indicators(bars, instances, timeframe)
     if strategy is not None:
         _prepare_strategy_state(frame, strategy)
-    if len(frame) > 30000:
-        raise ValueError(
-            f'Chart range contains {len(frame):,} source candles. Narrow the chart date range below 30,000 candles; '
-            'the backtest itself may use longer ranges.'
-        )
+    frame = frame[(frame.index >= pd.Timestamp(parse_time(req.start))) &
+                  (frame.index < pd.Timestamp(parse_time(req.end)))]
+    frame, chart_window = _chart_page(frame, getattr(req, 'chart_offset_bars', 0))
     chart_bars = [
         {'time': int(ts.timestamp()), 'open': float(r.open), 'high': float(r.high), 'low': float(r.low), 'close': float(r.close), 'volume': float(r.volume)}
         for ts, r in frame.iterrows()
@@ -1729,6 +1903,7 @@ def chart_payload(req, run_result=None):
             })
 
     return {
+        'window': chart_window,
         'bars': chart_bars,
         'series': series,
         'markers': (run_result or {}).get('markers', []),

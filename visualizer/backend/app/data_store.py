@@ -5,6 +5,7 @@ import hashlib
 import json
 import sqlite3
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -51,9 +52,31 @@ class DataStore:
 
     _index_lock = threading.Lock()
     _frame_lock = threading.Lock()
-    _bars_cache: dict[tuple[Any, ...], pd.DataFrame] = {}
-    _inst_cache: dict[tuple[Any, ...], pd.DataFrame] = {}
+    # Bound process-local caches so 1 GB VPS installations do not accumulate
+    # every monthly archive segment in RAM. A hit refreshes LRU order.
+    _bars_cache: OrderedDict[tuple[Any, ...], tuple[pd.DataFrame, int]] = OrderedDict()
+    _inst_cache: OrderedDict[tuple[Any, ...], tuple[pd.DataFrame, int]] = OrderedDict()
     _metadata_cache: dict[str, dict[str, Any]] = {}
+
+    @staticmethod
+    def _cached_frame(cache, key) -> pd.DataFrame | None:
+        cached = cache.pop(key, None)
+        if cached is None:
+            return None
+        cache[key] = cached
+        return cached[0].copy(deep=False)
+
+    @staticmethod
+    def _remember_frame(cache, key, frame: pd.DataFrame, max_bytes: int) -> None:
+        used = int(frame.memory_usage(index=True, deep=True).sum())
+        if used > max_bytes:
+            return  # oversize frames remain usable for this run, not pinned in RAM
+        cache.pop(key, None)
+        cache[key] = (frame, used)
+        total = sum(size for _, size in cache.values())
+        while total > max_bytes:
+            _, (_, removed) = cache.popitem(last=False)
+            total -= removed
 
     def __init__(self):
         self._connections: dict[str, sqlite3.Connection] = {}
@@ -380,16 +403,16 @@ class DataStore:
             raise ValueError(f'Archive segment {p.id} is missing underlying_bars.csv: {p.bars}')
         key = self._file_sig(p.bars)
         with self._frame_lock:
-            cached = self._bars_cache.get(key)
+            cached = self._cached_frame(self._bars_cache, key)
             if cached is not None:
-                return cached.copy(deep=False)
+                return cached
         df = pd.read_csv(p.bars, parse_dates=['timestamp'])
         df['timestamp'] = pd.to_datetime(df.timestamp, utc=True)
         for c in ['open', 'high', 'low', 'close', 'volume']:
             df[c] = pd.to_numeric(df[c], errors='coerce')
         df = df.dropna(subset=['open', 'high', 'low', 'close']).sort_values('timestamp')
         with self._frame_lock:
-            self._bars_cache[key] = df
+            self._remember_frame(self._bars_cache, key, df, 96 * 1024 * 1024)
         return df.copy(deep=False)
 
     def load_bars(self, p: DatasetPaths, start: str, end: str, timeframe: str = '5m') -> pd.DataFrame:
@@ -480,9 +503,9 @@ class DataStore:
             return pd.DataFrame()
         key = self._file_sig(p.instruments)
         with self._frame_lock:
-            cached = self._inst_cache.get(key)
+            cached = self._cached_frame(self._inst_cache, key)
             if cached is not None:
-                return cached.copy(deep=False)
+                return cached
         df = pd.read_csv(p.instruments)
         for c in ['activation', 'expiration']:
             df[c] = pd.to_datetime(df[c], utc=True)
@@ -490,7 +513,7 @@ class DataStore:
             df[c] = pd.to_numeric(df[c], errors='coerce')
         df['option_type'] = df.option_type.astype(str).str.upper()
         with self._frame_lock:
-            self._inst_cache[key] = df
+            self._remember_frame(self._inst_cache, key, df, 64 * 1024 * 1024)
         return df.copy(deep=False)
 
     def load_instruments(self, p: DatasetPaths) -> pd.DataFrame:
@@ -648,7 +671,7 @@ class DataStore:
                 continue
             rows = self._query(
                 p,
-                'SELECT * FROM quotes WHERE symbol=? AND timestamp>=? AND timestamp<=? ORDER BY timestamp LIMIT 1',
+                'SELECT * FROM quotes WHERE symbol=? AND timestamp>=? AND timestamp<=? AND bid>0 AND ask>=bid ORDER BY timestamp LIMIT 1',
                 (symbol, iso(start), iso(end)),
             )
             if rows and (best is None or str(rows[0]['timestamp']) < str(best['timestamp'])):
@@ -672,7 +695,7 @@ class DataStore:
                 continue
             all_rows.extend(self._query(
                 p,
-                'SELECT * FROM quotes WHERE symbol=? AND timestamp>=? AND timestamp<=? ORDER BY timestamp',
+                'SELECT * FROM quotes WHERE symbol=? AND timestamp>=? AND timestamp<=? AND bid>0 AND ask>=bid ORDER BY timestamp',
                 (symbol, iso(s), iso(e)),
             ))
         if not all_rows:

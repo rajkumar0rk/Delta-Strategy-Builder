@@ -64,3 +64,31 @@ This toggle does not disable cash checks and does not model SELL margin/collater
 ## Data fidelity
 
 The public archive is `LOW_FIDELITY_SYNTHETIC_BBO`: option bid/ask is reconstructed from 1m option candle closes using an estimated spread, and sizes are synthetic. P&L/fills are research estimates, not proof of historical executability. SELL margin/collateral/liquidation is not modeled.
+
+
+## Replay cutoff, stop tails, and chart paging (2026-11-18)
+
+- Requested intervals are half-open UTC: `[start,end)`. Entry quotes and
+  indicator/underlying-triggered exit quotes **at or after** `end` are excluded.
+- A completed source 5m monitoring candle that closes before `end` may trigger
+  `UNDERLYING_SIGNAL_CANDLE`, even after the last completed larger
+  strategy-timeframe candle. Trigger times are candle closes, not inferred wick
+  timestamps. Triggering from a candle that began before actual option entry is
+  disallowed for ambiguous WICK stops.
+- Option premium stops/profit protection remain active on valid observed quotes
+  through the replay cutoff, including quotes after the last complete strategy
+  candle. Underlying stop signals and premium exits are resolved chronologically.
+- `END_OF_DATA` can close only at a strictly post-entry quote less than
+  `execution.max_exit_quote_delay_seconds` before the requested cutoff.
+  Without a fresh quote, the position remains unresolved, and closed-trade
+  P&L / profit factor exclude it. This avoids stale close prices, not lost P&L.
+- The optional user-provided SELL margin estimate is enforced even if general
+  `enforce_cash=false`, whenever `require_sell_margin_estimate=true`. It is not
+  a Delta account-risk-engine estimate.
+- Chart preview supports `chart_offset_bars` and a maximum of 30,000 **contiguous
+  unmodified** candles per page. Paging never changes the strategy backtest
+  range, but historical preview indicator warm-up remains a finite approximation.
+- Synthetic historical bid/ask, real quote sequencing below 5m, exchange
+  collateral/liquidation, and true L1 queue fills remain **unavailable** unless
+  independently collected from an appropriate source. They must not be
+  represented as solved by deterministic code fixes.
