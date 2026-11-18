@@ -1,4 +1,4 @@
-import type {FuturesConfig,Strategy} from '../types';
+import type {FuturesConfig,FuturesCapitalStopConfig,Strategy} from '../types';
 import {AdaptiveFuturesEditor} from './AdaptiveFuturesEditor';
 
 const defaults:FuturesConfig={symbol:'BTCUSD',contract_btc:0.001,quantity_lots:1,leverage:5,
@@ -7,6 +7,11 @@ const defaults:FuturesConfig={symbol:'BTCUSD',contract_btc:0.001,quantity_lots:1
  funding_mode:'REQUIRE_CSV',margin_tier_mode:'FLAT_RESEARCH'};
 export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Strategy)=>void}){
  const f=value.futures||defaults;
+ const capitalDefaults:FuturesCapitalStopConfig={
+  enabled:false,capital_basis:'FIXED_USD',capital_usd:10,loss_percent:15};
+ const capitalStop={...capitalDefaults,...f.capital_stop};
+ const setCapitalStop=(patch:Partial<FuturesCapitalStopConfig>)=>
+  onChange({...value,futures:{...f,capital_stop:{...capitalStop,...patch}}});
  const setupDefaults={enabled:false,setup_timeframe:'15m' as const,ema_indicator_id:'ema20_15m',
   atr_indicator_id:'atr14_15m',volume_indicator_id:'volumeSMA20_5m',require_touch:true,
   require_confirmation_color:true,require_volume:true,volume_multiplier:1,max_wait_bars:6,
@@ -94,6 +99,26 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   </div>)}
  </div>
  <div className="warning-box"><b>Accuracy limitations:</b> Futures fills use historical 5m-derived OHLC and assumed slippage, not recorded futures order-book quotes. Funding requires <code>futures_funding.csv</code> with timestamp, symbol and decimal funding_rate. Collateral and liquidation are approximations; no Delta exchange liquidation precision is claimed. Current published snapshot supports size-dependent margins above $100,000 notional; INR conversion, historical collateral tiers, and genuine liquidation remain unmodeled. Pre-8-Sep-2025 minute-by-minute funding is not supported by the 8-hour funding importer. Backtests never place orders.</div>
+ </section>
+ <section className="card"><h2>Futures allocated-capital stop (net USD)</h2>
+  <p>Example: $10 allocated capital × 15% = $1.50 maximum estimated net trade loss, including modeled entry/exit taker fees, GST and slippage. This is NOT a 15% option-premium or BTC price stop. The allocation is a risk reference, not exchange margin or account balance.</p>
+  <label className="switch"><input type="checkbox" checked={capitalStop.enabled}
+    onChange={e=>setCapitalStop({enabled:e.target.checked})}/>Enable allocated-capital loss stop</label>
+  {capitalStop.enabled&&<div className="form-grid">
+   <label>Capital basis<select value={capitalStop.capital_basis}
+     onChange={e=>setCapitalStop({capital_basis:e.target.value as FuturesCapitalStopConfig['capital_basis']})}>
+     <option value="FIXED_USD">Fixed allocated USD</option>
+     <option value="ENTRY_MARGIN">Estimated initial margin per position</option>
+     <option value="ACCOUNT_EQUITY">Available account balance at entry</option>
+   </select></label>
+   {capitalStop.capital_basis==='FIXED_USD'&&<label>Allocated capital (USD)<input type="number"
+     min="0.01" step="0.01" value={capitalStop.capital_usd}
+     onChange={e=>setCapitalStop({capital_usd:Number(e.target.value)})}/></label>}
+   <label>Max net loss (% of selected capital)<input type="number" min="0.01" max="100"
+     step="0.1" value={capitalStop.loss_percent}
+     onChange={e=>setCapitalStop({loss_percent:Number(e.target.value)})}/></label>
+  </div>}
+  <p>Converts the USD loss allowance to a BTC price trigger once per entry; funding updates when applicable. Gaps and margin liquidation can exceed this loss. Any tighter existing stop or take-profit remains active. Disable unwanted price %, ATR and time exits separately.</p>
  </section>
  <section className="card"><h2>Rule-tree futures dynamic risk</h2>
   <p>Opt-in swing/signal/ATR stops for ordinary CALL=LONG and PUT=SHORT rules, including VWAP strategies. Signal extremes and ATR are frozen at candle close; entry fills at the next open. Size estimates include fees and adverse stop slippage.</p>
