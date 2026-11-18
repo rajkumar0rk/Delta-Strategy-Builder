@@ -251,7 +251,9 @@ def _quantity(strategy, spec, entry_price, entry_spot, balance, action: str = 'B
         cash_required = entry_fee + (float(margin_per_contract) * qty if margin_per_contract is not None else 0.0)
     else:
         cash_required = premium_cost + entry_fee
-    if strategy.risk.enforce_cash and cash_required > balance + 1e-9:
+    # A requested SELL margin guard is not bypassed by the general cash toggle.
+    if (strategy.risk.enforce_cash or
+            (action == 'SELL' and getattr(strategy.risk, 'require_sell_margin_estimate', False))) and cash_required > balance + 1e-9:
         return 0.0, cash_required, 'INSUFFICIENT_CASH'
     return qty, cash_required, None
 
@@ -295,7 +297,7 @@ def _warmup_start(req: BacktestRequest) -> str:
 
 def _backtest_cache_key(req: BacktestRequest, paths, warmup_paths=None) -> str:
     payload = {
-        'engine_version': 153,
+        'engine_version': 154,
         'dataset': _dataset_fingerprint(paths),
         'warmup_dataset': _dataset_fingerprint(warmup_paths if warmup_paths is not None else paths),
         'dataset_id': getattr(req, 'dataset_id', None),
@@ -1557,11 +1559,30 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         add_marker(pos.underlying_stop_trigger_time, 'reject', pos.direction, 'STOP_NO_EXECUTABLE_QUOTE',
             _event_details('Unresolved underlying stop', 'STOP_NO_EXECUTABLE_QUOTE',
                            **{k: v for k, v in unresolved_exposure.items() if k != 'reason'}))
+    # Option-price stops remain active up to the requested end, including
+    # quotes after the final completed strategy candle. Those quotes may not
+    # create a new signal, but can close an already-open position.
+    if pos is not None and pos_quotes is not None and not pos.underlying_stop_trigger_time:
+        while q_cursor < len(pos_quotes):
+            quote = pos_quotes.iloc[q_cursor].to_dict()
+            q_cursor += 1
+            at = pd.Timestamp(quote['timestamp'])
+            if at > pd.Timestamp(end_dt):
+                break
+            record_mark(quote)
+            reason, _ = _stop_reason(pos, quote, strategy)
+            if reason:
+                close_position(at.isoformat(), _executable_exit_price(pos, quote, strategy), reason)
+                break
+
     if pos is not None and pos_quotes is not None and len(pos_quotes) and not pos.underlying_stop_trigger_time:
         last = pos_quotes.iloc[-1]
         last_at = pd.Timestamp(last.timestamp)
-        if pd.Timestamp(parse_time(pos.entry_time)) < last_at <= pd.Timestamp(end_dt):
-            # Never liquidate at the *same* quote used to enter a position.
+        seconds_stale = (pd.Timestamp(end_dt) - last_at).total_seconds()
+        # Mark to market only on a quote recent enough to represent the
+        # requested end. An old quote is NOT an executable EOD liquidation.
+        if (pd.Timestamp(parse_time(pos.entry_time)) < last_at <= pd.Timestamp(end_dt)
+                and 0 <= seconds_stale <= strategy.execution.max_exit_quote_delay_seconds):
             close_position(last_at.isoformat(), _executable_exit_price(pos, last.to_dict(), strategy), 'END_OF_DATA')
     if pos is not None and unresolved_exposure is None:
         unresolved_exposure = {
