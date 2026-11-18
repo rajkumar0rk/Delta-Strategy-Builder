@@ -83,7 +83,7 @@ export default function App(){
   setChart(null);
   void api.preview({...selectionBody(),start:s,end:e,indicators:done.result.strategy.indicators,strategy:done.result.strategy})
    .then(p=>{if(previewSeq===autoPreviewSeq.current)setChart(maskOpenPositions({...p,markers:done.result.markers},done.result.trades))})
-   .catch(e=>{if(previewSeq===autoPreviewSeq.current)setStatus(`Backtest completed; chart preview unavailable: ${String(e)}`)})}catch(e){setStatus(String(e))}finally{setBusy(false);setActiveJobId(null)}};
+   .catch(e=>{if(previewSeq===autoPreviewSeq.current)setStatus(`Backtest completed; chart preview unavailable: ${String(e)}`)}); }catch(e){setStatus(String(e))}finally{setBusy(false);setActiveJobId(null)}};
  const stopBacktest=async()=>{if(!activeJobId)return;try{const stopped=await api.stop(activeJobId);setJob(stopped);setStatus(stopped.message||'Stop requested…')}catch(e){setStatus(`Stop failed: ${String(e)}`)}};
 
  const importStrategy=async(file:File)=>{try{const raw=JSON.parse(await file.text());const candidate=raw.strategy??raw;const valid=await api.validate(candidate);setStrategy(valid.strategy);setResult(null);setStatus(`Imported strategy: ${valid.strategy.name}. Migrated to the V15.1 strategy model.`)}catch(e){setStatus(`Import failed: ${String(e)}`)}};
