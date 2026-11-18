@@ -175,3 +175,17 @@ def test_importable_options_shared_pullback_and_ai_prompt_contract():
                 'BUY CALL/BUY PUT', 'option premium', 'underlying_tick_size',
                 'OPTIONS_PULLBACK_BACKTEST.md'):
         assert key.lower() in p.lower()
+
+
+def test_futures_ai_prompt_includes_capital_stop_basis_fees_and_exit_parity():
+    strategy = StrategyConfig(market_type="FUTURES")
+    prompt = build_strategy_prompt(AiStrategyPromptRequest(strategy=strategy))
+    for phrase in ("futures.capital_stop.enabled=true", "capital_basis=FIXED_USD",
+                   "capital_usd=10", "loss_percent=15", "ENTRY_MARGIN",
+                   "ACCOUNT_EQUITY", "futures.force_exit_time=null",
+                   "risk.max_hold_minutes=null", "GST"):
+        assert phrase in prompt
+    assert "capital_stop" in StrategyConfig.model_json_schema()["$defs"]["FuturesConfig"]["properties"]
+    assert "loss_percent" in StrategyConfig.model_json_schema()["$defs"]["FuturesCapitalStopConfig"]["properties"]
+
+
