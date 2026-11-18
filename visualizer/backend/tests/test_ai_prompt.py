@@ -185,3 +185,21 @@ def test_options_signal_stop_and_futures_schema_remain_documented():
     assert 'signal_candle_execution_timeframe' in prompt
     assert 'FUTURES' in prompt
     assert 'BUY CALL' in prompt
+
+
+
+def test_futures_ai_prompt_rejects_silent_drop_of_allocated_capital_stop():
+    from app.models import FuturesCapitalStopConfig
+    strategy=StrategyConfig(market_type="FUTURES")
+    strategy.futures.capital_stop=FuturesCapitalStopConfig(
+        enabled=True,capital_basis="FIXED_USD",capital_usd=10,loss_percent=15)
+    restored=StrategyConfig.model_validate(strategy.model_dump())
+    assert restored.futures.capital_stop.enabled
+    assert restored.futures.capital_stop.capital_usd==10
+    assert restored.futures.capital_stop.loss_percent==15
+    p=build_strategy_prompt(AiStrategyPromptRequest(strategy=strategy))
+    for key in ("futures.capital_stop.enabled=true","capital_basis=FIXED_USD",
+                "capital_usd=10","loss_percent=15","ENTRY_MARGIN",
+                "ACCOUNT_EQUITY","risk.max_hold_minutes=null","GST"):
+        assert key in p
+    assert "capital_stop" in StrategyConfig.model_json_schema()["$defs"]["FuturesConfig"]["properties"]
