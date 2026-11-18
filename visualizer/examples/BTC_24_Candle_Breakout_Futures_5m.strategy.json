@@ -1,0 +1,486 @@
+{
+  "schema_version": 15,
+  "app": "BTC Strategy Lab",
+  "strategy": {
+    "name": "BTCUSD Futures | 24-Candle Breakout | Long + Short | 5m",
+    "market_type": "FUTURES",
+    "timeframe": "5m",
+    "direction_mode": "BOTH",
+    "call_action": "BUY",
+    "put_action": "BUY",
+    "call_signal_mode": "ORDER_ONLY",
+    "put_signal_mode": "ORDER_ONLY",
+    "call_exit_signal_mode": "ORDER_ONLY",
+    "put_exit_signal_mode": "ORDER_ONLY",
+    "call_alert_message": "Bullish 24-candle breakout: LONG BTCUSD futures",
+    "put_alert_message": "Bearish 24-candle breakout: SHORT BTCUSD futures",
+    "call_exit_alert_message": "Close LONG BTCUSD futures: EMA/VWAP reversal",
+    "put_exit_alert_message": "Close SHORT BTCUSD futures: EMA/VWAP reversal",
+    "indicators": [
+      {
+        "id": "ema9",
+        "kind": "EMA",
+        "params": {
+          "period": 9,
+          "source": "close"
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "ema20",
+        "kind": "EMA",
+        "params": {
+          "period": 20,
+          "source": "close"
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "ema50",
+        "kind": "EMA",
+        "params": {
+          "period": 50,
+          "source": "close"
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "vwap",
+        "kind": "VWAP",
+        "params": {},
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "rsi14",
+        "kind": "RSI",
+        "params": {
+          "period": 14
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "atr14",
+        "kind": "ATR",
+        "params": {
+          "period": 14
+        },
+        "visible": false,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "volRatio",
+        "kind": "VOLUME_RATIO",
+        "params": {
+          "period": 20
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "don24",
+        "kind": "DONCHIAN",
+        "params": {
+          "period": 24
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "adx14",
+        "kind": "ADX_DMI",
+        "params": {
+          "period": 14
+        },
+        "visible": false,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "cstr14",
+        "kind": "CANDLE_STRENGTH",
+        "params": {
+          "atr_period": 14
+        },
+        "visible": false,
+        "chart_only": false,
+        "timeframe": "strategy"
+      }
+    ],
+    "call_entry": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "c1",
+          "left": "ema9",
+          "operator": "GT",
+          "right": "ema20",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "c2",
+          "left": "ema20",
+          "operator": "GT",
+          "right": "ema50",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "c3",
+          "left": "close",
+          "operator": "GT",
+          "right": "vwap",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "c4",
+          "left": "rsi14",
+          "operator": "GTE",
+          "right": null,
+          "value": 55,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "c5",
+          "left": "volRatio",
+          "operator": "GTE",
+          "right": null,
+          "value": 1.2,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "call_24_break",
+          "left": "close",
+          "operator": "CROSSES_ABOVE",
+          "right": "don24.upper",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 24
+        }
+      ],
+      "groups": [
+        {
+          "mode": "ANY",
+          "min_pass": 1,
+          "conditions": [
+            {
+              "id": "call_adx",
+              "left": "adx14.adx",
+              "operator": "GTE",
+              "right": null,
+              "value": 22,
+              "value2": null,
+              "left_offset": 0,
+              "right_offset": 0,
+              "lookback_bars": 5
+            },
+            {
+              "id": "call_body",
+              "left": "cstr14.body_atr",
+              "operator": "GTE",
+              "right": null,
+              "value": 0.55,
+              "value2": null,
+              "left_offset": 0,
+              "right_offset": 0,
+              "lookback_bars": 5
+            }
+          ],
+          "groups": []
+        }
+      ]
+    },
+    "put_entry": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "c6",
+          "left": "ema9",
+          "operator": "LT",
+          "right": "ema20",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "c7",
+          "left": "ema20",
+          "operator": "LT",
+          "right": "ema50",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "c8",
+          "left": "close",
+          "operator": "LT",
+          "right": "vwap",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "c9",
+          "left": "rsi14",
+          "operator": "LTE",
+          "right": null,
+          "value": 45,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "c10",
+          "left": "volRatio",
+          "operator": "GTE",
+          "right": null,
+          "value": 1.2,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "put_24_break",
+          "left": "close",
+          "operator": "CROSSES_BELOW",
+          "right": "don24.lower",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 24
+        }
+      ],
+      "groups": [
+        {
+          "mode": "ANY",
+          "min_pass": 1,
+          "conditions": [
+            {
+              "id": "put_adx",
+              "left": "adx14.adx",
+              "operator": "GTE",
+              "right": null,
+              "value": 22,
+              "value2": null,
+              "left_offset": 0,
+              "right_offset": 0,
+              "lookback_bars": 5
+            },
+            {
+              "id": "put_body",
+              "left": "cstr14.body_atr",
+              "operator": "GTE",
+              "right": null,
+              "value": 0.55,
+              "value2": null,
+              "left_offset": 0,
+              "right_offset": 0,
+              "lookback_bars": 5
+            }
+          ],
+          "groups": []
+        }
+      ]
+    },
+    "call_exit": {
+      "mode": "ANY",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "c11",
+          "left": "ema9",
+          "operator": "CROSSES_BELOW",
+          "right": "ema20",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "c12",
+          "left": "close",
+          "operator": "CROSSES_BELOW",
+          "right": "vwap",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        }
+      ],
+      "groups": []
+    },
+    "put_exit": {
+      "mode": "ANY",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "c13",
+          "left": "ema9",
+          "operator": "CROSSES_ABOVE",
+          "right": "ema20",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        },
+        {
+          "id": "c14",
+          "left": "close",
+          "operator": "CROSSES_ABOVE",
+          "right": "vwap",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 5
+        }
+      ],
+      "groups": []
+    },
+    "call_entry_lifecycles": [
+      {
+        "id": "long-24-breakout",
+        "name": "Bullish breakout -> LONG BTCUSD",
+        "enabled": true,
+        "trigger_condition_id": null,
+        "delay_bars": 0,
+        "max_wait_bars": null,
+        "max_entries_per_activation": 1,
+        "cooldown_bars": 3
+      }
+    ],
+    "put_entry_lifecycles": [
+      {
+        "id": "short-24-breakout",
+        "name": "Bearish breakout -> SHORT BTCUSD",
+        "enabled": true,
+        "trigger_condition_id": null,
+        "delay_bars": 0,
+        "max_wait_bars": null,
+        "max_entries_per_activation": 1,
+        "cooldown_bars": 3
+      }
+    ],
+    "position_policy": "EXCLUSIVE",
+    "conflict_policy": "SKIP",
+    "futures": {
+      "symbol": "BTCUSD",
+      "contract_btc": 0.001,
+      "quantity_lots": 1,
+      "leverage": 5,
+      "margin_mode": "ISOLATED",
+      "maintenance_margin_percent": 0.25,
+      "taker_fee_percent": 0.05,
+      "gst_percent": 18,
+      "slippage_bps": 2,
+      "tick_size": 0.5,
+      "funding_mode": "EXCLUDE_WITH_WARNING",
+      "stop_loss_percent": null,
+      "take_profit_percent": null,
+      "rule_risk": {
+        "enabled": true,
+        "stop_mode": "ATR",
+        "atr_indicator_id": "atr14",
+        "stop_atr_multiple": 1.5,
+        "stop_buffer_atr": 0,
+        "atr_stop_anchor": "ENTRY_FILL",
+        "reward_r_multiple": null,
+        "take_profit_points": null,
+        "trailing_enabled": false,
+        "size_mode": "FIXED",
+        "equity_risk_percent": 2,
+        "max_lots": 1,
+        "max_estimated_risk_multiple": 1
+      }
+    },
+    "risk": {
+      "stop_loss": {
+        "mode": "NONE",
+        "value": 15
+      },
+      "take_profit": {
+        "mode": "NONE",
+        "value": 30
+      },
+      "profit_protection": {
+        "mode": "NONE"
+      },
+      "starting_balance_usd": 100,
+      "quantity_mode": "FIXED",
+      "quantity": 1,
+      "budget_usd": 100,
+      "enforce_cash": true,
+      "enforce_trade_budget_strict": false,
+      "max_daily_loss_percent": null,
+      "max_trades_per_day": null,
+      "max_consecutive_losses": null,
+      "stop_trading_after_daily_loss_limit": false,
+      "close_at_session_end": false
+    },
+    "session": {
+      "timezone": "Asia/Kolkata",
+      "start": "01:00",
+      "end": "06:59",
+      "windows": [
+        {
+          "start": "01:00",
+          "end": "06:59"
+        },
+        {
+          "start": "10:00",
+          "end": "21:59"
+        }
+      ],
+      "blocked_weekdays": [
+        5,
+        6
+      ]
+    }
+  }
+}
