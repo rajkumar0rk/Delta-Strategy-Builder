@@ -728,11 +728,24 @@ class FuturesCandlePatternConfig(BaseModel):
     max_estimated_risk_multiple: float = Field(default=1.0, ge=1, le=10)
 
 
+class FuturesCapitalStopConfig(BaseModel):
+    """Opt-in net P&L loss allowance as a percent of chosen capital.
+
+    Not an option premium or BTC price percentage. Price-gap/loss guarantees
+    are impossible with backtested OHLC candles and estimated execution.
+    """
+    enabled: bool = False
+    capital_basis: Literal["FIXED_USD", "ENTRY_MARGIN", "ACCOUNT_EQUITY"] = "FIXED_USD"
+    capital_usd: float = Field(default=10.0, gt=0, le=1_000_000_000)
+    loss_percent: float = Field(default=15.0, gt=0, le=100)
+
+
 class FuturesConfig(BaseModel):
     """BTCUSD perpetual research assumptions, never an exchange-margin oracle."""
     pullback: FuturesPullbackConfig = Field(default_factory=FuturesPullbackConfig)
     adaptive: AdaptiveFuturesConfig = Field(default_factory=AdaptiveFuturesConfig)
     rule_risk: FuturesRuleRiskConfig = Field(default_factory=FuturesRuleRiskConfig)
+    capital_stop: FuturesCapitalStopConfig = Field(default_factory=FuturesCapitalStopConfig)
     candle_pattern: FuturesCandlePatternConfig = Field(default_factory=FuturesCandlePatternConfig)
     symbol: Literal["BTCUSD"] = "BTCUSD"
     contract_btc: float = Field(default=0.001, gt=0)
