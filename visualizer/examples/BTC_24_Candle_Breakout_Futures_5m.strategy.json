@@ -2,7 +2,7 @@
   "schema_version": 15,
   "app": "BTC Strategy Lab",
   "strategy": {
-    "name": "BTCUSD Futures | 24-Candle Breakout | Long + Short | 5m",
+    "name": "BTCUSD Futures | 24 Candle Breakout | Same Entry and Reversal Exits (No Time Exit)",
     "market_type": "FUTURES",
     "timeframe": "5m",
     "direction_mode": "BOTH",
@@ -424,7 +424,7 @@
       "stop_loss_percent": null,
       "take_profit_percent": null,
       "rule_risk": {
-        "enabled": true,
+        "enabled": false,
         "stop_mode": "ATR",
         "atr_indicator_id": "atr14",
         "stop_atr_multiple": 1.5,
@@ -437,7 +437,8 @@
         "equity_risk_percent": 2,
         "max_lots": 1,
         "max_estimated_risk_multiple": 1
-      }
+      },
+      "force_exit_time": null
     },
     "risk": {
       "stop_loss": {
@@ -461,7 +462,8 @@
       "max_trades_per_day": null,
       "max_consecutive_losses": null,
       "stop_trading_after_daily_loss_limit": false,
-      "close_at_session_end": false
+      "close_at_session_end": false,
+      "max_hold_minutes": null
     },
     "session": {
       "timezone": "Asia/Kolkata",
