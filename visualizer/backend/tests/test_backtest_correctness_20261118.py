@@ -144,6 +144,7 @@ def test_quote_mtm_drawdown_is_visible_even_if_completed_trade_wins(tmp_path, mo
         ('2026-01-01T00:05:00Z', 10, 11),
         ('2026-01-01T00:10:00Z', 2, 3),
         ('2026-01-01T00:15:00Z', 14, 15),
+        ('2026-01-01T00:25:00Z', 14, 15),
     ])
     result = _run(strategy)
     assert result['metrics']['trades'] == 1
@@ -156,6 +157,7 @@ def test_partial_first_stop_candle_does_not_assume_preentry_wick(tmp_path, monke
     _, strategy = _sample(tmp_path, monkeypatch, [
         ('2026-01-01T00:05:30Z', 10, 11),
         ('2026-01-01T00:15:00Z', 12, 13),
+        ('2026-01-01T00:25:00Z', 12, 13),
     ], lows=[98, 100, 70, 106, 108])
     strategy.risk.stop_loss.mode = 'UNDERLYING_SIGNAL_CANDLE'
     strategy.risk.stop_loss.signal_candle_trigger = 'WICK'
@@ -220,3 +222,39 @@ def test_option_execution_cannot_fill_after_replay_end_or_contract_expiry():
         backtest_end='2026-01-01T00:06:00Z',
     )
     assert spec is None and quote is None and why == 'CONTRACT_EXPIRED_AT_FILL'
+
+
+def test_terminal_exit_rejects_quote_stale_by_hours(tmp_path, monkeypatch):
+    _, strategy = _sample(tmp_path, monkeypatch, [
+        ('2026-01-01T00:05:00Z', 10, 11),
+        ('2026-01-01T00:10:00Z', 12, 13),
+    ])
+    result = _run(strategy)
+    assert result['metrics']['trades'] == 0
+    assert result['metrics']['open_positions_at_end'] == 1
+    assert result['unresolved_exposure']['reason'] == 'END_OF_DATA_UNCLOSED'
+
+
+def test_last_tail_option_quote_still_triggers_stop(tmp_path, monkeypatch):
+    _, strategy = _sample(tmp_path, monkeypatch, [
+        ('2026-01-01T00:05:00Z', 10, 11),
+        ('2026-01-01T00:22:00Z', 2, 3),
+    ])
+    strategy.risk.stop_loss.mode = 'OPTION_PERCENT'
+    strategy.risk.stop_loss.value = 15
+    result = _run(strategy)
+    assert result['metrics']['trades'] == 1
+    assert result['trades'][0]['exit_reason'] == 'STOP_LOSS'
+    assert result['trades'][0]['exit_time'].startswith('2026-01-01T00:22:00')
+
+
+def test_sell_margin_guard_not_bypassed_by_enforce_cash_false():
+    config = StrategyConfig(call_action='SELL')
+    config.risk.require_sell_margin_estimate = True
+    config.risk.sell_margin_per_contract_usd = 75
+    config.risk.enforce_cash = False
+    config.risk.quantity = 1
+    config.risk.budget_usd = 1000
+    spec = {'contract_value': 1, 'size_increment': 1, 'min_quantity': 1}
+    qty, _, reason = _quantity(config, spec, 10, 100, 50, 'SELL')
+    assert qty == 0 and reason == 'INSUFFICIENT_CASH'
