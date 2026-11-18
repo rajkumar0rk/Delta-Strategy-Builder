@@ -1,4 +1,4 @@
-import type {FuturesConfig,FuturesCandlePatternConfig,Strategy} from '../types';
+import type {FuturesConfig,FuturesCandlePatternConfig,FuturesCapitalStopConfig,Strategy} from '../types';
 import {AdaptiveFuturesEditor} from './AdaptiveFuturesEditor';
 
 const defaults:FuturesConfig={symbol:'BTCUSD',contract_btc:0.001,quantity_lots:1,leverage:5,
@@ -7,6 +7,11 @@ const defaults:FuturesConfig={symbol:'BTCUSD',contract_btc:0.001,quantity_lots:1
  funding_mode:'REQUIRE_CSV',margin_tier_mode:'FLAT_RESEARCH'};
 export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Strategy)=>void}){
  const f=value.futures||defaults;
+ const capitalDefaults:FuturesCapitalStopConfig={
+  enabled:false,capital_basis:'FIXED_USD',capital_usd:10,loss_percent:15};
+ const capitalStop={...capitalDefaults,...f.capital_stop};
+ const setCapitalStop=(patch:Partial<FuturesCapitalStopConfig>)=>
+  onChange({...value,futures:{...f,capital_stop:{...capitalStop,...patch}}});
  const minutes:Record<Strategy['timeframe'],number>={'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'4h':240,'1D':1440};
  const entryTimeframes=(Object.keys(minutes) as Strategy['timeframe'][]).filter(tf=>
   minutes[tf]>=minutes[value.timeframe]&&minutes[tf]%minutes[value.timeframe]===0);
@@ -135,6 +140,26 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   </div>)}
  </div>
  <div className="warning-box"><b>Accuracy limitations:</b> Futures fills use historical 5m-derived OHLC and assumed slippage, not recorded futures order-book quotes. Funding requires <code>futures_funding.csv</code> with timestamp, symbol and decimal funding_rate. Collateral and liquidation are approximations; no Delta exchange liquidation precision is claimed. Current published snapshot supports size-dependent margins above $100,000 notional; INR conversion, historical collateral tiers, and genuine liquidation remain unmodeled. Pre-8-Sep-2025 minute-by-minute funding is not supported by the 8-hour funding importer. Backtests never place orders.</div>
+ </section>
+ <section className="card"><h2>Futures allocated-capital stop (net USD)</h2>
+  <p>Example: $10 allocated capital × 15% = $1.50 maximum estimated NET loss on the whole futures position (all lots combined). Includes modeled entry and exit taker fees, GST, and slippage; not an option premium or BTC price percentage.</p>
+  <label className="switch"><input type="checkbox" checked={capitalStop.enabled}
+    onChange={e=>setCapitalStop({enabled:e.target.checked})}/>Enable allocated-capital loss stop</label>
+  {capitalStop.enabled&&<div className="form-grid">
+   <label>Capital basis<select value={capitalStop.capital_basis}
+     onChange={e=>setCapitalStop({capital_basis:e.target.value as FuturesCapitalStopConfig['capital_basis']})}>
+     <option value="FIXED_USD">Fixed allocated USD</option>
+     <option value="ENTRY_MARGIN">Estimated initial margin per position</option>
+     <option value="ACCOUNT_EQUITY">Available account balance at entry</option>
+   </select></label>
+   {capitalStop.capital_basis==='FIXED_USD'&&<label>Allocated capital (USD)<input type="number"
+     min="0.01" step="0.01" value={capitalStop.capital_usd}
+     onChange={e=>setCapitalStop({capital_usd:Number(e.target.value)})}/></label>}
+   <label>Max net loss (% of capital)<input type="number" min="0.01" max="100"
+     step="0.1" value={capitalStop.loss_percent}
+     onChange={e=>setCapitalStop({loss_percent:Number(e.target.value)})}/></label>
+  </div>}
+  <p>Positions must still satisfy actual configured leverage and estimated margin. A $10 risk allocation does not buy 10 lots. Losses can exceed the stop in OHLC gaps, funding, liquidation, and execution. Other exits remain active unless separately disabled.</p>
  </section>
  <section className="card"><h2>1H bearish candle pattern + 5M point trailing</h2>
   <p>Opt-in, SHORT-only. Completed UTC 1H candles establish the setup; the next hour opens at the first 5M bar open. Only complete 12-bar hours qualify. Each 5M high tests the fixed 1H stop, and the profit trail updates only after eligible completed 5M closes.</p>
