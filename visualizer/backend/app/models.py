@@ -561,6 +561,8 @@ class BacktestRequest(DatasetSelection):
 class PreviewRequest(DatasetSelection):
     start: str
     end: str
+    # Chart page offset; 0 shows newest candles, 30000 the preceding page.
+    chart_offset_bars: int = Field(default=0, ge=0, le=5000000)
     timeframe: Literal["5m", "10m", "15m", "30m", "1h"] = "5m"
     indicators: list[IndicatorInstance] = Field(default_factory=list)
     strategy: StrategyConfig | None = None
