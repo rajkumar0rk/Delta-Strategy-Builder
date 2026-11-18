@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from app.data_store import DataStore
-from app.engine import _quantity, _quote_ok, _select_candidates, _warmup_start, run_backtest
+from app.engine import _quantity, _quote_ok, _select_candidates, _select_option, _warmup_start, run_backtest
 from app.models import (
     BacktestRequest, Condition, IndicatorInstance, OptionSelection, RuleGroup,
     RiskConfig, StrategyConfig,
@@ -190,3 +190,33 @@ def test_saved_strategy_can_be_loaded_from_project_folder(tmp_path, monkeypatch)
     assert Path(saved['path']).exists()
     loaded = load_strategy('strategy-load-smoke')
     assert loaded['strategy']['name'] == 'Strategy load smoke'
+
+
+def test_option_execution_cannot_fill_after_replay_end_or_contract_expiry():
+    ts = pd.Timestamp('2026-01-01T00:05:00Z')
+    class LateQuote:
+        def first_quote_many(self, parts, symbol, at, seconds):
+            return {
+                'timestamp': '2026-01-01T00:05:30Z', 'bid': 9.0, 'ask': 10.0,
+                'volume': 100, 'open_interest': 1000,
+            }
+    strategy = StrategyConfig()
+    strategy.option.min_dte_days = 0
+    strategy.option.max_dte_days = 3
+    strategy.option.max_spread_percent = 50
+    inst = pd.DataFrame([{
+        'symbol': 'CE', 'activation': ts - pd.Timedelta(days=1),
+        'expiration': ts + pd.Timedelta(days=1), 'option_type': 'CE',
+        'strike': 100,
+    }])
+    spec, quote, why = _select_option(
+        LateQuote(), [], inst, ts, 100, 'CALL', strategy,
+        backtest_end='2026-01-01T00:05:10Z',
+    )
+    assert spec is None and quote is None and why == 'QUOTE_AFTER_BACKTEST_END'
+    inst.loc[0, 'expiration'] = ts + pd.Timedelta(seconds=20)
+    spec, quote, why = _select_option(
+        LateQuote(), [], inst, ts, 100, 'CALL', strategy,
+        backtest_end='2026-01-01T00:06:00Z',
+    )
+    assert spec is None and quote is None and why == 'CONTRACT_EXPIRED_AT_FILL'
