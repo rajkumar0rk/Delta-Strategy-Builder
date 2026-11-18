@@ -1,7 +1,7 @@
 from __future__ import annotations
 import csv, json, math, re, hashlib, uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Callable
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -96,22 +96,20 @@ def _select_candidates(inst: pd.DataFrame, ts: pd.Timestamp, spot: float, direct
     x = x[(x.dte >= cfg.min_dte_days) & (x.dte <= cfg.max_dte_days)]
     if x.empty:
         return x
-    ranked = []
-    for _, g in x.groupby('expiration'):
-        strikes = sorted(g.strike.unique())
-        atm_i = min(range(len(strikes)), key=lambda i: abs(strikes[i] - spot))
-        if cfg.strike_mode == 'ATM':
-            target_i = atm_i
-        else:
-            sign = (-1 if direction == 'CALL' else 1) if cfg.strike_mode == 'ITM' else (1 if direction == 'CALL' else -1)
-            target_i = max(0, min(len(strikes) - 1, atm_i + sign * cfg.strike_steps))
-        target = strikes[target_i]
-        gg = g.copy()
-        gg['strike_distance'] = abs(gg.strike - target)
-        ranked.append(gg)
-    out = pd.concat(ranked)
-    out['expiry_rank'] = (out.expiration - ts).dt.total_seconds()
-    return out.sort_values(['expiry_rank', 'strike_distance', 'strike'])
+    # Select the strike from the union of *eligible* strikes first, then search
+    # expiry dates for the same strike.  A missing front-expiry contract must not
+    # silently redefine ATM/ITM/OTM and choose an unrelated strike.
+    strikes = sorted(x.strike.unique())
+    atm_i = min(range(len(strikes)), key=lambda i: (abs(strikes[i] - spot), strikes[i]))
+    if cfg.strike_mode == 'ATM':
+        target_i = atm_i
+    else:
+        sign = (-1 if direction == 'CALL' else 1) if cfg.strike_mode == 'ITM' else (1 if direction == 'CALL' else -1)
+        target_i = max(0, min(len(strikes) - 1, atm_i + sign * cfg.strike_steps))
+    target = strikes[target_i]
+    x['strike_distance'] = (x.strike - target).abs()
+    x['expiry_rank'] = (x.expiration - ts).dt.total_seconds()
+    return x.sort_values(['strike_distance', 'expiry_rank', 'strike'])
 
 
 def _quote_stats(q: dict[str, Any]) -> dict[str, float | None]:
@@ -133,7 +131,8 @@ def _quote_ok(q, cfg, action: str = 'BUY') -> tuple[bool, str]:
     stats = _quote_stats(q)
     premium = stats['ask'] if action == 'BUY' else stats['bid']
     spread = stats['spread_percent']
-    assert premium is not None
+    if premium is None or not math.isfinite(premium) or premium <= 0 or stats['bid'] is None or stats['bid'] <= 0 or stats['ask'] is None or stats['ask'] < stats['bid']:
+        return False, 'INVALID_BID_ASK'
     if cfg.min_premium is not None and premium < cfg.min_premium:
         return False, 'PREMIUM_TOO_LOW'
     if cfg.max_premium is not None and premium > cfg.max_premium:
@@ -150,7 +149,7 @@ def _quote_ok(q, cfg, action: str = 'BUY') -> tuple[bool, str]:
 def _select_option(store, parts, inst, ts, spot, direction, strategy, action: str = 'BUY') -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
     candidates = _select_candidates(inst, ts, spot, direction, strategy.option)
     last = 'NO_OPTION_CANDIDATE'
-    for _, row in candidates.head(30).iterrows():
+    for _, row in candidates.head(250).iterrows():
         q = store.first_quote_many(parts, str(row.symbol), ts.isoformat(), strategy.execution.max_entry_quote_delay_seconds)
         if not q:
             last = 'NO_FRESH_QUOTE'
@@ -236,9 +235,15 @@ def _quantity(strategy, spec, entry_price, entry_spot, balance, action: str = 'B
 
     premium_cost = entry_price * qty * cv
     entry_fee = _delta_fee(entry_spot, entry_price, qty, cv, strategy.execution)['total_fee_usd']
-    # Long options require premium + fee cash. Short-option margin is venue/account
-    # specific and is intentionally not invented here; SELL checks entry fees only.
-    cash_required = premium_cost + entry_fee if action == 'BUY' else entry_fee
+    # A user-supplied SELL margin estimate is a conservative cash guard, not an
+    # exchange/account risk-engine calculation. Never invent missing margin.
+    if action == 'SELL':
+        margin_per_contract = getattr(strategy.risk, 'sell_margin_per_contract_usd', None)
+        if getattr(strategy.risk, 'require_sell_margin_estimate', False) and margin_per_contract is None:
+            return 0.0, 0.0, 'SELL_MARGIN_ESTIMATE_REQUIRED'
+        cash_required = entry_fee + (float(margin_per_contract) * qty if margin_per_contract is not None else 0.0)
+    else:
+        cash_required = premium_cost + entry_fee
     if strategy.risk.enforce_cash and cash_required > balance + 1e-9:
         return 0.0, cash_required, 'INSUFFICIENT_CASH'
     return qty, cash_required, None
@@ -258,10 +263,34 @@ def _dataset_fingerprint(paths) -> dict[str, Any]:
     return out
 
 
-def _backtest_cache_key(req: BacktestRequest, paths) -> str:
+def _warmup_start(req: BacktestRequest) -> str:
+    """Load past bars *before* the trading interval to stabilize causal indicators.
+
+    Exponential indicators depend on their seed, so include at least 10x their
+    configured periods on their native timeframe, plus a baseline 1000 strategy
+    candles for derived state/long-lookback rules. Never backfill with future data.
+    """
+    tf_minutes = {'5m': 5, '10m': 10, '15m': 15, '30m': 30, '1h': 60}
+    base = tf_minutes[req.strategy.timeframe]
+    required_minutes = 1000 * base
+    period_keys = {
+        'period', 'length', 'fast', 'slow', 'signal', 'ema_period',
+        'atr_period', 'sma_period', 'stoch_period', 'rsi_period',
+        'k_period', 'd_period', 'lookback_bars', 'left', 'right',
+    }
+    for indicator in req.strategy.indicators:
+        tf = tf_minutes.get(indicator.timeframe, base)
+        for key, value in indicator.params.items():
+            if key in period_keys and isinstance(value, (int, float)) and value > 0:
+                required_minutes = max(required_minutes, 10 * int(value) * tf)
+    return iso(parse_time(req.start) - timedelta(minutes=required_minutes))
+
+
+def _backtest_cache_key(req: BacktestRequest, paths, warmup_paths=None) -> str:
     payload = {
-        'engine_version': 152,
+        'engine_version': 153,
         'dataset': _dataset_fingerprint(paths),
+        'warmup_dataset': _dataset_fingerprint(warmup_paths if warmup_paths is not None else paths),
         'dataset_id': getattr(req, 'dataset_id', None),
         'dataset_ids': [x.id for x in (paths if isinstance(paths, (list, tuple)) else [paths])],
         'dataset_mode': getattr(req, 'dataset_mode', 'SINGLE'),
@@ -873,11 +902,16 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
 
     report('Resolving downloaded datasets…', 9 if getattr(req, 'auto_download_missing_data', False) else 2, 'DATA_SELECTION', 'Preflight data validation')
     parts = store.resolve_request(req, require_options=True)
+    warmup_start = _warmup_start(req)
+    warmup_parts = (
+        store.auto_select(warmup_start, req.end, require_options=False)
+        if getattr(req, 'dataset_mode', 'SINGLE') in {'ARCHIVE', 'AUTO'} else parts
+    )
 
     # Cache lookup happens before expensive CSV preflight. The key fingerprints
     # every selected source file, so a cached result is reused only while the
     # downloaded inputs remain byte/mtime-identical.
-    cache_key = _backtest_cache_key(req, parts)
+    cache_key = _backtest_cache_key(req, parts, warmup_parts)
     cached = _cached_result(cache_key)
     if cached is not None:
         report(f"Cache hit — reused identical V15.1 backtest {cached.get('run_id', '')}.", 100, 'CACHE_HIT', 'Complete')
@@ -892,13 +926,18 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         raise ValueError('Preflight failed: ' + '; '.join(preflight['errors']))
 
     report('Loading and merging underlying bars…', 12, 'LOAD_BARS', 'Load option instruments')
-    bars = store.load_bars_many(parts, req.start, req.end, req.strategy.timeframe)
+    bars = store.load_bars_many(warmup_parts, warmup_start, req.end, req.strategy.timeframe)
     report('Loading and de-duplicating option instruments…', 18, 'LOAD_INSTRUMENTS', 'Calculate indicators')
     inst = store.load_instruments_many(parts)
     report('Calculating selected indicators and V15.1 trend state…', 25, 'INDICATORS', 'Prepare option quote indexes')
     strategy = req.strategy
     frame, series_meta = compute_indicators(bars, strategy.indicators, strategy.timeframe)
     _prepare_strategy_state(frame, strategy)
+    # All warm-up rows are informational only; never trade outside the request.
+    frame = frame[(frame.index >= pd.Timestamp(parse_time(req.start))) &
+                  (frame.index < pd.Timestamp(parse_time(req.end)))]
+    if frame.empty:
+        raise ValueError('No completed strategy candles in the selected backtest interval')
     signal_stop = strategy.risk.stop_loss
     signal_stop_active = signal_stop.mode == 'UNDERLYING_SIGNAL_CANDLE'
     # For HTF strategies, monitoring 5m completed source candles avoids losing
