@@ -1680,11 +1680,21 @@ def chart_payload(req, run_result=None):
     parts = store.resolve_request(req, require_options=False)
     strategy = getattr(req, 'strategy', None)
     timeframe = strategy.timeframe if strategy is not None else getattr(req, 'timeframe', '5m')
-    bars = store.load_bars_many(parts, req.start, req.end, timeframe)
     instances = strategy.indicators if strategy is not None else req.indicators
+    context = SimpleNamespace(start=req.start, strategy=(
+        strategy if strategy is not None else SimpleNamespace(timeframe=timeframe, indicators=instances)
+    ))
+    warmup_start = _warmup_start(context)
+    warmup_parts = (
+        store.auto_select(warmup_start, req.end, require_options=False)
+        if getattr(req, 'dataset_mode', 'SINGLE') in {'ARCHIVE', 'AUTO'} else parts
+    )
+    bars = store.load_bars_many(warmup_parts, warmup_start, req.end, timeframe)
     frame, meta = compute_indicators(bars, instances, timeframe)
     if strategy is not None:
         _prepare_strategy_state(frame, strategy)
+    frame = frame[(frame.index >= pd.Timestamp(parse_time(req.start))) &
+                  (frame.index < pd.Timestamp(parse_time(req.end)))]
     if len(frame) > 30000:
         raise ValueError(
             f'Chart range contains {len(frame):,} source candles. Narrow the chart date range below 30,000 candles; '
