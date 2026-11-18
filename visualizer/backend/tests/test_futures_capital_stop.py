@@ -137,3 +137,6 @@ def test_futures_engine_exits_10_lots_on_net_1_50_loss(tmp_path, monkeypatch):
     assert trade["capital_stop_loss_usd"] == pytest.approx(1.5)
     assert trade["net_pnl_usd"] == pytest.approx(-1.5)
     assert result["metrics"]["capital_stop_exits"] >= 1
+    assert result["strategy"]["futures"]["capital_stop"]["enabled"] is True
+    assert result["strategy"]["futures"]["capital_stop"]["capital_usd"] == 10
+    assert result["futures_research"]["capital_stop"]["loss_percent"] == 15
