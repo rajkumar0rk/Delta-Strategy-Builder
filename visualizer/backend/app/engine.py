@@ -962,6 +962,11 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
     peak_equity = equity
     max_dd = 0.0
     max_dd_percent = 0.0
+    # Quote-observed mark-to-market drawdown complements closed-trade drawdown.
+    # It uses executable liquidation-side prices plus estimated exit fees.
+    mtm_peak_equity = balance
+    max_mtm_dd = 0.0
+    max_mtm_dd_percent = 0.0
     equity_curve: list[dict[str, Any]] = [{
         'timestamp': req.start,
         'equity_usd': equity,
@@ -1033,10 +1038,32 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
 
     def spot_at(timestamp_text: str) -> float:
         target = pd.Timestamp(parse_time(timestamp_text))
-        eligible = frame.loc[frame.index <= target, 'close']
-        if len(eligible):
-            return float(eligible.iloc[-1])
+        # Binary search avoids re-scanning the entire history for every quote.
+        idx = int(frame.index.searchsorted(target, side='right')) - 1
+        if idx >= 0:
+            return float(frame.iloc[idx].close)
         return float(frame.iloc[0].close)
+
+    def record_mark(q: dict[str, Any]) -> None:
+        nonlocal mtm_peak_equity, max_mtm_dd, max_mtm_dd_percent
+        if pos is None:
+            return
+        liquidation_price = _executable_exit_price(pos, q, strategy)
+        cv = float(pos.spec['contract_value'])
+        exit_fee = _delta_fee(
+            spot_at(str(q['timestamp'])), liquidation_price,
+            pos.quantity, cv, strategy.execution
+        )['total_fee_usd']
+        unrealized = (
+            (liquidation_price - pos.entry_price) if pos.action == 'BUY'
+            else (pos.entry_price - liquidation_price)
+        ) * pos.quantity * cv - pos.entry_fee - exit_fee
+        marked_equity = balance + unrealized
+        mtm_peak_equity = max(mtm_peak_equity, marked_equity)
+        drawdown = max(0.0, mtm_peak_equity - marked_equity)
+        max_mtm_dd = max(max_mtm_dd, drawdown)
+        if mtm_peak_equity > 0:
+            max_mtm_dd_percent = max(max_mtm_dd_percent, 100.0 * drawdown / mtm_peak_equity)
 
     def close_position(exit_time: str, exit_price: float, reason: str, exit_rule: dict[str, Any] | None = None):
         nonlocal pos, balance, equity, peak_equity, max_dd, max_dd_percent, pos_quotes, q_cursor
@@ -1049,6 +1076,8 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         net = gross - pos.entry_fee - exit_fee
         balance += net
         equity = balance
+        nonlocal mtm_peak_equity, max_mtm_dd, max_mtm_dd_percent
+        mtm_peak_equity = max(mtm_peak_equity, balance)
         peak_equity = max(peak_equity, equity)
         current_dd = peak_equity - equity
         current_dd_percent = (current_dd / peak_equity * 100.0) if peak_equity > 0 else 0.0
@@ -1171,9 +1200,14 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             while stop_cursor < len(stop_times) and stop_times[stop_cursor] <= ts:
                 stop_at = stop_times[stop_cursor]
                 if pos is not None and pos.underlying_stop_trigger_time is None:
-                    if stop_at > pd.Timestamp(parse_time(pos.entry_time)):
+                    entry_at = pd.Timestamp(parse_time(pos.entry_time))
+                    if stop_at > entry_at:
+                        # A wick on a partially elapsed candle could have occurred
+                        # before the option was bought/sold. Do not infer its time.
+                        monitor_minutes = 5 if signal_stop.signal_candle_execution_timeframe == '5m' else {'5m': 5, '10m': 10, '15m': 15, '30m': 30, '1h': 60}[strategy.timeframe]
+                        fully_post_entry = stop_at - pd.Timedelta(minutes=monitor_minutes) >= entry_at
                         bar_values = SimpleNamespace(low=stop_lows[stop_cursor], high=stop_highs[stop_cursor], close=stop_closes[stop_cursor])
-                        if _signal_stop_hit(pos, bar_values, signal_stop.signal_candle_trigger):
+                        if (signal_stop.signal_candle_trigger == 'CLOSE' or fully_post_entry) and _signal_stop_hit(pos, bar_values, signal_stop.signal_candle_trigger):
                             first_stop_at = stop_at
                 stop_cursor += 1
                 if first_stop_at is not None:
@@ -1190,6 +1224,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
                 q = pos_quotes.iloc[q_cursor].to_dict()
                 q_cursor += 1
                 quote_at = pd.Timestamp(q['timestamp'])
+                record_mark(q)
                 trigger_at = (
                     pd.Timestamp(parse_time(pos.underlying_stop_trigger_time))
                     if pos.underlying_stop_trigger_time
@@ -1395,7 +1430,12 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
 
         inc = float(spec['price_increment'])
         slip = strategy.execution.slippage_ticks * inc
-        entry = float(q['ask']) + slip if action == 'BUY' else max(0.0, float(q['bid']) - slip)
+        entry = float(q['ask']) + slip if action == 'BUY' else float(q['bid']) - slip
+        if not math.isfinite(entry) or entry <= 0:
+            add_marker(ts.isoformat(), 'reject', direction, 'INVALID_EXECUTION_PRICE',
+                       _event_details('Invalid option entry price', 'INVALID_EXECUTION_PRICE',
+                                      symbol=str(spec['symbol']), entry_price=entry))
+            continue
         qty, cost, quantity_reject = _quantity(strategy, spec, entry, float(row.close), balance, action)
         if qty <= 0:
             why = quantity_reject or 'INSUFFICIENT_CASH'
@@ -1427,6 +1467,7 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
             entry_lifecycle_id=chosen_behavior.id, entry_lifecycle_name=chosen_behavior.name,
             underlying_stop_level=stop_level,
         )
+        record_mark(q)
         chosen_cycle.entries += 1
         chosen_cycle.last_entry_index = i
         if chosen_breakout_origin is not None:
@@ -1503,9 +1544,21 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
     if pos is not None and pos_quotes is not None and len(pos_quotes) and not pos.underlying_stop_trigger_time:
         last = pos_quotes.iloc[-1]
         last_at = pd.Timestamp(last.timestamp)
-        if pd.Timestamp(parse_time(pos.entry_time)) <= last_at <= pd.Timestamp(end_dt):
-            # Preserve ordinary legacy end-of-data close (not a stop fill).
+        if pd.Timestamp(parse_time(pos.entry_time)) < last_at <= pd.Timestamp(end_dt):
+            # Never liquidate at the *same* quote used to enter a position.
             close_position(last_at.isoformat(), _executable_exit_price(pos, last.to_dict(), strategy), 'END_OF_DATA')
+    if pos is not None and unresolved_exposure is None:
+        unresolved_exposure = {
+            'symbol': pos.symbol, 'direction': pos.direction, 'action': pos.action,
+            'entry_time': pos.entry_time, 'reason': 'END_OF_DATA_UNCLOSED',
+            'last_quote_time': (
+                pd.Timestamp(pos_quotes.iloc[-1].timestamp).isoformat()
+                if pos_quotes is not None and len(pos_quotes) else None
+            ),
+        }
+        add_marker(pos.entry_time, 'reject', pos.direction, 'END_OF_DATA_UNCLOSED',
+                   _event_details('Unclosed option position', 'END_OF_DATA_UNCLOSED',
+                                  **unresolved_exposure))
 
     wins = sum(t['net_pnl_usd'] > 0 for t in trades)
     losses = sum(t['net_pnl_usd'] < 0 for t in trades)
@@ -1526,6 +1579,9 @@ def run_backtest(req: BacktestRequest, progress: Callable[..., None] | None = No
         'return_percent': (balance / strategy.risk.starting_balance_usd - 1) * 100,
         'max_closed_trade_drawdown_usd': max_dd,
         'max_closed_trade_drawdown_percent': max_dd_percent,
+        'max_mark_to_market_drawdown_usd': max_mtm_dd,
+        'max_mark_to_market_drawdown_percent': max_mtm_dd_percent,
+        'open_positions_at_end': 1 if pos is not None else 0,
         'avg_mfe_percent': (sum(t['mfe_percent'] for t in trades) / len(trades) if trades else 0),
         'avg_mae_percent': (sum(t['mae_percent'] for t in trades) / len(trades) if trades else 0),
         'daily_risk_blocks': int(daily_state['blocked_count']),
