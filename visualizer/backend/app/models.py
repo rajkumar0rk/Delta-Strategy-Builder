@@ -269,7 +269,7 @@ class RiskConfig(BaseModel):
     stop_loss: StopLoss = Field(default_factory=StopLoss)
     take_profit: TakeProfit = Field(default_factory=TakeProfit)
     profit_protection: ProfitProtection = Field(default_factory=ProfitProtection)
-    max_hold_minutes: int | None = Field(default=240, ge=1)
+    max_hold_minutes: int | None = Field(default=None, ge=1)
     starting_balance_usd: float = Field(default=100.0, gt=0)
     quantity_mode: Literal["FIXED", "BUDGET"] = "FIXED"
     quantity: float = Field(default=10.0, gt=0)
@@ -280,6 +280,10 @@ class RiskConfig(BaseModel):
     # validity (min_quantity + size_increment) is always enforced either way.
     enforce_trade_budget_strict: bool = True
     enforce_cash: bool = True
+    # User-provided conservative margin requirement, not a venue margin quote.
+    # Older strategies remain compatible when the guard is disabled.
+    require_sell_margin_estimate: bool = False
+    sell_margin_per_contract_usd: float | None = Field(default=None, gt=0)
     # V10 daily circuit breakers. Percent is measured from the day's opening
     # closed-trade equity. Limits reset at midnight in session.timezone.
     max_daily_loss_percent: float | None = Field(default=None, gt=0, le=100)
