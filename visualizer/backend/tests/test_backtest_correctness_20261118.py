@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from app.data_store import DataStore
-from app.engine import _quantity, _quote_ok, _select_candidates, _select_option, _warmup_start, run_backtest
+from app.engine import _chart_page, _quantity, _quote_ok, _select_candidates, _select_option, _warmup_start, run_backtest
 from app.models import (
     BacktestRequest, Condition, IndicatorInstance, OptionSelection, RuleGroup,
     RiskConfig, StrategyConfig,
@@ -144,7 +144,7 @@ def test_quote_mtm_drawdown_is_visible_even_if_completed_trade_wins(tmp_path, mo
         ('2026-01-01T00:05:00Z', 10, 11),
         ('2026-01-01T00:10:00Z', 2, 3),
         ('2026-01-01T00:15:00Z', 14, 15),
-        ('2026-01-01T00:25:00Z', 14, 15),
+        ('2026-01-01T00:24:30Z', 14, 15),
     ])
     result = _run(strategy)
     assert result['metrics']['trades'] == 1
@@ -157,7 +157,7 @@ def test_partial_first_stop_candle_does_not_assume_preentry_wick(tmp_path, monke
     _, strategy = _sample(tmp_path, monkeypatch, [
         ('2026-01-01T00:05:30Z', 10, 11),
         ('2026-01-01T00:15:00Z', 12, 13),
-        ('2026-01-01T00:25:00Z', 12, 13),
+        ('2026-01-01T00:24:30Z', 12, 13),
     ], lows=[98, 100, 70, 106, 108])
     strategy.risk.stop_loss.mode = 'UNDERLYING_SIGNAL_CANDLE'
     strategy.risk.stop_loss.signal_candle_trigger = 'WICK'
@@ -258,3 +258,46 @@ def test_sell_margin_guard_not_bypassed_by_enforce_cash_false():
     spec = {'contract_value': 1, 'size_increment': 1, 'min_quantity': 1}
     qty, _, reason = _quantity(config, spec, 10, 100, 50, 'SELL')
     assert qty == 0 and reason == 'INSUFFICIENT_CASH'
+
+
+def test_chart_pagination_keeps_candles_contiguous_without_synthetic_ohlc():
+    frame = pd.DataFrame({'close': list(range(61001))},
+                         index=pd.date_range('2025-01-01', periods=61001, freq='5min', tz='UTC'))
+    last, meta = _chart_page(frame, 0)
+    middle, middle_meta = _chart_page(frame, 30000)
+    first, first_meta = _chart_page(frame, 60000)
+    assert len(last) == len(middle) == 30000 and len(first) == 1001
+    assert last.iloc[0].close == 31001
+    assert middle.iloc[0].close == 1001
+    assert middle.iloc[-1].close + 1 == last.iloc[0].close
+    assert first.iloc[-1].close + 1 == middle.iloc[0].close
+    assert meta['has_older'] and not meta['has_newer']
+    assert middle_meta['has_older'] and middle_meta['has_newer']
+    assert not first_meta['has_older'] and first_meta['has_newer']
+
+
+def test_final_five_minute_underlying_wick_stop_after_last_ten_minute_strategy_candle(tmp_path, monkeypatch):
+    folder, strategy = _sample(tmp_path, monkeypatch, [
+        ('2026-01-01T00:10:00Z', 10, 11),
+        ('2026-01-01T00:25:20Z', 8, 9),
+    ])
+    # 00:20 is the final completed 10m strategy candle. The 00:25
+    # underlying candle is complete and must still trigger a frozen stop.
+    bars = pd.read_csv(folder / 'underlying_bars.csv')
+    bars = pd.concat([bars, pd.DataFrame([{
+        'timestamp': '2026-01-01T00:25:00Z',
+        'open': 108, 'high': 109, 'low': 90, 'close': 107,
+        'volume': 100,
+    }])], ignore_index=True)
+    bars.to_csv(folder / 'underlying_bars.csv', index=False)
+    strategy.timeframe = '10m'
+    strategy.risk.stop_loss.mode = 'UNDERLYING_SIGNAL_CANDLE'
+    strategy.risk.stop_loss.signal_candle_trigger = 'WICK'
+    strategy.risk.stop_loss.signal_candle_execution_timeframe = '5m'
+    result = run_backtest(BacktestRequest(
+        dataset_id='sample', start='2026-01-01T00:00:00Z',
+        end='2026-01-01T00:26:00Z', strategy=strategy,
+    ))
+    assert result['metrics']['trades'] == 1
+    assert result['trades'][0]['exit_reason'] == 'UNDERLYING_SIGNAL_CANDLE_STOP'
+    assert result['trades'][0]['exit_time'].startswith('2026-01-01T00:25:20')
