@@ -280,3 +280,20 @@ guarantee fills at synthetic bid/ask, or compute actual options margin.
 Changing the backtest cache semantics increments the engine cache identity.
 Regression tests live in
 `backend/tests/test_backtest_correctness_20261118.py`.
+
+
+### November 18 follow-up — long-run chart and execution safety
+
+- Charts now paginate older/newer 30,000-candle contiguous windows instead of
+  failing when a strategy range exceeds 30,000 candles. Trade markers are limited
+  to the visible page; chart paging does not change backtest settings or trades.
+- Backtest end is an exclusive timestamp; fills on that boundary are not accepted.
+  Premium stops and 5m underlying signal-candle stops remain active through the
+  final observed quotes even after the last higher-timeframe strategy candle.
+- The engine will not produce a fictional `END_OF_DATA` close with a quote older
+  than `max_exit_quote_delay_seconds`. That exposure remains open/unresolved
+  and must be considered when interpreting net return and profit factor.
+- Required estimated SELL collateral checks cannot be disabled by switching
+  `risk.enforce_cash` off. This still cannot reproduce actual Delta margin.
+- These features are regression-tested. Synthetic market data remains unsuitable
+  for claiming historical tick-level fills or verified live trading profit.
