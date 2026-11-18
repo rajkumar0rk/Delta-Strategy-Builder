@@ -28,7 +28,19 @@ describe('BTCUSD perpetual futures market editor',()=>{
    expect(html).toContain('Funding history');
    expect(html).not.toContain('auto_sync_futures_observations');
  });
- it('clearly labels simulated futures fills in result report',()=>{
+ it('renders configurable capital stop independently of rule risk and time exits',()=>{
+  const s=defaultStrategy();s.market_type='FUTURES';
+  s.futures={...s.futures!,capital_stop:{
+   enabled:true,capital_basis:'FIXED_USD',capital_usd:10,loss_percent:15}};
+  const html=renderToStaticMarkup(<FuturesSettings value={s} onChange={()=>{}}/>);
+  for(const token of ['Futures allocated-capital stop','Fixed allocated USD',
+    'Estimated initial margin per position','Available account balance',
+    'Allocated capital (USD)','Max net loss','15%','$1.50','Maximum hold']){
+   expect(html).toContain(token);
+  }
+  expect(s.futures.capital_stop?.loss_percent).toBe(15);
+ });
+  it('clearly labels simulated futures fills in result report',()=>{
   const s=defaultStrategy();s.market_type='FUTURES';
   const result:BacktestResult={run_id:'test',result_dir:'test',storage_mode:'COMPACT',strategy:s,
     start:'2026-01-01T00:00:00Z',end:'2026-01-02T00:00:00Z',
