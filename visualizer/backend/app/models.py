@@ -687,11 +687,24 @@ class FuturesRuleRiskConfig(BaseModel):
         return self
 
 
+class FuturesCapitalStopConfig(BaseModel):
+    """Optional net-USD loss limit as a percentage of chosen allocated capital.
+
+    This is not an option-premium percentage or an underlying BTC price percentage.
+    It is a backtest OHLC stop approximation, not a guaranteed loss ceiling.
+    """
+    enabled: bool = False
+    capital_basis: Literal["FIXED_USD", "ENTRY_MARGIN", "ACCOUNT_EQUITY"] = "FIXED_USD"
+    capital_usd: float = Field(default=10.0, gt=0, le=1_000_000_000)
+    loss_percent: float = Field(default=15.0, gt=0, le=100)
+
+
 class FuturesConfig(BaseModel):
     """BTCUSD perpetual research assumptions, never an exchange-margin oracle."""
     pullback: FuturesPullbackConfig = Field(default_factory=FuturesPullbackConfig)
     adaptive: AdaptiveFuturesConfig = Field(default_factory=AdaptiveFuturesConfig)
     rule_risk: FuturesRuleRiskConfig = Field(default_factory=FuturesRuleRiskConfig)
+    capital_stop: FuturesCapitalStopConfig = Field(default_factory=FuturesCapitalStopConfig)
     symbol: Literal["BTCUSD"] = "BTCUSD"
     contract_btc: float = Field(default=0.001, gt=0)
     quantity_lots: int = Field(default=1, ge=1, le=100000)
