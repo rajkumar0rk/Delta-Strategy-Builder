@@ -36,7 +36,7 @@ jobs:
       - name: Compile backend
         run: python -m compileall -q app tests
       - name: Run regression and existing correctness tests
-        run: python -m pytest -q tests/test_backtest_correctness_20261118.py tests/test_v15_1_correctness.py tests/test_engine_v4.py
+        run: python -m pytest -q tests/test_backtest_correctness_20261118.py tests/test_v15_1_correctness.py tests/test_engine_v4.py tests/test_jobs_v11.py
   frontend:
     runs-on: ubuntu-latest
     defaults:
