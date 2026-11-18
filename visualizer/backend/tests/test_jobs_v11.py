@@ -37,7 +37,7 @@ def test_finished_jobs_are_bounded_in_memory():
     deadline = time.time() + 4
     while time.time() < deadline:
         with manager._lock:
-            all_finished = len(manager._finished) >= 11
+            all_finished = ids[-1] in manager._jobs and manager._jobs[ids[-1]]['status'] == 'COMPLETE'
         if all_finished:
             break
         time.sleep(0.01)
