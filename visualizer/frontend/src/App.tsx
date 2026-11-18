@@ -44,7 +44,7 @@ export default function App(){
  const [storageMode,setStorageMode]=useState<StorageMode>('ANALYSIS');
  const importRef=useRef<HTMLInputElement>(null);const autoPreviewSeq=useRef(0);
  const completedRunSignature=useRef<string|null>(null);
- const signature=(cfg:Strategy)=>JSON.stringify({cfg,datasetMode,datasetId,datasetIds,start,end});
+ const signature=(cfg:Strategy)=>JSON.stringify({cfg,datasetMode,datasetId,datasetIds,start,end},(key,value)=>key==='visible'?undefined:value);
  useEffect(()=>{
   if(result&&completedRunSignature.current!==signature(strategy)){
    setResult(null);setPreflight(null);
