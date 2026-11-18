@@ -1,6 +1,13 @@
 name: Visualizer backtest correctness
 
 on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - 'visualizer/backend/**'
+      - 'visualizer/frontend/**'
+      - '.github/workflows/visualizer-backtest-logic.yml'
   push:
     branches:
       - fix/visualizer-backtest-logic-20261118
