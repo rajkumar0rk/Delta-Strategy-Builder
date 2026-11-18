@@ -12,8 +12,17 @@ class JobCancelled(RuntimeError):
 class JobManager:
     def __init__(self):
         self._jobs: dict[str, dict[str, Any]] = {}
+        self._finished: list[str] = []
+        self._max_finished = 8
         self._lock = Lock()
         self._pool = ThreadPoolExecutor(max_workers=2)
+
+    def _retain_finished_locked(self, jid: str) -> None:
+        # Progress jobs are transient; durable backtest results are on disk.
+        # Remove the oldest completed in-memory payloads to prevent RAM growth.
+        self._finished.append(jid)
+        while len(self._finished) > self._max_finished:
+            self._jobs.pop(self._finished.pop(0), None)
 
     def _cancel_requested(self, jid: str) -> bool:
         with self._lock:
@@ -68,6 +77,7 @@ class JobManager:
                 job = self._jobs[jid]
                 if job.get('cancel_requested'):
                     job.update(status='CANCELLED', stage='CANCELLED', message='Stopped before start', next_step='')
+                    self._retain_finished_locked(jid)
                     return
                 job.update(status='RUNNING', stage='STARTING', message='Starting backtest…', progress_percent=1.0)
             try:
@@ -81,18 +91,21 @@ class JobManager:
                             status='COMPLETE', message='Complete', stage='COMPLETE',
                             progress_percent=100.0, next_step='', result=result,
                         )
+                    self._retain_finished_locked(jid)
             except JobCancelled as exc:
                 with self._lock:
                     self._jobs[jid].update(
                         status='CANCELLED', message=str(exc), stage='CANCELLED', next_step='',
                         error=None, result=None,
                     )
+                    self._retain_finished_locked(jid)
             except Exception as exc:
                 with self._lock:
                     self._jobs[jid].update(
                         status='FAILED', message=str(exc), stage='FAILED', next_step='',
                         error=f'{type(exc).__name__}: {exc}',
                     )
+                    self._retain_finished_locked(jid)
 
         self._pool.submit(work)
         return jid
