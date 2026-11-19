@@ -1,0 +1,857 @@
+{
+  "schema_version": 15,
+  "app": "BTC Strategy Lab",
+  "strategy": {
+    "name": "BTCUSD Futures | V5.2 B - No Chasing SHORT only",
+    "market_type": "FUTURES",
+    "futures": {
+      "pullback": {
+        "enabled": false,
+        "setup_timeframe": "15m",
+        "ema_indicator_id": "ema20_15m",
+        "atr_indicator_id": "atr14_15m",
+        "volume_indicator_id": "volumeSMA20_5m",
+        "require_touch": true,
+        "require_confirmation_color": true,
+        "require_volume": true,
+        "volume_multiplier": 1.0,
+        "max_wait_bars": 6,
+        "execution_mode": "CLOSE_CONFIRM_NEXT_OPEN",
+        "stop_anchor": "SWING",
+        "breakout_buffer_ticks": 0,
+        "trend_fast_ema_id": null,
+        "trend_slow_ema_id": null,
+        "trend_close_indicator_id": null,
+        "trend_crossover_block_bars": 0,
+        "cancel_on_trend_invalidation": true,
+        "swing_lookback_bars": 3,
+        "stop_buffer_atr": 0.1,
+        "breakout_buffer_points": 0.0,
+        "reward_r_multiple": 2.0,
+        "size_mode": "RISK_EQUITY",
+        "equity_risk_percent": 0.5,
+        "max_lots": 100000,
+        "max_estimated_risk_multiple": 1.0
+      },
+      "adaptive": {
+        "enabled": false,
+        "regime": {
+          "timeframe": "1h",
+          "fast_ema_id": "amrs_ema50_1h",
+          "slow_ema_id": "amrs_ema200_1h",
+          "close_ema_id": "amrs_close_1h",
+          "adx_id": "amrs_adx_1h",
+          "atr_percentile_id": "amrs_atr_percentile_1h",
+          "adx_trend_min": 25.0,
+          "adx_range_max": 20.0,
+          "atr_compression_max": 30.0,
+          "atr_extreme_min": 90.0,
+          "confirmations": 2,
+          "ema_slope_bars": 2,
+          "require_ema_slope": true
+        },
+        "trend": {
+          "enabled": true,
+          "setup_timeframe": "15m",
+          "donchian_id": "amrs_donchian_15m",
+          "atr_id": "amrs_atr_15m",
+          "volume_ratio_id": "amrs_volume_ratio_15m",
+          "volume_ratio_min": 1.2,
+          "stop_lookback_bars": 3,
+          "stop_atr_multiple": 1.5,
+          "breakout_buffer_points": 0.0,
+          "require_confirmation_color": true,
+          "require_retest": false,
+          "retest_max_wait_bars": 12,
+          "retest_tolerance_atr": 0.25,
+          "reward_r_multiple": 3.0
+        },
+        "compression": {
+          "enabled": true,
+          "setup_timeframe": "15m",
+          "donchian_id": "amrs_donchian_15m",
+          "atr_id": "amrs_atr_15m",
+          "volume_ratio_id": "amrs_volume_ratio_15m",
+          "volume_ratio_min": 1.5,
+          "stop_lookback_bars": 3,
+          "stop_atr_multiple": 1.5,
+          "breakout_buffer_points": 0.0,
+          "require_confirmation_color": true,
+          "require_retest": true,
+          "retest_max_wait_bars": 12,
+          "retest_tolerance_atr": 0.25,
+          "reward_r_multiple": 3.0
+        },
+        "trailing": {
+          "enabled": true,
+          "atr_id": "amrs_atr_15m",
+          "activation_r": 2.0,
+          "atr_multiple": 2.0,
+          "update_mode": "PRIOR_COMPLETED_BAR"
+        },
+        "execution_mode": "STOP_MARKET_INTRABAR",
+        "breakout_buffer_ticks": 1,
+        "breakout_buffer_points": 0.0,
+        "max_wait_bars": 3,
+        "cancel_on_trend_invalidation": true,
+        "size_mode": "RISK_EQUITY",
+        "equity_risk_percent": 0.5,
+        "max_lots": 100000,
+        "max_estimated_risk_multiple": 1.0,
+        "reward_r_multiple": 3.0
+      },
+      "rule_risk": {
+        "enabled": true,
+        "execution_timeframe": "5m",
+        "stop_mode": "ATR",
+        "stop_loss_points": 500.0,
+        "swing_lookback_bars": 3,
+        "atr_indicator_id": "atr14_1h",
+        "stop_atr_multiple": 3.0,
+        "stop_buffer_atr": 0.0,
+        "reward_r_multiple": null,
+        "take_profit_points": null,
+        "atr_stop_anchor": "ENTRY_FILL",
+        "trailing_enabled": false,
+        "trailing_mode": "ATR",
+        "trailing_atr_multiple": 3.0,
+        "trailing_activation_points": 500.0,
+        "trailing_pullback_points": 100.0,
+        "trailing_source": "HIGH_LOW",
+        "size_mode": "RISK_EQUITY",
+        "equity_risk_percent": 0.5,
+        "max_lots": 100000,
+        "max_estimated_risk_multiple": 1.0
+      },
+      "candle_pattern": {
+        "enabled": false,
+        "entry_candle": 4,
+        "doji_filter_enabled": true,
+        "doji_threshold_percent": 10.0,
+        "stop_anchor": "PATTERN_HIGHEST_HIGH",
+        "stop_loss_points": 500.0,
+        "stop_buffer_ticks": 0,
+        "take_profit_mode": "TRAILING_POINTS",
+        "activation_points": 200.0,
+        "pullback_points": 200.0,
+        "fixed_target_points": 200.0,
+        "trailing_ignore_doji": true,
+        "size_mode": "RISK_EQUITY",
+        "equity_risk_percent": 0.5,
+        "max_lots": 100000,
+        "max_estimated_risk_multiple": 1.0
+      },
+      "symbol": "BTCUSD",
+      "contract_btc": 0.001,
+      "quantity_lots": 1,
+      "leverage": 3.0,
+      "margin_mode": "ISOLATED",
+      "maintenance_margin_percent": 0.25,
+      "taker_fee_percent": 0.05,
+      "gst_percent": 18.0,
+      "slippage_bps": 2.0,
+      "extra_half_spread_bps": 0.0,
+      "force_exit_time": null,
+      "tick_size": 0.5,
+      "slippage_ticks": 0,
+      "funding_rate_multiplier": 1.0,
+      "stop_loss_percent": null,
+      "take_profit_percent": null,
+      "funding_mode": "EXCLUDE_WITH_WARNING",
+      "margin_tier_mode": "FLAT_RESEARCH"
+    },
+    "options_pullback": {
+      "enabled": false,
+      "setup_timeframe": "15m",
+      "ema_indicator_id": "ema20_15m",
+      "atr_indicator_id": "atr14_15m",
+      "volume_indicator_id": "volumeSMA20_5m",
+      "require_touch": true,
+      "require_confirmation_color": true,
+      "require_volume": false,
+      "volume_multiplier": 1.0,
+      "max_wait_bars": 6,
+      "execution_mode": "STOP_MARKET_INTRABAR",
+      "stop_anchor": "SIGNAL_CANDLE",
+      "breakout_buffer_ticks": 1,
+      "trend_fast_ema_id": null,
+      "trend_slow_ema_id": null,
+      "trend_close_indicator_id": null,
+      "trend_crossover_block_bars": 0,
+      "cancel_on_trend_invalidation": true,
+      "swing_lookback_bars": 3,
+      "stop_buffer_atr": 0.1,
+      "breakout_buffer_points": 0.0,
+      "reward_r_multiple": 2.0,
+      "size_mode": "RISK_EQUITY",
+      "equity_risk_percent": 0.5,
+      "max_lots": 100000,
+      "max_estimated_risk_multiple": 1.0,
+      "underlying_tick_size": 0.5
+    },
+    "options_force_exit_time": null,
+    "pattern_trade": {
+      "enabled": false,
+      "confirmation_bars": 6,
+      "pullback_patterns": [
+        "HAMMER",
+        "BULL_ENGULFING",
+        "MORNING_STAR",
+        "SHOOTING_STAR",
+        "BEAR_ENGULFING",
+        "EVENING_STAR"
+      ],
+      "breakout_patterns": [
+        "BULL_MARUBOZU",
+        "BEAR_MARUBOZU"
+      ],
+      "call_pullback": {
+        "mode": "ALL",
+        "min_pass": 1,
+        "conditions": [],
+        "groups": []
+      },
+      "call_breakout": {
+        "mode": "ALL",
+        "min_pass": 1,
+        "conditions": [],
+        "groups": []
+      },
+      "put_pullback": {
+        "mode": "ALL",
+        "min_pass": 1,
+        "conditions": [],
+        "groups": []
+      },
+      "put_breakout": {
+        "mode": "ALL",
+        "min_pass": 1,
+        "conditions": [],
+        "groups": []
+      },
+      "min_body_range_ratio": 0.6,
+      "volume_lookback_bars": 20,
+      "min_volume_ratio": 1.25,
+      "breakout_buffer_points": 0.0,
+      "stop_buffer_points": 0.0,
+      "max_risk_usd": 10.0,
+      "option_delta_assumption": null,
+      "target_1_r": 2.0,
+      "target_2_r": 3.0,
+      "first_exit_fraction": 0.5,
+      "take_profit_stages": []
+    },
+    "timeframe": "1h",
+    "direction_mode": "BOTH",
+    "call_action": "BUY",
+    "put_action": "BUY",
+    "call_signal_mode": "ORDER_ONLY",
+    "put_signal_mode": "ORDER_ONLY",
+    "call_exit_signal_mode": "ORDER_ONLY",
+    "put_exit_signal_mode": "ORDER_ONLY",
+    "call_exit_alert_message": "CALL exit conditions triggered",
+    "put_exit_alert_message": "PUT exit conditions triggered",
+    "call_alert_message": "CALL entry conditions triggered",
+    "put_alert_message": "PUT entry conditions triggered",
+    "alerts": [],
+    "indicators": [
+      {
+        "id": "ema50_4h",
+        "kind": "EMA",
+        "params": {
+          "period": 50,
+          "source": "close"
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "4h"
+      },
+      {
+        "id": "ema200_4h",
+        "kind": "EMA",
+        "params": {
+          "period": 200,
+          "source": "close"
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "4h"
+      },
+      {
+        "id": "ema20_1h",
+        "kind": "EMA",
+        "params": {
+          "period": 20,
+          "source": "close"
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "ema50_1h",
+        "kind": "EMA",
+        "params": {
+          "period": 50,
+          "source": "close"
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "donchian14_1h",
+        "kind": "DONCHIAN",
+        "params": {
+          "period": 14
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "donchian15_1h",
+        "kind": "DONCHIAN",
+        "params": {
+          "period": 15
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "atr14_1h",
+        "kind": "ATR",
+        "params": {
+          "period": 14
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "atr_percentile14_1h",
+        "kind": "ATR_PERCENTILE",
+        "params": {
+          "atr_period": 14,
+          "lookback_bars": 120
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "candle_strength14_1h",
+        "kind": "CANDLE_STRENGTH",
+        "params": {
+          "atr_period": 14
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      },
+      {
+        "id": "extension_ema20_atr14",
+        "kind": "OVEREXTENSION",
+        "params": {
+          "ema_period": 20,
+          "atr_period": 14,
+          "source": "close"
+        },
+        "visible": true,
+        "chart_only": false,
+        "timeframe": "strategy"
+      }
+    ],
+    "call_entry": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "long_4h_trend",
+          "left": "ema50_4h",
+          "operator": "GT",
+          "right": "ema200_4h",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        },
+        {
+          "id": "long_1h_trend",
+          "left": "ema20_1h",
+          "operator": "GT",
+          "right": "ema50_1h",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        },
+        {
+          "id": "long_donchian14",
+          "left": "close",
+          "operator": "GT",
+          "right": "donchian14_1h.upper",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        },
+        {
+          "id": "long_body_atr_040",
+          "left": "candle_strength14_1h.body_atr",
+          "operator": "GTE",
+          "right": null,
+          "value": 0.4,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        },
+        {
+          "id": "long_candle_direction",
+          "left": "candle_strength14_1h.bullish",
+          "operator": "GTE",
+          "right": null,
+          "value": 1.0,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        }
+      ],
+      "groups": [
+        {
+          "mode": "ANY",
+          "min_pass": 1,
+          "conditions": [
+            {
+              "id": "long_prior_compression_1h",
+              "left": "atr_percentile14_1h",
+              "operator": "LTE",
+              "right": null,
+              "value": 45.0,
+              "value2": null,
+              "left_offset": 1,
+              "right_offset": 0,
+              "lookback_bars": 1
+            },
+            {
+              "id": "long_prior_compression_2h",
+              "left": "atr_percentile14_1h",
+              "operator": "LTE",
+              "right": null,
+              "value": 45.0,
+              "value2": null,
+              "left_offset": 2,
+              "right_offset": 0,
+              "lookback_bars": 1
+            },
+            {
+              "id": "long_prior_compression_3h",
+              "left": "atr_percentile14_1h",
+              "operator": "LTE",
+              "right": null,
+              "value": 45.0,
+              "value2": null,
+              "left_offset": 3,
+              "right_offset": 0,
+              "lookback_bars": 1
+            },
+            {
+              "id": "long_prior_compression_4h",
+              "left": "atr_percentile14_1h",
+              "operator": "LTE",
+              "right": null,
+              "value": 45.0,
+              "value2": null,
+              "left_offset": 4,
+              "right_offset": 0,
+              "lookback_bars": 1
+            }
+          ],
+          "groups": []
+        }
+      ]
+    },
+    "put_entry": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "short_4h_trend",
+          "left": "ema50_4h",
+          "operator": "LT",
+          "right": "ema200_4h",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        },
+        {
+          "id": "short_1h_trend",
+          "left": "ema20_1h",
+          "operator": "LT",
+          "right": "ema50_1h",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        },
+        {
+          "id": "short_donchian14",
+          "left": "close",
+          "operator": "LT",
+          "right": "donchian14_1h.lower",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        },
+        {
+          "id": "short_body_atr_040",
+          "left": "candle_strength14_1h.body_atr",
+          "operator": "GTE",
+          "right": null,
+          "value": 0.4,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        },
+        {
+          "id": "short_candle_direction",
+          "left": "candle_strength14_1h.bearish",
+          "operator": "GTE",
+          "right": null,
+          "value": 1.0,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        },
+        {
+          "id": "short_extension_minus2_to_0_atr",
+          "left": "extension_ema20_atr14.distance_atr",
+          "operator": "BETWEEN",
+          "right": null,
+          "value": -2.0,
+          "value2": 0.0,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        }
+      ],
+      "groups": [
+        {
+          "mode": "ANY",
+          "min_pass": 1,
+          "conditions": [
+            {
+              "id": "short_prior_compression_1h",
+              "left": "atr_percentile14_1h",
+              "operator": "LTE",
+              "right": null,
+              "value": 45.0,
+              "value2": null,
+              "left_offset": 1,
+              "right_offset": 0,
+              "lookback_bars": 1
+            },
+            {
+              "id": "short_prior_compression_2h",
+              "left": "atr_percentile14_1h",
+              "operator": "LTE",
+              "right": null,
+              "value": 45.0,
+              "value2": null,
+              "left_offset": 2,
+              "right_offset": 0,
+              "lookback_bars": 1
+            },
+            {
+              "id": "short_prior_compression_3h",
+              "left": "atr_percentile14_1h",
+              "operator": "LTE",
+              "right": null,
+              "value": 45.0,
+              "value2": null,
+              "left_offset": 3,
+              "right_offset": 0,
+              "lookback_bars": 1
+            },
+            {
+              "id": "short_prior_compression_4h",
+              "left": "atr_percentile14_1h",
+              "operator": "LTE",
+              "right": null,
+              "value": 45.0,
+              "value2": null,
+              "left_offset": 4,
+              "right_offset": 0,
+              "lookback_bars": 1
+            }
+          ],
+          "groups": []
+        }
+      ]
+    },
+    "call_entry_behavior": {
+      "id": "call_breakout_once",
+      "name": "One LONG per fresh 1H Donchian14 breakout",
+      "enabled": true,
+      "trigger_condition_id": "long_donchian14",
+      "delay_bars": 0,
+      "max_wait_bars": null,
+      "max_entries_per_activation": 1,
+      "cooldown_bars": 0
+    },
+    "put_entry_behavior": {
+      "id": "put_breakout_once",
+      "name": "One SHORT per fresh 1H Donchian14 breakout",
+      "enabled": true,
+      "trigger_condition_id": "short_donchian14",
+      "delay_bars": 0,
+      "max_wait_bars": null,
+      "max_entries_per_activation": 1,
+      "cooldown_bars": 0
+    },
+    "call_entry_lifecycles": [
+      {
+        "id": "call_breakout_once",
+        "name": "One LONG per fresh 1H Donchian14 breakout",
+        "enabled": true,
+        "trigger_condition_id": "long_donchian14",
+        "delay_bars": 0,
+        "max_wait_bars": null,
+        "max_entries_per_activation": 1,
+        "cooldown_bars": 0
+      }
+    ],
+    "put_entry_lifecycles": [
+      {
+        "id": "put_breakout_once",
+        "name": "One SHORT per fresh 1H Donchian14 breakout",
+        "enabled": true,
+        "trigger_condition_id": "short_donchian14",
+        "delay_bars": 0,
+        "max_wait_bars": null,
+        "max_entries_per_activation": 1,
+        "cooldown_bars": 0
+      }
+    ],
+    "call_exit": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "long_donchian15_exit",
+          "left": "close",
+          "operator": "LT",
+          "right": "donchian15_1h.lower",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        }
+      ],
+      "groups": []
+    },
+    "put_exit": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [
+        {
+          "id": "short_donchian15_exit",
+          "left": "close",
+          "operator": "GT",
+          "right": "donchian15_1h.upper",
+          "value": null,
+          "value2": null,
+          "left_offset": 0,
+          "right_offset": 0,
+          "lookback_bars": 1
+        }
+      ],
+      "groups": []
+    },
+    "no_trade": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [],
+      "groups": []
+    },
+    "call_no_trade": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [],
+      "groups": []
+    },
+    "put_no_trade": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [],
+      "groups": []
+    },
+    "call_big_trend_score": {
+      "enabled": false,
+      "threshold": 70.0,
+      "mode": "GATE",
+      "components": [],
+      "persistence_hits": 1,
+      "persistence_window": 1,
+      "require_current_threshold": true
+    },
+    "put_big_trend_score": {
+      "enabled": false,
+      "threshold": 70.0,
+      "mode": "GATE",
+      "components": [],
+      "persistence_hits": 1,
+      "persistence_window": 1,
+      "require_current_threshold": true
+    },
+    "call_trend_phase": {
+      "enabled": false,
+      "compression_max_score": 45.0,
+      "ignition_min_score": 55.0,
+      "confirmation_min_score": 70.0,
+      "big_trend_min_score": 80.0,
+      "exhaustion_below_score": 55.0
+    },
+    "put_trend_phase": {
+      "enabled": false,
+      "compression_max_score": 45.0,
+      "ignition_min_score": 55.0,
+      "confirmation_min_score": 70.0,
+      "big_trend_min_score": 80.0,
+      "exhaustion_below_score": 55.0
+    },
+    "call_breakout_retest": {
+      "enabled": false,
+      "breakout_condition_id": null,
+      "breakout_level_operand": null,
+      "tolerance_mode": "PERCENT",
+      "tolerance_value": 0.25,
+      "atr_operand": null,
+      "max_retest_wait_bars": 12,
+      "hold_bars": 1,
+      "require_retest_for_entry": false,
+      "false_breakout_window_bars": 3,
+      "false_breakout_buffer_points": 0.0,
+      "block_false_breakout_until_rearm": true,
+      "max_trend_age_bars": 30
+    },
+    "put_breakout_retest": {
+      "enabled": false,
+      "breakout_condition_id": null,
+      "breakout_level_operand": null,
+      "tolerance_mode": "PERCENT",
+      "tolerance_value": 0.25,
+      "atr_operand": null,
+      "max_retest_wait_bars": 12,
+      "hold_bars": 1,
+      "require_retest_for_entry": false,
+      "false_breakout_window_bars": 3,
+      "false_breakout_buffer_points": 0.0,
+      "block_false_breakout_until_rearm": true,
+      "max_trend_age_bars": 30
+    },
+    "option": {
+      "strike_mode": "ATM",
+      "strike_steps": 0,
+      "min_dte_days": 0.25,
+      "max_dte_days": 3.0,
+      "min_premium": null,
+      "max_premium": null,
+      "max_spread_percent": 5.0,
+      "min_volume": null,
+      "min_open_interest": null
+    },
+    "execution": {
+      "safety_caps": null,
+      "max_entry_quote_delay_seconds": 90,
+      "max_exit_quote_delay_seconds": 90,
+      "slippage_ticks": 0,
+      "extra_half_spread_percent": 0.0,
+      "fee_model": "DELTA_OPTIONS",
+      "option_notional_fee_rate_percent": 0.01,
+      "premium_fee_cap_percent": 3.5,
+      "gst_percent": 18.0,
+      "decision_log_mode": "FULL",
+      "end_of_data_quote_max_age_seconds": 300,
+      "fee_edge_filter": {
+        "enabled": false,
+        "expected_option_move_percent": 10.0,
+        "min_edge_multiple": 1.5,
+        "min_net_edge_usd": 0.0
+      }
+    },
+    "risk": {
+      "sell_margin": {
+        "enabled": false,
+        "margin_mode": "ISOLATED_ESTIMATE",
+        "initial_margin_percent": null,
+        "maintenance_margin_percent": null,
+        "max_notional_leverage": null,
+        "collateral_buffer_percent": 0.0,
+        "reserve_exit_fee": true,
+        "audit_against_account_snapshots": false,
+        "check_margin_on_quotes": true
+      },
+      "stop_loss": {
+        "mode": "OPTION_PERCENT",
+        "value": 15.0,
+        "signal_candle_buffer_points": 0.0,
+        "signal_candle_trigger": "WICK",
+        "signal_candle_execution_timeframe": "strategy"
+      },
+      "take_profit": {
+        "mode": "NONE",
+        "value": 30.0
+      },
+      "profit_protection": {
+        "mode": "NONE",
+        "activation_percent": 20.0,
+        "retain_peak_percent": 50.0,
+        "trail_percent_points": 10.0
+      },
+      "max_hold_minutes": null,
+      "close_at_session_end": false,
+      "starting_balance_usd": 1000.0,
+      "quantity_mode": "FIXED",
+      "quantity": 10.0,
+      "budget_usd": 50.0,
+      "enforce_trade_budget_strict": true,
+      "enforce_cash": true,
+      "max_daily_loss_percent": 1.0,
+      "max_trades_per_day": null,
+      "max_consecutive_losses": null,
+      "stop_trading_after_daily_loss_limit": true
+    },
+    "session": {
+      "timezone": "Asia/Kolkata",
+      "start": "00:00",
+      "end": "23:59",
+      "windows": [
+        {
+          "start": "00:00",
+          "end": "23:59"
+        }
+      ],
+      "blocked_weekdays": [
+        5,
+        6
+      ]
+    },
+    "conflict_policy": "SKIP",
+    "position_policy": "EXCLUSIVE"
+  }
+}
