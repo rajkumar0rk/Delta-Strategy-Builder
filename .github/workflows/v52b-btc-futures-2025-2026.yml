@@ -1,0 +1,67 @@
+name: V5.2B BTCUSD futures original-engine validation 2025 and 2026
+on:
+  push:
+    branches:
+      - research/v52b-btc-2025-2026-20261119
+    paths:
+      - ".github/workflows/v52b-btc-futures-2025-2026.yml"
+      - "research/v5_2b_btc/**"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: v52b-btc-futures-2025-2026-unique
+  cancel-in-progress: false
+jobs:
+  btc_2025:
+    name: BTCUSD V5.2B 2025 with 2024 indicator warmup
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: visualizer/backend/requirements.txt
+      - name: Install Strategy Lab backend
+        run: pip install -r visualizer/backend/requirements.txt
+      - name: Execute frozen original BTCUSD V5.2B in 2025
+        run: python research/v5_2b_btc/run.py 2025
+      - name: Archive 2025 report and trades
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: btc-v52b-2025-research
+          path: |
+            research/v5_2b_btc/outputs/2025/RESEARCH_REPORT_2025.md
+            research/v5_2b_btc/outputs/2025/summary_2025.json
+            research/v5_2b_btc/outputs/2025/monthly_2025_IST.csv
+            research/v5_2b_btc/outputs/2025/trades_2025.csv
+          if-no-files-found: warn
+  btc_2026:
+    name: BTCUSD V5.2B Jan-Oct 2026 parity check
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: visualizer/backend/requirements.txt
+      - name: Install Strategy Lab backend
+        run: pip install -r visualizer/backend/requirements.txt
+      - name: Execute frozen original BTCUSD V5.2B in 2026
+        run: python research/v5_2b_btc/run.py 2026
+      - name: Archive 2026 report and trades
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: btc-v52b-2026-research
+          path: |
+            research/v5_2b_btc/outputs/2026/RESEARCH_REPORT_2026.md
+            research/v5_2b_btc/outputs/2026/summary_2026.json
+            research/v5_2b_btc/outputs/2026/monthly_2026_IST.csv
+            research/v5_2b_btc/outputs/2026/trades_2026.csv
+          if-no-files-found: warn
