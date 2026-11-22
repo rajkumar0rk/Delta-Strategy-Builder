@@ -707,6 +707,18 @@ class FuturesRuleRiskConfig(BaseModel):
         return self
 
 
+class FuturesSupertrendEMATouchConfig(BaseModel):
+    """First 5m EMA touch after a confirmed 1h Supertrend flip.
+
+    The Supertrend line is a frozen R reference, never an executable stop.
+    A fill occurs at the next 5m open after the first completed touch bar.
+    """
+    enabled: bool = False
+    supertrend_indicator_id: str = "supertrend_1h"
+    ema_indicator_id: str = "ema20_1h"
+    reward_r_multiple: float = Field(default=2.0, gt=0, le=100)
+
+
 class FuturesCandlePatternConfig(BaseModel):
     """Opt-in completed 1h bearish continuation, executed and managed on 5m."""
 
@@ -745,6 +757,7 @@ class FuturesConfig(BaseModel):
     pullback: FuturesPullbackConfig = Field(default_factory=FuturesPullbackConfig)
     adaptive: AdaptiveFuturesConfig = Field(default_factory=AdaptiveFuturesConfig)
     rule_risk: FuturesRuleRiskConfig = Field(default_factory=FuturesRuleRiskConfig)
+    supertrend_ema_first_touch: FuturesSupertrendEMATouchConfig = Field(default_factory=FuturesSupertrendEMATouchConfig)
     capital_stop: FuturesCapitalStopConfig = Field(default_factory=FuturesCapitalStopConfig)
     candle_pattern: FuturesCandlePatternConfig = Field(default_factory=FuturesCandlePatternConfig)
     symbol: Literal["BTCUSD"] = "BTCUSD"
@@ -952,6 +965,34 @@ class StrategyConfig(BaseModel):
                     raise ValueError("Options pullback close proxy requires 1h EMA period 1")
             if cfg.max_wait_bars*5>({"15m":15,"30m":30,"1h":60}[cfg.setup_timeframe])*2:
                 raise ValueError("Options pullback expiry cannot exceed two setup candles")
+
+        if self.futures.supertrend_ema_first_touch.enabled:
+            stcfg = self.futures.supertrend_ema_first_touch
+            if self.market_type != "FUTURES" or self.timeframe != "5m":
+                raise ValueError("Futures supertrend_ema_first_touch requires FUTURES and 5m strategy candles")
+            if (self.futures.pullback.enabled or self.futures.adaptive.enabled
+                    or self.futures.rule_risk.enabled or self.futures.candle_pattern.enabled
+                    or self.pattern_trade.enabled):
+                raise ValueError("Futures supertrend_ema_first_touch is exclusive of other specialized execution modes")
+            if self.entry_evaluation_timeframe != "strategy":
+                raise ValueError("Supertrend EMA first-touch evaluates every 5m candle")
+            if self.futures.stop_loss_percent is not None or self.futures.take_profit_percent is not None:
+                raise ValueError("Supertrend EMA first-touch requires both legacy percent exits null")
+            if (self.futures.capital_stop.enabled or self.futures.force_exit_time is not None
+                    or self.risk.max_hold_minutes is not None or self.risk.close_at_session_end):
+                raise ValueError("Supertrend EMA first-touch exits only on TP or confirmed flip; disable forced exits and capital stops")
+            if any(group.configured() for group in
+                   (self.call_entry,self.put_entry,self.call_exit,self.put_exit)):
+                raise ValueError("Supertrend EMA first-touch is a dedicated entry/exit mode; leave ordinary entry/exit groups empty")
+            ids = {item.id: item for item in self.indicators}
+            st = ids.get(stcfg.supertrend_indicator_id)
+            ema = ids.get(stcfg.ema_indicator_id)
+            if st is None or st.kind != "SUPERTREND" or st.timeframe != "1h" or st.chart_only:
+                raise ValueError("First-touch Supertrend must be a non-chart-only 1h SUPERTREND indicator")
+            if ema is None or ema.kind != "EMA" or ema.timeframe != "1h" or ema.chart_only or ema.params.get("period") != 20:
+                raise ValueError("First-touch EMA must be a non-chart-only 1h EMA20 indicator")
+            if st.params.get("atr_period") != 10 or float(st.params.get("multiplier",0)) != 3.0:
+                raise ValueError("First-touch Supertrend requires ATR period 10 and multiplier 3")
 
         if self.futures.candle_pattern.enabled:
             if self.market_type != "FUTURES" or self.timeframe != "5m":
