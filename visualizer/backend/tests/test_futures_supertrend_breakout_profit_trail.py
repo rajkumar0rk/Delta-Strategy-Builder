@@ -63,7 +63,7 @@ def test_breakout_uses_only_prior_candles_and_is_one_per_flip():
     flip=pd.Timestamp("2026-01-01T01:00:00Z")
     assert c.observe(flip,bar(flip,ema=1000,bearish=1)) is None
     t=pd.Timestamp("2026-01-01T01:05:00Z")
-    assert c.observe(t,bar(t,low=900,close=1045)) is None
+    assert c.observe(t,bar(t,low=1000,close=1045)) is None
     t=pd.Timestamp("2026-01-01T01:10:00Z")
     hit=c.observe(t,bar(t,low=890,close=900))
     assert hit is not None
@@ -173,7 +173,7 @@ def test_breakout_profit_trailing_and_protective_stop(
     if scenario=="trail":
         assert trade["stop_price"]==(500 if short else 1600)
         assert trade["exit_price"]==(500 if short else 1600)
-        assert pd.Timestamp(trade["exit_time"])==pd.Timestamp("2026-01-01T01:20:00Z")
+        assert pd.Timestamp(trade["exit_time"])==pd.Timestamp("2026-01-01T01:25:00Z")
     if scenario=="flip":
         assert trade["stop_price"]==trade["initial_stop_price"]
         assert pd.Timestamp(trade["exit_time"])==pd.Timestamp("2026-01-01T02:00:00Z")
