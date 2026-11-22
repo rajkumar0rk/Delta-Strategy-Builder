@@ -1,5 +1,6 @@
 import {useEffect,useMemo,useRef,useState} from 'react';
 import {api} from './api';
+import {calculateChartWindow,markersInWindow} from './chartWindow';
 import {defaultStrategy} from './defaults';
 import type {ArchiveInfo,ArchiveSyncPlan,BacktestResult,ChartPayload,Dataset,IndicatorDefinition,JobState,PreflightResult,SavedStrategy,Strategy,StorageMode} from './types';
 import {IndicatorManager} from './components/IndicatorManager';
@@ -38,6 +39,7 @@ export default function App(){
  const [datasetIds,setDatasetIds]=useState<string[]>([]);
  const [start,setStart]=useState('');const [end,setEnd]=useState('');
  const [strategy,setStrategy]=useState<Strategy>(defaultStrategy());const [chart,setChart]=useState<ChartPayload|null>(null);const [result,setResult]=useState<BacktestResult|null>(null);
+ const [chartWindowOffset,setChartWindowOffset]=useState(0);
  const [status,setStatus]=useState('');const [busy,setBusy]=useState(false);const [promptBusy,setPromptBusy]=useState(false);const [preflight,setPreflight]=useState<PreflightResult|null>(null);const [job,setJob]=useState<JobState|null>(null);const [activeJobId,setActiveJobId]=useState<string|null>(null);
  const [savedStrategies,setSavedStrategies]=useState<SavedStrategy[]>([]);const [savedStrategyId,setSavedStrategyId]=useState('');
  const [autoDownloadMissing,setAutoDownloadMissing]=useState(false);const [archivePlan,setArchivePlan]=useState<ArchiveSyncPlan|null>(null);
@@ -58,14 +60,72 @@ export default function App(){
  const selectionBody=()=>({dataset_mode:datasetMode,dataset_id:datasetMode==='SINGLE'?datasetId:null,dataset_ids:datasetMode==='MULTI'?datasetIds:[]});
  const rangeIso=()=>{const s=inputToUtcIso(start);const inclusiveEnd=inputToUtcIso(end);if(new Date(inclusiveEnd)<new Date(s))throw new Error('To UTC candle must be the same as or later than From UTC');const e=plusMinutes(inclusiveEnd,timeframeMinutes);if(bounds&&datasetMode!=='ARCHIVE'){const lo=new Date(bounds.start).getTime();const hiInclusive=new Date(bounds.end).getTime();if(new Date(s).getTime()<lo||new Date(inclusiveEnd).getTime()>hiInclusive)throw new Error(`Selected UTC candles must stay inside downloaded coverage: ${utcInput(bounds.start)} → ${utcInput(bounds.end)}`)}return {s,e,inclusiveEnd}};
 
- const preview=async(markers=result?.markers||[],quiet=false)=>{if(!start||!end)return;if(datasetMode==='SINGLE'&&!datasetId)return;if(datasetMode==='MULTI'&&!datasetIds.length)return;const seq=++autoPreviewSeq.current;if(!quiet)setBusy(true);try{const {s,e}=rangeIso();const p=await api.preview({...selectionBody(),start:s,end:e,indicators:strategy.indicators,strategy});if(seq!==autoPreviewSeq.current)return;const withMarkers={...p,markers};setChart(result?maskOpenPositions(withMarkers,result.trades):withMarkers);if(!quiet)setStatus(`Loaded ${p.bars.length.toLocaleString()} completed ${strategy.timeframe} candles from ${datasetMode==='ARCHIVE'?'the unified archive':datasetMode==='AUTO'?'auto-selected downloaded data':selectedDatasets.length+' dataset(s)'}.`)}catch(e){if(!quiet)setStatus(String(e))}finally{if(!quiet)setBusy(false)}};
+ const chartWindow=useMemo(()=>{
+  try{const {s,e}=rangeIso();return calculateChartWindow(s,e,timeframeMinutes,chartWindowOffset)}
+  catch{return null}
+ },[start,end,timeframeMinutes,chartWindowOffset,datasetMode,datasetId,JSON.stringify(datasetIds),bounds?.start,bounds?.end]);
+ useEffect(()=>{setChartWindowOffset(0)},[start,end,strategy.timeframe,datasetMode,datasetId,JSON.stringify(datasetIds)]);
+ const preview=async(markers=result?.markers||[],quiet=false)=>{
+  if(!start||!end)return;
+  if(datasetMode==='SINGLE'&&!datasetId)return;
+  if(datasetMode==='MULTI'&&!datasetIds.length)return;
+  const seq=++autoPreviewSeq.current;
+  if(!quiet)setBusy(true);
+  try{
+   const {s,e}=rangeIso();
+   const window=calculateChartWindow(s,e,timeframeMinutes,chartWindowOffset);
+   const p=await api.preview({...selectionBody(),start:window.start,end:window.end,indicators:strategy.indicators,strategy});
+   if(seq!==autoPreviewSeq.current)return;
+   const withMarkers={...p,markers:markersInWindow(markers,window)};
+   setChart(result?maskOpenPositions(withMarkers,result.trades):withMarkers);
+   if(!quiet)setStatus(`Loaded ${p.bars.length.toLocaleString()} completed ${strategy.timeframe} candles (chart window ${window.total-window.index}/${window.total}). Backtest range is unchanged.`);
+  }catch(e){
+   if(seq===autoPreviewSeq.current)setStatus(`Chart preview failed: ${String(e)}`);
+  }finally{if(!quiet)setBusy(false)}
+ };
  const previewSignature=useMemo(()=>JSON.stringify({timeframe:strategy.timeframe,direction_mode:strategy.direction_mode,indicators:strategy.indicators,call_entry:strategy.call_entry,put_entry:strategy.put_entry,no_trade:strategy.no_trade,call_no_trade:strategy.call_no_trade,put_no_trade:strategy.put_no_trade,call_entry_lifecycles:strategy.call_entry_lifecycles,put_entry_lifecycles:strategy.put_entry_lifecycles,call_big_trend_score:strategy.call_big_trend_score,put_big_trend_score:strategy.put_big_trend_score,call_trend_phase:strategy.call_trend_phase,put_trend_phase:strategy.put_trend_phase,call_breakout_retest:strategy.call_breakout_retest,put_breakout_retest:strategy.put_breakout_retest}),[strategy.timeframe,strategy.direction_mode,strategy.indicators,strategy.call_entry,strategy.put_entry,strategy.no_trade,strategy.call_no_trade,strategy.put_no_trade,strategy.call_entry_lifecycles,strategy.put_entry_lifecycles,strategy.call_big_trend_score,strategy.put_big_trend_score,strategy.call_trend_phase,strategy.put_trend_phase,strategy.call_breakout_retest,strategy.put_breakout_retest]);
- useEffect(()=>{if(!start||!end)return;const timer=window.setTimeout(()=>{void preview(result?.markers||[],true)},350);return()=>window.clearTimeout(timer)},[previewSignature,datasetMode,datasetId,JSON.stringify(datasetIds),start,end]);
+ useEffect(()=>{if(!start||!end)return;const timer=window.setTimeout(()=>{void preview(result?.markers||[],true)},350);return()=>window.clearTimeout(timer)},[previewSignature,datasetMode,datasetId,JSON.stringify(datasetIds),start,end,chartWindowOffset]);
 
  const refreshArchiveData=async()=>{const [d,a]=await Promise.all([api.datasets(),api.archive()]);setDatasets(d);setArchive(a)};
  const repairArchive=async()=>{if(datasetMode!=='ARCHIVE')return;setBusy(true);setJob(null);setArchivePlan(null);try{const {s,e}=rangeIso();const plan=await api.archivePlan({start:s,end:e});setArchivePlan(plan);if(plan.ready){setStatus('✓ Selected archive range is already complete.');return}if(plan.missing_segment_files.length){throw new Error(`Existing archive segment files are missing: ${plan.missing_segment_files.map(x=>`${x.name}: ${x.missing.join(', ')}`).join('; ')}. Automatic append will not overwrite an existing migrated segment.`)}if(!plan.download_ranges.length){throw new Error(plan.unresolved_ranges.length?'Selected range includes an incomplete UTC day; only completed UTC days can be downloaded.':'No safe missing date range was found to download.')}setStatus(`Downloading ${plan.download_ranges.map(x=>`${x.start_date} → ${x.end_date}`).join(', ')}…`);const {job_id}=await api.archiveSync({start:s,end:e});setActiveJobId(job_id);let done:JobState;for(;;){await new Promise(r=>setTimeout(r,500));done=await api.job(job_id);setJob(done);setStatus(done.message||done.status);if(['COMPLETE','FAILED','CANCELLED'].includes(done.status))break}if(done.status==='FAILED')throw new Error(done.error||done.message);if(done.status==='CANCELLED'){setStatus('Archive download stopped. Cached raw responses remain reusable.');return}await refreshArchiveData();const after=await api.archivePlan({start:s,end:e});setArchivePlan(after);setStatus(after.ready?'✓ Missing archive data downloaded and catalog refreshed.':'Archive sync finished, but the selected range still needs attention.')}catch(e){setStatus(`Archive repair failed: ${String(e)}`)}finally{setBusy(false);setActiveJobId(null)}};
 
- const run=async()=>{setBusy(true);setPreflight(null);setJob(null);try{const {s,e}=rangeIso();const validated=await api.validate(strategy);setStrategy(validated.strategy);const request={...selectionBody(),start:s,end:e,strategy:validated.strategy,storage_mode:storageMode,auto_download_missing_data:datasetMode==='ARCHIVE'&&autoDownloadMissing};setStatus('Starting backtest…');const {job_id}=await api.start(request);setActiveJobId(job_id);let done:JobState;for(;;){await new Promise(r=>setTimeout(r,500));done=await api.job(job_id);setJob(done);setStatus(done.message||done.status);if(['COMPLETE','FAILED','CANCELLED'].includes(done.status))break}if(done.status==='CANCELLED'){setStatus('Backtest stopped. Previous completed result is still available.');return}if(done.status==='FAILED'||!done.result)throw new Error(done.error||done.message);if(datasetMode==='ARCHIVE'&&autoDownloadMissing)await refreshArchiveData();setPreflight(done.result.preflight||null);setResult(done.result);const p=await api.preview({...selectionBody(),start:s,end:e,indicators:done.result.strategy.indicators,strategy:done.result.strategy});setChart(maskOpenPositions({...p,markers:done.result.markers},done.result.trades));setStrategy(done.result.strategy);setStatus(`${done.result.cache_hit?'⚡ Cache hit':'Backtest complete'}: ${done.result.metrics.trades} trades · net $${Number(done.result.metrics.net_pnl_usd||0).toFixed(2)} after fees + GST.`)}catch(e){setStatus(String(e))}finally{setBusy(false);setActiveJobId(null)}};
+ const run=async()=>{
+  autoPreviewSeq.current++;
+  setBusy(true);setPreflight(null);setJob(null);
+  try{
+   const {s,e}=rangeIso();
+   const validated=await api.validate(strategy);
+   setStrategy(validated.strategy);
+   const request={...selectionBody(),start:s,end:e,strategy:validated.strategy,storage_mode:storageMode,auto_download_missing_data:datasetMode==='ARCHIVE'&&autoDownloadMissing};
+   setStatus('Starting backtest…');
+   const {job_id}=await api.start(request);
+   setActiveJobId(job_id);
+   let done:JobState;
+   for(;;){
+    await new Promise(r=>setTimeout(r,500));
+    done=await api.job(job_id);
+    setJob(done);setStatus(done.message||done.status);
+    if(['COMPLETE','FAILED','CANCELLED'].includes(done.status))break;
+   }
+   if(done.status==='CANCELLED'){setStatus('Backtest stopped. Previous completed result is still available.');return}
+   if(done.status==='FAILED'||!done.result)throw new Error(done.error||done.message);
+   if(datasetMode==='ARCHIVE'&&autoDownloadMissing)await refreshArchiveData();
+   setPreflight(done.result.preflight||null);
+   setResult(done.result);
+   setStrategy(done.result.strategy);
+   const summary=`${done.result.cache_hit?'⚡ Cache hit':'Backtest complete'}: ${done.result.metrics.trades} trades · net $${Number(done.result.metrics.net_pnl_usd||0).toFixed(2)} after fees + GST.`;
+   try{
+    const window=calculateChartWindow(s,e,timeframeMinutes,chartWindowOffset);
+    const p=await api.preview({...selectionBody(),start:window.start,end:window.end,indicators:done.result.strategy.indicators,strategy:done.result.strategy});
+    setChart(maskOpenPositions({...p,markers:markersInWindow(done.result.markers,window)},done.result.trades));
+    setStatus(`${summary} Chart window ${window.total-window.index}/${window.total} loaded.`);
+   }catch(chartError){
+    setChart(null);
+    setStatus(`${summary} Chart preview failed separately: ${String(chartError)}`);
+   }
+  }catch(e){setStatus(`Backtest failed: ${String(e)}`)}
+  finally{setBusy(false);setActiveJobId(null)}
+ };
  const stopBacktest=async()=>{if(!activeJobId)return;try{const stopped=await api.stop(activeJobId);setJob(stopped);setStatus(stopped.message||'Stop requested…')}catch(e){setStatus(`Stop failed: ${String(e)}`)}};
 
  const importStrategy=async(file:File)=>{try{const raw=JSON.parse(await file.text());const candidate=raw.strategy??raw;const valid=await api.validate(candidate);setStrategy(valid.strategy);setResult(null);setStatus(`Imported strategy: ${valid.strategy.name}. Migrated to the V15.1 strategy model.`)}catch(e){setStatus(`Import failed: ${String(e)}`)}};
@@ -89,7 +149,8 @@ export default function App(){
   <div className="quick-ranges"><button className="mini ghost" onClick={()=>applyRange(selectedDatasets,1)}>1D</button><button className="mini ghost" onClick={()=>applyRange(selectedDatasets,7)}>7D</button><button className="mini ghost" onClick={()=>applyRange(selectedDatasets,30)}>30D</button><button className="mini ghost" onClick={()=>applyRange(selectedDatasets)}>Full</button></div>
   <div className="dataset-meta"><span>~{selectedBars.toLocaleString()} {strategy.timeframe} bars</span><span>{datasetMode==='ARCHIVE'?`${selectedDatasets.length} archive segment(s)`:datasetMode==='AUTO'?'auto datasets':`${selectedDatasets.length} dataset(s)`}</span><span>{selectedDatasets.filter(x=>x.quote_indexed).length}/{selectedDatasets.length} quote indexes ready</span></div>
   <label>Result storage<select value={storageMode} onChange={e=>setStorageMode(e.target.value as StorageMode)}><option value="COMPACT">Compact</option><option value="ANALYSIS">Analysis (recommended)</option><option value="FULL_DEBUG">Full debug</option></select></label>
-  <button disabled={busy} onClick={()=>void preview()}>Preview chart</button><button className="primary" disabled={busy} onClick={run}>▶ Run backtest</button>{busy&&<button className="danger" disabled={!activeJobId||job?.status==='CANCELLING'} onClick={()=>void stopBacktest()}>{job?.status==='CANCELLING'?'Stopping…':'■ Stop backtest'}</button>}
+  <button disabled={busy} onClick={()=>void preview()}>Preview chart</button><button className="primary" disabled={busy} onClick={run}>▶ Run backtest</button>
+  {chartWindow&&<div className="chart-window-nav"><button className="mini ghost" disabled={busy||chartWindow.index>=chartWindow.total-1} onClick={()=>setChartWindowOffset(x=>Math.min(x+1,chartWindow.total-1))}>← Older</button><span>Chart window {chartWindow.total-chartWindow.index}/{chartWindow.total} · {chartWindow.start.slice(0,16).replace('T',' ')} to {chartWindow.end.slice(0,16).replace('T',' ')} UTC</span><button className="mini ghost" disabled={busy||chartWindow.index===0} onClick={()=>setChartWindowOffset(x=>Math.max(0,x-1))}>Newer →</button>{chartWindow.total>1&&<small>Full-period backtest results are preserved.</small>}</div>}{busy&&<button className="danger" disabled={!activeJobId||job?.status==='CANCELLING'} onClick={()=>void stopBacktest()}>{job?.status==='CANCELLING'?'Stopping…':'■ Stop backtest'}</button>}
  </section>
  <div className="date-note"><b>V15.1 correctness + storage workflow:</b> New runs default to compressed ANALYSIS storage; research sweeps use COMPACT storage automatically. <b>Self-healing archive remains enabled:</b> Strategy Lab reads <code>backtest/data/delta-history/catalog.json</code>. The optional auto-download calls your repository <code>backtest.history_archive</code> utility only for uncovered <b>completed UTC days</b>, then reloads the catalog and runs preflight again. Existing catalog segments with missing normalized files are reported instead of silently overwritten.</div>
  {archivePlan&&datasetMode==='ARCHIVE'&&<section className={`archive-plan ${archivePlan.ready?'preflight-ok':archivePlan.needs_download?'archive-plan-download':'preflight-bad'}`}><b>{archivePlan.ready?'✓ Selected range complete':archivePlan.needs_download?'↓ Missing completed history can be downloaded':'⚠ Archive needs attention'}</b>{archivePlan.download_ranges.map((x,i)=><span key={i}>{x.start_date} → {x.end_date}</span>)}{archivePlan.unresolved_ranges.map((x,i)=><span className="bad" key={`u${i}`}>{x.start} → {x.end_exclusive}: {x.reason}</span>)}</section>}
