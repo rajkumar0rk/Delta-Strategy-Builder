@@ -712,11 +712,14 @@ class FuturesSupertrendEMATouchConfig(BaseModel):
 
     REFERENCE_2R preserves existing strategy files; ATR_TRAIL removes the
     fixed target and uses a 5m-monitored ratcheting stop based on closed 1h ATR.
+    FLIP_ONLY has neither a fixed target nor a protective price stop; exit
+    signals occur only on the opposite confirmed 1h Supertrend flip
+    (except simulated liquidation/margin events).
     """
     enabled: bool = False
     supertrend_indicator_id: str = "supertrend_1h"
     ema_indicator_id: str = "ema20_1h"
-    exit_mode: Literal["REFERENCE_2R", "ATR_TRAIL"] = "REFERENCE_2R"
+    exit_mode: Literal["REFERENCE_2R", "ATR_TRAIL", "FLIP_ONLY"] = "REFERENCE_2R"
     reward_r_multiple: float = Field(default=2.0, gt=0, le=100)
     atr_indicator_id: str = "atr14_1h"
     trailing_atr_multiple: float = Field(default=3.0, gt=0, le=100)
