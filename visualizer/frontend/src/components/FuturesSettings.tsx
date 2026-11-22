@@ -1,4 +1,4 @@
-import type {FuturesConfig,FuturesCandlePatternConfig,FuturesCapitalStopConfig,Strategy} from '../types';
+import type {FuturesConfig,FuturesCandlePatternConfig,FuturesCapitalStopConfig,FuturesSupertrendEMATouchConfig,Strategy} from '../types';
 import {AdaptiveFuturesEditor} from './AdaptiveFuturesEditor';
 
 const defaults:FuturesConfig={symbol:'BTCUSD',contract_btc:0.001,quantity_lots:1,leverage:5,
@@ -15,7 +15,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
  const minutes:Record<Strategy['timeframe'],number>={'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'4h':240,'1D':1440};
  const entryTimeframes=(Object.keys(minutes) as Strategy['timeframe'][]).filter(tf=>
   minutes[tf]>=minutes[value.timeframe]&&minutes[tf]%minutes[value.timeframe]===0);
- const dedicatedEntry=!!(f.pullback?.enabled||f.adaptive?.enabled||f.candle_pattern?.enabled);
+ const dedicatedEntry=!!(f.pullback?.enabled||f.adaptive?.enabled||f.candle_pattern?.enabled||f.supertrend_ema_first_touch?.enabled);
  const setupDefaults={enabled:false,setup_timeframe:'15m' as const,ema_indicator_id:'ema20_15m',
   atr_indicator_id:'atr14_15m',volume_indicator_id:'volumeSMA20_5m',require_touch:true,
   require_confirmation_color:true,require_volume:true,volume_multiplier:1,max_wait_bars:6,
@@ -37,7 +37,8 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   ...(patch.enabled===true?{stop_loss_percent:null,take_profit_percent:null,
     ...(f.candle_pattern?{candle_pattern:{...pattern,enabled:false}}:{}),
     ...(f.pullback?{pullback:{...f.pullback,enabled:false}}:{}),
-    ...(f.adaptive?{adaptive:{...f.adaptive,enabled:false}}:{})}:{} ),
+    ...(f.adaptive?{adaptive:{...f.adaptive,enabled:false}}:{})
+    ,supertrend_ema_first_touch:{...touch,enabled:false}}:{} ),
   rule_risk:{...ruleRisk,...patch}}});
  const ruleNumber=(key:keyof typeof ruleDefaults,label:string,min:number,step:number)=>(
   <label key={key}>{label}<input type="number" min={min} step={step}
@@ -48,11 +49,44 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
    ...(patch.enabled===true?{stop_loss_percent:null,take_profit_percent:null,
       ...(f.candle_pattern?{candle_pattern:{...pattern,enabled:false}}:{})}:{}),
    pullback:{...pullback,...patch},...(patch.enabled===true&&f.adaptive?{adaptive:{...f.adaptive,enabled:false}}:{}),
-   ...(patch.enabled===true?{rule_risk:{...ruleRisk,enabled:false}}:{})}});
+   ...(patch.enabled===true?{rule_risk:{...ruleRisk,enabled:false},
+    supertrend_ema_first_touch:{...touch,enabled:false}}:{})}});
  const setupNumber=(key:keyof typeof setupDefaults,label:string,step:string,min:number)=>(
   <label key={key}>{label}<input type="number" step={step} min={min}
    value={Number(pullback[key])} onChange={e=>setup({[key]:Number(e.target.value)})}/></label>);
 
+ const touchDefaults:FuturesSupertrendEMATouchConfig={
+  enabled:false,supertrend_indicator_id:'supertrend_1h',ema_indicator_id:'ema20_1h',reward_r_multiple:2
+ };
+ const touch={...touchDefaults,...f.supertrend_ema_first_touch};
+ const setTouch=(patch:Partial<FuturesSupertrendEMATouchConfig>)=>{
+  const enabled=patch.enabled===true;
+  const blank=()=>({mode:'ALL' as const,min_pass:1,conditions:[],groups:[]});
+  const required=[
+   {id:touch.supertrend_indicator_id,kind:'SUPERTREND' as const,
+    params:{atr_period:10,multiplier:3},timeframe:'1h' as const,visible:true,chart_only:false},
+   {id:touch.ema_indicator_id,kind:'EMA' as const,
+    params:{period:20,source:'close'},timeframe:'1h' as const,visible:true,chart_only:false}
+  ];
+  onChange({...value,
+   ...(enabled?{
+    market_type:'FUTURES' as const,timeframe:'5m' as const,entry_evaluation_timeframe:'strategy' as const,
+    call_entry:blank(),put_entry:blank(),call_exit:blank(),put_exit:blank(),
+    call_signal_mode:'ORDER_ONLY' as const,put_signal_mode:'ORDER_ONLY' as const,
+    risk:{...value.risk,max_hold_minutes:null,close_at_session_end:false},
+    pattern_trade:value.pattern_trade?{...value.pattern_trade,enabled:false}:undefined
+   }:{}),
+   indicators:enabled?[...value.indicators.filter(i=>!required.some(r=>r.id===i.id)),...required]:value.indicators,
+   futures:{...f,...(enabled?{
+     stop_loss_percent:null,take_profit_percent:null,force_exit_time:null,
+     capital_stop:{...capitalStop,enabled:false},
+     rule_risk:{...ruleRisk,enabled:false},
+     pullback:{...pullback,enabled:false},
+     ...(f.adaptive?{adaptive:{...f.adaptive,enabled:false}}:{}),
+     candle_pattern:{...pattern,enabled:false}
+   }:{}),supertrend_ema_first_touch:{...touch,...patch}}
+  });
+ };
  const patternDefaults:FuturesCandlePatternConfig={
   enabled:false,entry_candle:4,doji_filter_enabled:true,doji_threshold_percent:10,
   stop_anchor:'PATTERN_HIGHEST_HIGH',stop_loss_points:500,stop_buffer_ticks:0,
@@ -73,7 +107,8 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
    futures:{...f,...(enabled?{stop_loss_percent:null,take_profit_percent:null,
     rule_risk:{...ruleRisk,enabled:false},pullback:{...pullback,enabled:false},
     ...(f.adaptive?{adaptive:{...f.adaptive,enabled:false}}:{})}:{}),
-    candle_pattern:{...pattern,...patch}}
+    candle_pattern:{...pattern,...patch},
+    ...(enabled?{supertrend_ema_first_touch:{...touch,enabled:false}}:{})}
   });
  };
  const patternNumber=(key:keyof FuturesCandlePatternConfig,label:string,min:number,step:number)=><label key={key}>{label}
@@ -206,6 +241,18 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
    {patternNumber('max_estimated_risk_multiple','Fixed size estimated-risk allowance',1,.1)}
   </div>}
   <p>Enabling this mode selects FUTURES / SHORT-only / 5M, disables legacy percent exits, rule risk, pullback and adaptive. Configure Monday-Friday and the IST entry window in Futures risk and entry sessions. OHLC stop hits are research proxies, not guaranteed intrabar fills.</p>
+ </section>
+ <section className="card"><h2>1H Supertrend → first EMA20 touch (5M execution)</h2>
+  <p>Opt-in: confirm Supertrend (10,3) flip on 1H, consume the first subsequent completed 5M candle touching the last closed 1H EMA20, and enter at the NEXT 5M open. TP = 2× distance from executed entry to the frozen Supertrend line. No line-touch/fixed stop: exit only at TP or a confirmed opposite 1H flip (unless estimated liquidation occurs).</p>
+  <label className="switch"><input type="checkbox" checked={touch.enabled}
+   onChange={e=>setTouch({enabled:e.target.checked})}/>Enable first EMA20 touch, one trade per Supertrend cycle</label>
+  {touch.enabled&&<div className="form-grid">
+   <label>1H Supertrend indicator ID<input value={touch.supertrend_indicator_id} readOnly/></label>
+   <label>1H EMA20 indicator ID<input value={touch.ema_indicator_id} readOnly/></label>
+   <label>Take profit (reference R multiplier)<input type="number" step="0.25" min="0.1"
+    value={touch.reward_r_multiple} onChange={e=>setTouch({reward_r_multiple:Number(e.target.value)})}/></label>
+  </div>}
+  <p>Uses 5M historical OHLC, not 1-minute or tick fills. First touch is consumed even when entry is blocked. When enabling, ordinary entry/exit groups, other futures entry modes, fixed-percent exits, time exits and capital stop are disabled.</p>
  </section>
  <section className="card"><h2>Rule-tree futures dynamic risk</h2>
   <p>Opt-in swing/signal/ATR stops for ordinary CALL=LONG and PUT=SHORT rules, including VWAP strategies. ATR may come from this strategy timeframe or a completed, exact-multiple higher timeframe (for example, 1H ATR on 15M). Signal extremes and ATR are frozen at candle close; entry fills at the next open. Size estimates include fees and adverse stop slippage.</p>
