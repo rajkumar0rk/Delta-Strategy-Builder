@@ -300,3 +300,17 @@ The Futures engine cache identity advances from 16 to 17. Regression
 coverage includes actual fill-based stop placement, doji/entry filtering,
 trail activation/ratcheting, fee reconciliation, and schema checks.
 Market execution remains RESEARCH_ONLY.
+
+## 1H Supertrend + first EMA20 touch with 5M execution (opt-in, November 2026)
+
+Import `visualizer/backend/examples/btc-futures-supertrend-first-ema20-touch-2r.strategy.json` or enable the dedicated mode in Futures Settings.
+
+- `market_type="FUTURES"`, `strategy.timeframe="5m"`, `futures.supertrend_ema_first_touch.enabled=true`; non-chart-only `SUPERTREND(10,3)` and `EMA20` are both explicitly `timeframe="1h"`.
+- A **completed 1h Supertrend flip** arms a new cycle. The first **subsequent completed 5m** candle whose range includes the last fully closed 1h EMA20 **consumes** the cycle, whether or not the entry is blocked by risk, session or direction.
+- The signal fills at the **following 5m open** using configured adverse slippage/tick rounding. This is not a 1m/tick/intrabar EMA limit fill.
+- At simulated fill, freeze the Supertrend line from the signal and calculate `R = abs(entry_fill - frozen_ST_line)`, target `entry_fill + 2R` LONG or `entry_fill - 2R` SHORT (target rounded to tick). Reject a line on the wrong side, invalid R or a target outside valid prices. Only one trade per flip cycle; no second EMA touch allowed.
+- **Stop:** none at Supertrend line, no price-based SL. On an opposite confirmed **1h flip**, schedule exit for the next 5m open, unless the 5m target triggered earlier. Futures margin breach/liquidation can still force an estimated exit. The reference R is *not* an actual loss ceiling or guaranteed risk/reward.
+- Requires `futures.stop_loss_percent=null`, `futures.take_profit_percent=null`, `futures.capital_stop.enabled=false`, no time/session/forced exit, empty ordinary CALL/PUT entry/exit rule trees; specialized futures modes mutually exclusive.
+- Entry and take-profit fill proxies use only 5m OHLC; gap/fee/slippage and account-margin inaccuracies remain **RESEARCH_ONLY**. ETHUSD futures and 1m execution are not part of this mode. 22-month profitability has **not** been independently established.
+
+The cache version increments with the new mode, with no migration of old saved strategies; the config is opt-in.
