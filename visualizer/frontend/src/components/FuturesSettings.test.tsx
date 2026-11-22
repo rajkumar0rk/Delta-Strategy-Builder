@@ -49,6 +49,19 @@ describe('BTCUSD perpetual futures market editor',()=>{
    expect(html).toContain(token);
   }
  });
+ it('shows the dedicated confirmed-1h first EMA20 touch and reference 2R configuration',()=>{
+  const s=defaultStrategy();s.market_type='FUTURES';
+  s.futures={...s.futures!,supertrend_ema_first_touch:{
+   enabled:true,supertrend_indicator_id:'supertrend_1h',
+   ema_indicator_id:'ema20_1h',reward_r_multiple:2}};
+  const html=renderToStaticMarkup(<FuturesSettings value={s} onChange={()=>{}}/>);
+  expect(html).toContain('1H Supertrend');
+  expect(html).toContain('Enable first EMA20 touch');
+  expect(html).toContain('supertrend_1h');
+  expect(html).toContain('ema20_1h');
+  expect(html).toContain('following 5M open');
+  expect(html).toContain('no 1-minute');
+ });
  it('clearly labels simulated futures fills in result report',()=>{
   const s=defaultStrategy();s.market_type='FUTURES';
   const result:BacktestResult={run_id:'test',result_dir:'test',storage_mode:'COMPACT',strategy:s,
