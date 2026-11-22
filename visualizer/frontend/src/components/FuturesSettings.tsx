@@ -56,17 +56,24 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
    value={Number(pullback[key])} onChange={e=>setup({[key]:Number(e.target.value)})}/></label>);
 
  const touchDefaults:FuturesSupertrendEMATouchConfig={
-  enabled:false,supertrend_indicator_id:'supertrend_1h',ema_indicator_id:'ema20_1h',reward_r_multiple:2
+  enabled:false,supertrend_indicator_id:'supertrend_1h',ema_indicator_id:'ema20_1h',
+  exit_mode:'REFERENCE_2R',reward_r_multiple:2,atr_indicator_id:'atr14_1h',
+  trailing_atr_multiple:3
  };
  const touch={...touchDefaults,...f.supertrend_ema_first_touch};
  const setTouch=(patch:Partial<FuturesSupertrendEMATouchConfig>)=>{
   const enabled=patch.enabled===true;
+  const nextExitMode=patch.exit_mode??touch.exit_mode??'REFERENCE_2R';
   const blank=()=>({mode:'ALL' as const,min_pass:1,conditions:[],groups:[]});
   const required:IndicatorInstance[]=[
    {id:touch.supertrend_indicator_id,kind:'SUPERTREND' as const,
     params:{atr_period:10,multiplier:3},timeframe:'1h' as const,visible:true,chart_only:false},
    {id:touch.ema_indicator_id,kind:'EMA' as const,
-    params:{period:20,source:'close'},timeframe:'1h' as const,visible:true,chart_only:false}
+    params:{period:20,source:'close'},timeframe:'1h' as const,visible:true,chart_only:false},
+   ...(nextExitMode==='ATR_TRAIL'?[{
+    id:touch.atr_indicator_id??'atr14_1h',kind:'ATR',
+    params:{period:14},timeframe:'1h' as const,visible:false,chart_only:false
+   }]:[])
   ];
   onChange({...value,
    ...(enabled?{
@@ -77,7 +84,9 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
     risk:{...value.risk,max_hold_minutes:null,close_at_session_end:false},
     pattern_trade:value.pattern_trade?{...value.pattern_trade,enabled:false}:undefined
    }:{}),
-   indicators:enabled?[...value.indicators.filter(i=>!required.some(r=>r.id===i.id)),...required]:value.indicators,
+   indicators:(enabled||patch.exit_mode==='ATR_TRAIL')
+    ?[...value.indicators.filter(i=>!required.some(r=>r.id===i.id)),...required]
+    :value.indicators,
    futures:{...f,...(enabled?{
      stop_loss_percent:null,take_profit_percent:null,force_exit_time:null,
      capital_stop:{...capitalStop,enabled:false},
@@ -244,14 +253,26 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   <p>Enabling this mode selects FUTURES / SHORT-only / 5M, disables legacy percent exits, rule risk, pullback and adaptive. Configure Monday-Friday and the IST entry window in Futures risk and entry sessions. OHLC stop hits are research proxies, not guaranteed intrabar fills.</p>
  </section>
  <section className="card"><h2>1H Supertrend → first EMA20 touch (5M execution)</h2>
-  <p>Opt-in: confirm Supertrend (10,3) flip on 1H, consume the first subsequent completed 5M candle touching the last closed 1H EMA20, and enter at the NEXT 5M open. TP = 2× distance from executed entry to the frozen Supertrend line. No line-touch/fixed stop: exit only at TP or a confirmed opposite 1H flip (unless estimated liquidation occurs).</p>
+  <p>Opt-in: confirm Supertrend (10,3) flip on 1H, consume the first subsequent completed 5M candle touching the last closed 1H EMA20, and enter at the NEXT 5M open. Choose legacy fixed 2R TP or completed 1H ATR trailing (3× ATR default). Opposite 1H Supertrend flip also exits; estimated liquidation is possible.</p>
   <label className="switch"><input type="checkbox" checked={touch.enabled}
    onChange={e=>setTouch({enabled:e.target.checked})}/>Enable first EMA20 touch, one trade per Supertrend cycle</label>
   {touch.enabled&&<div className="form-grid">
    <label>1H Supertrend indicator ID<input value={touch.supertrend_indicator_id} readOnly/></label>
    <label>1H EMA20 indicator ID<input value={touch.ema_indicator_id} readOnly/></label>
-   <label>Take profit (reference R multiplier)<input type="number" step="0.25" min="0.1"
-    value={touch.reward_r_multiple} onChange={e=>setTouch({reward_r_multiple:Number(e.target.value)})}/></label>
+   <label>Exit mode<select value={touch.exit_mode??'REFERENCE_2R'}
+    onChange={e=>setTouch({exit_mode:e.target.value as NonNullable<FuturesSupertrendEMATouchConfig['exit_mode']>})}>
+    <option value="REFERENCE_2R">Fixed take-profit at 2R (legacy)</option>
+    <option value="ATR_TRAIL">No take-profit · 3× ATR trailing stop</option>
+   </select></label>
+   {(touch.exit_mode??'REFERENCE_2R')==='REFERENCE_2R'
+    ?<label>Take profit (reference R multiplier)<input type="number" step="0.25" min="0.1"
+      value={touch.reward_r_multiple??2} onChange={e=>setTouch({reward_r_multiple:Number(e.target.value)})}/></label>
+    :<>
+     <label>1H ATR indicator ID<input value={touch.atr_indicator_id??'atr14_1h'} readOnly/></label>
+     <label>ATR trailing multiplier<input type="number" min="0.1" step="0.25"
+      value={touch.trailing_atr_multiple??3} onChange={e=>setTouch({trailing_atr_multiple:Number(e.target.value)})}/></label>
+     <p>Initial stop = entry ± ATR multiplier × last completed 1H ATR14. Stop only tightens after each completed 5M candle, effective from the next 5M candle. No fixed take-profit.</p>
+    </>}
   </div>}
   <p>Uses 5M historical OHLC, not 1-minute or tick fills. First touch is consumed even when entry is blocked. When enabling, ordinary entry/exit groups, other futures entry modes, fixed-percent exits, time exits and capital stop are disabled.</p>
  </section>
