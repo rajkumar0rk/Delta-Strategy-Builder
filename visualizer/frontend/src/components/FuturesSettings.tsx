@@ -1,4 +1,4 @@
-import type {FuturesConfig,FuturesCandlePatternConfig,FuturesCapitalStopConfig,FuturesSupertrendEMATouchConfig,Strategy} from '../types';
+import type {FuturesConfig,FuturesCandlePatternConfig,FuturesCapitalStopConfig,FuturesSupertrendEMATouchConfig,IndicatorInstance,Strategy} from '../types';
 import {AdaptiveFuturesEditor} from './AdaptiveFuturesEditor';
 
 const defaults:FuturesConfig={symbol:'BTCUSD',contract_btc:0.001,quantity_lots:1,leverage:5,
@@ -62,7 +62,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
  const setTouch=(patch:Partial<FuturesSupertrendEMATouchConfig>)=>{
   const enabled=patch.enabled===true;
   const blank=()=>({mode:'ALL' as const,min_pass:1,conditions:[],groups:[]});
-  const required=[
+  const required:IndicatorInstance[]=[
    {id:touch.supertrend_indicator_id,kind:'SUPERTREND' as const,
     params:{atr_period:10,multiplier:3},timeframe:'1h' as const,visible:true,chart_only:false},
    {id:touch.ema_indicator_id,kind:'EMA' as const,
