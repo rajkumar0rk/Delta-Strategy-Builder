@@ -58,7 +58,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
  const touchDefaults:FuturesSupertrendEMATouchConfig={
   enabled:false,supertrend_indicator_id:'supertrend_1h',ema_indicator_id:'ema20_1h',
   exit_mode:'REFERENCE_2R',reward_r_multiple:2,atr_indicator_id:'atr14_1h',
-  trailing_atr_multiple:3
+  trailing_atr_multiple:3,trailing_distance_points:200
  };
  const touch={...touchDefaults,...f.supertrend_ema_first_touch};
  const setTouch=(patch:Partial<FuturesSupertrendEMATouchConfig>)=>{
@@ -254,7 +254,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   <p>Enabling this mode selects FUTURES / SHORT-only / 5M, disables legacy percent exits, rule risk, pullback and adaptive. Configure Monday-Friday and the IST entry window in Futures risk and entry sessions. OHLC stop hits are research proxies, not guaranteed intrabar fills.</p>
  </section>
  <section className="card"><h2>1H Supertrend → first EMA20 touch (5M execution)</h2>
-  <p>Opt-in: confirm Supertrend (10,3) flip on 1H, consume the first subsequent completed 5M candle touching the last closed 1H EMA20, and enter at the NEXT 5M open. Choose legacy fixed 2R TP or completed 1H ATR trailing (3× ATR default). Opposite 1H Supertrend flip also exits; estimated liquidation is possible.</p>
+  <p>Opt-in: confirmed 1H Supertrend (10,3) flip, first completed 5M EMA20 touch, NEXT 5M open entry. Choose fixed 2R, 3×ATR trailing, point trailing (200 BTCUSD points by default), or opposite-flip only. Opposite confirmed 1H flip always exits, and estimated margin breaches can force an exit.</p>
   <label className="switch"><input type="checkbox" checked={touch.enabled}
    onChange={e=>setTouch({enabled:e.target.checked})}/>Enable first EMA20 touch, one trade per Supertrend cycle</label>
   {touch.enabled&&<div className="form-grid">
@@ -265,12 +265,20 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
     <option value="REFERENCE_2R">Fixed take-profit at 2R (legacy)</option>
     <option value="ATR_TRAIL">No take-profit · 3× ATR trailing stop</option>
     <option value="FLIP_ONLY">No TP or ATR — exit on opposite Supertrend flip only</option>
+    <option value="POINT_TRAIL">No fixed TP — 200-point trailing + Supertrend flip</option>
    </select></label>
    {(touch.exit_mode??'REFERENCE_2R')==='REFERENCE_2R'
     ?<label>Take profit (reference R multiplier)<input type="number" step="0.25" min="0.1"
       value={touch.reward_r_multiple??2} onChange={e=>setTouch({reward_r_multiple:Number(e.target.value)})}/></label>
     :(touch.exit_mode==='FLIP_ONLY')
     ?<p>Exit only at NEXT 5M open after a confirmed opposite 1H Supertrend flip. No fixed TP, ATR trail or price stop; margin/liquidation is still estimated.</p>
+    :(touch.exit_mode==='POINT_TRAIL')
+    ?<>
+     <label>Trailing distance (BTCUSD points)<input type="number" min="0.5" step="0.5"
+       value={touch.trailing_distance_points??200}
+       onChange={e=>setTouch({trailing_distance_points:Number(e.target.value)})}/></label>
+     <p>Protective 200-point stop active from entry. Ratchet only on a completed 5M favorable high/low; updated stop applies from next 5M candle. No fixed TP; losing trades may exit before the 1H Supertrend flips.</p>
+    </>
     :<>
      <label>1H ATR indicator ID<input value={touch.atr_indicator_id??'atr14_1h'} readOnly/></label>
      <label>ATR trailing multiplier<input type="number" min="0.1" step="0.25"
