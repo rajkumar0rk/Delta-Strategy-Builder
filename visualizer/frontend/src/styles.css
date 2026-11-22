@@ -112,3 +112,8 @@
 .research-job-progress p,.research-job-progress small{font-size:11px;color:#97aac4;overflow-wrap:anywhere}
 .research-job-progress button{justify-self:end}
 .research-job-feedback{margin-top:12px;padding:8px 10px;border:1px solid #33445e;border-radius:7px}
+
+/* Long-range chart navigation leaves the full-period backtest unchanged. */
+.chart-window-nav{display:flex;align-items:center;flex-wrap:wrap;gap:7px;min-width:280px;color:#aabbd0;font-size:10px}
+.chart-window-nav span{white-space:nowrap}
+.chart-window-nav small{color:#71849b}
