@@ -759,7 +759,9 @@ def run_futures_backtest(req, progress=None):
                         pending=('CLOSE','TIME_STOP')
                     elif strategy.risk.close_at_session_end and _session_end_due(ts,strategy.session,tf):
                         pending=('CLOSE','SESSION_END_EXIT')
-                    elif not candle_pattern and ((position['direction']=='LONG' and strategy.call_exit_signal_mode!='ALERT_ONLY' and evaluate_group(frame,i,strategy.call_exit)['passed'] and strategy.call_exit.configured())
+                    elif first_touch_cycle is not None and first_touch_cycle.opposite_flip_at_close(ts,row,position['direction']):
+                        pending=('CLOSE','SUPERTREND_FLIP')
+                    elif not candle_pattern and not first_touch_config and ((position['direction']=='LONG' and strategy.call_exit_signal_mode!='ALERT_ONLY' and evaluate_group(frame,i,strategy.call_exit)['passed'] and strategy.call_exit.configured())
                        or (position['direction']=='SHORT' and strategy.put_exit_signal_mode!='ALERT_ONLY' and evaluate_group(frame,i,strategy.put_exit)['passed'] and strategy.put_exit.configured())):
                         # Condition known at this candle's close: cannot execute
                         # at this candle's close. Next bar open is required.
@@ -830,6 +832,29 @@ def run_futures_backtest(req, progress=None):
           or strategy.risk.max_daily_loss_percent is not None and strategy.risk.stop_trading_after_daily_loss_limit
              and daily['realized']<=-daily['start_balance']*strategy.risk.max_daily_loss_percent/100):
             daily['blocks']+=1
+            continue
+        if first_touch_config:
+            # Entry is signaled on the first completed 5m EMA touch only.
+            if touch_signal is not None:
+                direction=touch_signal['direction']
+                enabled=call_enabled if direction=='LONG' else put_enabled
+                side_no_trade=strategy.call_no_trade if direction=='LONG' else strategy.put_no_trade
+                if enabled and (not side_no_trade.configured() or
+                    not evaluate_group(frame,i,side_no_trade)['passed']):
+                    pending=direction
+                    pending_setup={**touch_signal,'supertrend_ema_first_touch':True}
+                    pending_lifecycle_id='FIRST_EMA_TOUCH_PER_SUPERTREND_CYCLE'
+                    pending_lifecycle_snapshot={
+                        'entry_lifecycle_id':'FIRST_EMA_TOUCH_PER_SUPERTREND_CYCLE',
+                        'entry_lifecycle_signal_time':ts.isoformat(),
+                        'entry_lifecycle_age_bars':0,'entry_lifecycle_delay_bars':0,
+                        'entry_lifecycle_entries_before':0,'entry_lifecycle_max_entries':1,
+                        'entry_lifecycle_expired':False,'entry_lifecycle_eligible':True}
+                    decisions.append({'timestamp':ts.isoformat(),'kind':'SIGNAL',
+                        'direction':direction,'passed':True,
+                        'reason':'FIRST_EMA_TOUCH_AFTER_CONFIRMED_SUPERTREND_FLIP',
+                        'supertrend_reference_line':touch_signal['supertrend_reference_line'],
+                        'ema_touch_level':touch_signal['ema_touch_level']})
             continue
         if candle_pattern:
             # Completed-hour setup is known only at this 5m CLOSE and fills
@@ -1055,7 +1080,8 @@ def run_futures_backtest(req, progress=None):
            'Real exchange mark-to-market drawdown cannot be computed; candle-close proxy estimates are supplied separately',
            'Cash balance includes accrued funding and entry fees of any unresolved futures position; closed-trade net PnL excludes its open price exposure',
            'Funding excluded' if cfg.funding_mode=='EXCLUDE_WITH_WARNING' else 'Funding rates supplied externally and settlement notional approximated',
-           'Current published BTCUSD margin tiers are not historical account margin; INR conversion and actual liquidation are not modeled']},
+           'Current published BTCUSD margin tiers are not historical account margin; INR conversion and actual liquidation are not modeled',
+           'Supertrend first-touch uses completed 5m touch signals, next-open entry, 5m TP and NO Supertrend-line stop' if first_touch_config else 'No first-touch mode enabled']},
       'fee_model':{'name':'DELTA_FUTURES_ASSUMED_TAKER','taker_fee_percent':cfg.taker_fee_percent,'gst_percent':cfg.gst_percent},
       'futures_research':{'contract_snapshot':BTCUSD_SNAPSHOT,'contract_warnings':contract_warnings,
         'historical_margin_tiers_verified':False,
@@ -1070,6 +1096,9 @@ def run_futures_backtest(req, progress=None):
         'rule_risk_stop_mode':rule_risk.stop_mode if rule_risk else None,
         'rule_risk_execution_timeframe':('5m' if fine_rule_execution else strategy.timeframe),
         'rule_risk_trailing_mode':rule_risk.trailing_mode if rule_risk and rule_risk.trailing_enabled else None,
+        'supertrend_ema_first_touch_enabled':bool(first_touch_config),
+        'supertrend_ema_first_touch':first_touch_config.model_dump() if first_touch_config else None,
+        'supertrend_ema_execution_timeframe':'5m' if first_touch_config else None,
         'candle_pattern_enabled':bool(candle_pattern),
         'candle_pattern_config':candle_pattern.model_dump() if candle_pattern else None,
         'adaptive_regime_transitions':planner.regime_log if adaptive else [],
