@@ -252,3 +252,7 @@ The Futures engine cache identity advances from 16 to 17. Regression
 coverage includes actual fill-based stop placement, doji/entry filtering,
 trail activation/ratcheting, fee reconciliation, and schema checks.
 Market execution remains RESEARCH_ONLY.
+
+## New opt-in: 1H Supertrend first EMA20 touch (5M execution)
+
+When requested, prefer `futures.supertrend_ema_first_touch` to generic CALL/PUT rule-tree lifecycles. Required config: `{"enabled":true,"supertrend_indicator_id":"supertrend_1h","ema_indicator_id":"ema20_1h","reward_r_multiple":2}`. Set strategy `market_type=FUTURES`, `timeframe=5m`; indicators `supertrend_1h` kind `SUPERTREND`, params `{"atr_period":10,"multiplier":3}`, timeframe `1h`, and `ema20_1h` kind `EMA`, params `{"period":20,"source":"close"}`, timeframe `1h`. Both must be non-chart-only. Remove ordinary entry and exit trees, disable other specialized modes, fixed-percent exits, time exits, capital stop and forced exits. The last closed hourly EMA20 is used for first completed-5m touch detection; fill is at next 5m open. At fill freeze hourly Supertrend-line reference R, TP 2R (not a protective stop), and close on next-open after the opposite confirmed hourly flip if no TP earlier. One touch is consumed per flip, even if skipped. No 1m or ETH futures support. See `visualizer/backend/examples/btc-futures-supertrend-first-ema20-touch-2r.strategy.json`. RESEARCH_ONLY, risk not guaranteed 1:2.
