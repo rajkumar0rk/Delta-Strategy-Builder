@@ -2,6 +2,7 @@ import {useEffect,useMemo,useRef,useState} from 'react';
 import {api} from './api';
 import {calculateChartWindow,markersInWindow} from './chartWindow';
 import {LatestRequest} from './latestRequest';
+import {backtestOverlayCurrent} from './backtestOverlay';
 import {defaultStrategy} from './defaults';
 import dayLevelAlerts from '../../examples/previous-day-swing-alerts.strategy.json';
 import type {ArchiveInfo,ArchiveSyncPlan,BacktestResult,ChartPayload,Dataset,IndicatorDefinition,JobState,PreflightResult,SavedStrategy,Strategy,StorageMode} from './types';
@@ -46,6 +47,7 @@ export default function App(){
  const [start,setStart]=useState('');const [end,setEnd]=useState('');
  const [strategy,setStrategy]=useState<Strategy>(defaultStrategy());const [chart,setChart]=useState<ChartPayload|null>(null);const [result,setResult]=useState<BacktestResult|null>(null);
  const [chartWindowOffset,setChartWindowOffset]=useState(0);
+ const [completedBacktestScope,setCompletedBacktestScope]=useState<string|null>(null);
  const [status,setStatus]=useState('');const [busy,setBusy]=useState(false);const [promptBusy,setPromptBusy]=useState(false);const [preflight,setPreflight]=useState<PreflightResult|null>(null);const [job,setJob]=useState<JobState|null>(null);const [activeJobId,setActiveJobId]=useState<string|null>(null);
  const [savedStrategies,setSavedStrategies]=useState<SavedStrategy[]>([]);const [savedStrategyId,setSavedStrategyId]=useState('');
  const [autoDownloadMissing,setAutoDownloadMissing]=useState(true);const [autoSyncFuturesObservations,setAutoSyncFuturesObservations]=useState(false);const [archivePlan,setArchivePlan]=useState<ArchiveSyncPlan|null>(null);
@@ -71,6 +73,8 @@ export default function App(){
  const timeframeMinutes=({'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'4h':240,'1D':1440} as Record<string,number>)[strategy.timeframe]||5;
  const selectedBars=useMemo(()=>{if(!start||!end)return 0;const ms=new Date(`${end}:00Z`).getTime()-new Date(`${start}:00Z`).getTime();return Math.max(0,Math.floor(ms/(timeframeMinutes*60_000))+1)},[start,end,timeframeMinutes]);
  const selectionBody=()=>({dataset_mode:datasetMode,dataset_id:datasetMode==='SINGLE'?datasetId:null,dataset_ids:datasetMode==='MULTI'?datasetIds:[]});
+ const currentBacktestScope=JSON.stringify({...selectionBody(),start,end,barGapPolicy});
+ const resultIsCurrent=backtestOverlayCurrent(result,strategy,completedBacktestScope,currentBacktestScope);
  const rangeIso=()=>{const s=inputToUtcIso(start);const inclusiveEnd=inputToUtcIso(end);if(new Date(inclusiveEnd)<new Date(s))throw new Error('To UTC candle must be the same as or later than From UTC');const e=plusMinutes(inclusiveEnd,timeframeMinutes);if(bounds&&datasetMode!=='ARCHIVE'){const lo=new Date(bounds.start).getTime();const hiInclusive=new Date(bounds.end).getTime();if(new Date(s).getTime()<lo||new Date(inclusiveEnd).getTime()>hiInclusive)throw new Error(`Selected UTC candles must stay inside downloaded coverage: ${utcInput(bounds.start)} → ${utcInput(bounds.end)}`)}return {s,e,inclusiveEnd}};
 
  const chartWindow=useMemo(()=>{
@@ -94,17 +98,21 @@ export default function App(){
    error=>setChartError(`Chart preview failed: ${String(error)}. Backtest results remain available.`),
    ()=>setChartLoading(false));
  };
- const preview=(markers=result?.markers||[],quiet=false)=>{
+ const preview=(quiet=false)=>{
   if(!start||!end)return;
   if(datasetMode==='SINGLE'&&!datasetId)return;
   if(datasetMode==='MULTI'&&!datasetIds.length)return;
   try{const {s,e}=rangeIso();
-   loadChart({...selectionBody(),start:s,end:e,indicators:strategy.indicators,strategy},markers,result?.trades||[],
+   // Changing settings does not rerun the execution engine. Never reuse
+   // trade markers from the previous backtest on new indicator previews.
+   const matching=resultIsCurrent?result:null;
+   loadChart({...selectionBody(),start:s,end:e,indicators:strategy.indicators,strategy},
+    matching?.markers||[],matching?.trades||[],
     quiet?undefined:`Loaded {count} completed ${strategy.timeframe} candles.`);
   }catch(error){if(!quiet)setChartError(String(error))}
  };
  const previewSignature=useMemo(()=>JSON.stringify({market_type:strategy.market_type,futures:strategy.futures,timeframe:strategy.timeframe,entry_evaluation_timeframe:strategy.entry_evaluation_timeframe,direction_mode:strategy.direction_mode,indicators:strategy.indicators,call_entry:strategy.call_entry,put_entry:strategy.put_entry,no_trade:strategy.no_trade,call_no_trade:strategy.call_no_trade,put_no_trade:strategy.put_no_trade,alerts:strategy.alerts,call_signal_mode:strategy.call_signal_mode,put_signal_mode:strategy.put_signal_mode,call_exit_signal_mode:strategy.call_exit_signal_mode,put_exit_signal_mode:strategy.put_exit_signal_mode,call_exit_alert_message:strategy.call_exit_alert_message,put_exit_alert_message:strategy.put_exit_alert_message,call_action:strategy.call_action,put_action:strategy.put_action,call_alert_message:strategy.call_alert_message,put_alert_message:strategy.put_alert_message,call_entry_lifecycles:strategy.call_entry_lifecycles,put_entry_lifecycles:strategy.put_entry_lifecycles,call_big_trend_score:strategy.call_big_trend_score,put_big_trend_score:strategy.put_big_trend_score,call_trend_phase:strategy.call_trend_phase,put_trend_phase:strategy.put_trend_phase,call_breakout_retest:strategy.call_breakout_retest,put_breakout_retest:strategy.put_breakout_retest}),[strategy]);
- useEffect(()=>{if(!start||!end||busyRef.current)return;if(skipCompletedStrategyPreview.current===strategy){skipCompletedStrategyPreview.current=null;return}const timer=window.setTimeout(()=>{if(!busyRef.current)preview(result?.markers||[],true)},350);return()=>window.clearTimeout(timer)},[previewSignature,datasetMode,datasetId,JSON.stringify(datasetIds),start,end,chartWindowOffset]);
+ useEffect(()=>{if(!start||!end||busyRef.current)return;if(skipCompletedStrategyPreview.current===strategy){skipCompletedStrategyPreview.current=null;return}const timer=window.setTimeout(()=>{if(!busyRef.current)preview(true)},350);return()=>window.clearTimeout(timer)},[previewSignature,datasetMode,datasetId,JSON.stringify(datasetIds),start,end,chartWindowOffset]);
 
  const refreshArchiveData=async()=>{const [d,a]=await Promise.all([api.datasets(),api.archive()]);setDatasets(d);setArchive(a)};
  const repairArchive=async()=>{if(datasetMode!=='ARCHIVE')return;setBusy(true);setJob(null);setArchivePlan(null);try{const {s,e}=rangeIso();const plan=await api.archivePlan({start:s,end:e,market_type:strategy.market_type||'OPTIONS'});setArchivePlan(plan);if(plan.ready)setStatus('Catalog complete; checking physical 5m candle timestamps…');if(plan.missing_segment_files.some(x=>x.missing.some(name=>name!=='underlying_bars.csv'))){throw new Error(`Existing archive segment files are missing: ${plan.missing_segment_files.map(x=>`${x.name}: ${x.missing.join(', ')}`).join('; ')}. Automatic append will not overwrite an existing migrated segment.`)}setStatus('Checking BTC candle cache and repairing only missing intervals…');const {job_id}=await api.archiveSync({start:s,end:e,market_type:strategy.market_type||'OPTIONS'});setActiveJobId(job_id);let done:JobState;for(;;){await new Promise(r=>setTimeout(r,500));done=await api.job(job_id);setJob(done);setStatus(done.message||done.status);if(['COMPLETE','FAILED','CANCELLED'].includes(done.status))break}if(done.status==='FAILED')throw new Error(done.error||done.message);if(done.status==='CANCELLED'){setStatus('Archive download stopped. Cached raw responses remain reusable.');return}await refreshArchiveData();const after=await api.archivePlan({start:s,end:e,market_type:strategy.market_type||'OPTIONS'});setArchivePlan(after);setStatus(after.ready?'✓ BTC candle cache checked; missing data repaired if needed.':'Archive sync finished, but the selected range still needs attention.')}catch(e){setStatus(`Archive repair failed: ${String(e)}`)}finally{setBusy(false);setActiveJobId(null)}};
@@ -115,6 +123,7 @@ export default function App(){
   setBusy(true);setPreflight(null);setJob(null);
   try{
    const {s,e}=rangeIso();const selection=selectionBody();
+   const runScope=currentBacktestScope;
    const validated=await api.validate(strategy);
    setStrategy(validated.strategy);
    const request={...selection,start:s,end:e,strategy:validated.strategy,storage_mode:storageMode,
@@ -130,7 +139,8 @@ export default function App(){
    if(done.status==='FAILED'||!done.result)throw new Error(done.error||done.message);
    const completed=done.result;
    skipCompletedStrategyPreview.current=completed.strategy;
-   setPreflight(completed.preflight||null);setResult(completed);setStrategy(completed.strategy);
+   setPreflight(completed.preflight||null);
+   setCompletedBacktestScope(runScope);setResult(completed);setStrategy(completed.strategy);
    setStatus(`${completed.cache_hit?'⚡ Cache hit':'Backtest complete'}: ${completed.metrics.trades} trades · net $${Number(completed.metrics.net_pnl_usd||0).toFixed(2)} after fees + GST.`);
    // Chart preview is independent post-processing. Unlock Run immediately.
    busyRef.current=false;setBusy(false);setActiveJobId(null);
@@ -178,7 +188,9 @@ export default function App(){
  <section className="card name-card"><label>Strategy name<input value={strategy.name} onChange={e=>setStrategy({...strategy,name:e.target.value})}/></label><label>Saved project strategy<select value={savedStrategyId} onChange={e=>setSavedStrategyId(e.target.value)}><option value="">Select saved strategy…</option>{savedStrategies.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select></label><div className="strategy-actions"><button onClick={async()=>{try{const x=await api.save(strategy);setStatus(`Saved to project: ${x.path}`);await refreshSaved()}catch(e){setStatus(String(e))}}}>Save to project</button><button disabled={!savedStrategyId} onClick={async()=>{try{const x=await api.loadProjectStrategy(savedStrategyId);setStrategy(x.strategy);setResult(null);setStatus(`Loaded project strategy: ${x.strategy.name}`)}catch(e){setStatus(String(e))}}}>Load selected</button><button className="ghost" onClick={()=>void refreshSaved()}>↻ Strategies</button><button disabled={busy} onClick={()=>{setStrategy(structuredClone(dayLevelAlerts.strategy) as Strategy);setResult(null);setChart(null);setSavedStrategyId('');setStatus('Loaded previous-day swing alerts: 5m, IST days, 30-day older swing search, 100-point warnings. No orders.')}}>Previous-day swing alerts</button><button onClick={exportStrategy}>Export strategy</button><button onClick={()=>importRef.current?.click()}>Import strategy</button><button className="ai-button" disabled={promptBusy} onClick={()=>void copyAiPrompt(false)}>✦ Copy AI strategy prompt</button><button className="ghost" disabled={promptBusy} onClick={()=>void copyAiPrompt(true)}>Download AI prompt</button><button className="ghost" onClick={()=>{setStrategy(defaultStrategy());setResult(null);setStatus('Reset to V15.1 default strategy.')}}>Reset</button><input ref={importRef} className="hidden-file" type="file" accept=".json,application/json" onChange={e=>{const f=e.target.files?.[0];if(f)void importStrategy(f);e.currentTarget.value=''}}/></div></section>
  <section className="ai-hint"><b>V15.1 research workflow:</b> keep the stateful V12 entry engine, then use Big Trend Outcome Discovery to label genuine future moves and compare their pre-move ADX/DMI, ATR expansion, EMA separation, slopes, score/state and other configured indicator features against fake strong-looking setups.</section>
  <StorageManager onStatus={setStatus}/>
- <TradingChart payload={chart} strategy={strategy} onMoveIndicator={moveIndicator} onToggleIndicator={toggleIndicator}/>
+ {result&&!resultIsCurrent&&<div className="warning-box" role="status"><b>Backtest is outdated for the current settings.</b> Previous entry/exit markers and CALL OPEN / PUT OPEN badges are hidden. This preview shows indicators only; click <b>Run backtest</b> to verify the selected stop mode.</div>}
+ {resultIsCurrent&&strategy.futures?.supertrend_ema_first_touch?.enabled&&<div className="fee-summary" role="status"><b>Executed backtest settings:</b> First EMA20 touch · Exit mode: {strategy.futures.supertrend_ema_first_touch.exit_mode||'REFERENCE_2R'}{strategy.futures.supertrend_ema_first_touch.exit_mode==='POINT_TRAIL'?` · Trailing distance: ${strategy.futures.supertrend_ema_first_touch.trailing_distance_points??200} BTCUSD points`:''}. Historical 5M stop execution; not live orders.</div>}
+ <TradingChart payload={result&&!resultIsCurrent?null:chart} strategy={strategy} onMoveIndicator={moveIndicator} onToggleIndicator={toggleIndicator}/>
  <BigTrendDetector payload={chart} strategy={strategy}/>
  {researchRange.start&&<TrendDiscoveryPanel selection={selectionBody()} start={researchRange.start} end={researchRange.end} strategy={strategy} onStatus={setStatus}/>}
  <IndicatorManager catalog={catalog} value={strategy.indicators} onChange={indicators=>setStrategy({...strategy,indicators})}/>
@@ -193,7 +205,7 @@ export default function App(){
  <div className={directionClass}>{strategy.direction_mode!=='PUT'&&<RuleBuilder title={strategy.market_type==='FUTURES'?'LONG exit':'CALL exit'} value={strategy.call_exit} operands={operands} onChange={call_exit=>setStrategy({...strategy,call_exit})} description={strategy.market_type==='FUTURES'?'Only manages LONG futures.':`Only manages an open ${strategy.call_action} CALL.`}/>} {strategy.direction_mode!=='CALL'&&<RuleBuilder title={strategy.market_type==='FUTURES'?'SHORT exit':'PUT exit'} value={strategy.put_exit} operands={operands} onChange={put_exit=>setStrategy({...strategy,put_exit})} description={strategy.market_type==='FUTURES'?'Only manages SHORT futures.':`Only manages an open ${strategy.put_action} PUT.`}/>}</div>
  <RuleBuilder title="Shared NO TRADE conditions" value={strategy.no_trade} operands={operands} onChange={no_trade=>setStrategy({...strategy,no_trade})} description="If this group passes, both CALL and PUT entries are blocked on that completed candle."/><div className={directionClass}>{strategy.direction_mode!=='PUT'&&<RuleBuilder title="CALL NO TRADE" value={strategy.call_no_trade} operands={operands} onChange={call_no_trade=>setStrategy({...strategy,call_no_trade})} description="Blocks CALL entries only; PUT can still trade."/>}{strategy.direction_mode!=='CALL'&&<RuleBuilder title="PUT NO TRADE" value={strategy.put_no_trade} operands={operands} onChange={put_no_trade=>setStrategy({...strategy,put_no_trade})} description="Blocks PUT entries only; CALL can still trade."/>}</div>
  <ReplayResearchPanel strategy={strategy} selection={selectionBody()} start={researchRange.start} end={researchRange.end} onStatus={setStatus}/>
- <Results r={result}/><EquityDrawdown result={result}/><AnalysisPanel runId={result?.run_id||null}/>{researchRange.start&&datasetMode==='SINGLE'&&<ResearchPanel datasetId={datasetId} start={researchRange.start} end={researchRange.end} strategy={strategy} onStatus={setStatus}/>}<DecisionLog runId={result?.run_id||null}/>
+ <Results r={resultIsCurrent?result:null}/><EquityDrawdown result={resultIsCurrent?result:null}/><AnalysisPanel runId={resultIsCurrent?result?.run_id||null:null}/>{researchRange.start&&datasetMode==='SINGLE'&&<ResearchPanel datasetId={datasetId} start={researchRange.start} end={researchRange.end} strategy={strategy} onStatus={setStatus}/>}<DecisionLog runId={resultIsCurrent?result?.run_id||null:null}/>
  <footer>The unified delta-history archive is normally read-only; V15.1 may append missing completed history only when you explicitly request it or enable auto-download. V15.1 keeps result artifacts compact and provides explicit storage cleanup controls inside the current app folder.</footer></main>
 }
 
