@@ -717,15 +717,24 @@ class FuturesSupertrendEMATouchConfig(BaseModel):
     (except simulated liquidation/margin events).
     POINT_TRAIL has no fixed target; its immediately active price stop trails
     favorable 5m highs/lows in BTCUSD points without intrabar lookahead.
+    ACTIVATED_POINT_TRAIL starts with a swing-protective stop, then activates
+    point trailing only after a favorable BTCUSD move of configured points.
+    BREAKOUT_OR_REJECTION can enter on a closed 5m Donchian-style breakout
+    or first directional EMA20 rejection after a confirmed 1h flip.
     """
     enabled: bool = False
     supertrend_indicator_id: str = "supertrend_1h"
     ema_indicator_id: str = "ema20_1h"
-    exit_mode: Literal["REFERENCE_2R", "ATR_TRAIL", "FLIP_ONLY", "POINT_TRAIL"] = "REFERENCE_2R"
+    entry_mode: Literal["FIRST_TOUCH", "BREAKOUT", "BREAKOUT_OR_REJECTION"] = "FIRST_TOUCH"
+    breakout_lookback_bars: int = Field(default=12, ge=2, le=500)
+    require_ema_slope: bool = True
+    swing_stop_lookback_bars: int = Field(default=12, ge=2, le=500)
+    exit_mode: Literal["REFERENCE_2R", "ATR_TRAIL", "FLIP_ONLY", "POINT_TRAIL", "ACTIVATED_POINT_TRAIL"] = "REFERENCE_2R"
     reward_r_multiple: float = Field(default=2.0, gt=0, le=100)
     atr_indicator_id: str = "atr14_1h"
     trailing_atr_multiple: float = Field(default=3.0, gt=0, le=100)
     trailing_distance_points: float = Field(default=200.0, gt=0, le=1000000)
+    trailing_activation_points: float = Field(default=500.0, gt=0, le=1000000)
 
 
 class FuturesCandlePatternConfig(BaseModel):
@@ -1002,6 +1011,15 @@ class StrategyConfig(BaseModel):
                 raise ValueError("First-touch EMA must be a non-chart-only 1h EMA20 indicator")
             if st.params.get("atr_period") != 10 or float(st.params.get("multiplier",0)) != 3.0:
                 raise ValueError("First-touch Supertrend requires ATR period 10 and multiplier 3")
+            if stcfg.entry_mode != "FIRST_TOUCH" and stcfg.exit_mode != "ACTIVATED_POINT_TRAIL":
+                raise ValueError("Supertrend breakout/rejection entry requires ACTIVATED_POINT_TRAIL to retain its swing-protective stop")
+            if stcfg.exit_mode == "ACTIVATED_POINT_TRAIL" and stcfg.entry_mode == "FIRST_TOUCH":
+                raise ValueError("ACTIVATED_POINT_TRAIL requires a breakout/rejection entry with swing stop")
+            if stcfg.trailing_activation_points <= stcfg.trailing_distance_points:
+                # This setting must allow a positive lock at activation; users can
+                # model zero/negative locks with the immediately active POINT_TRAIL.
+                if stcfg.exit_mode == "ACTIVATED_POINT_TRAIL":
+                    raise ValueError("Profit activation must exceed the point-trailing distance")
             if stcfg.exit_mode == "ATR_TRAIL":
                 atr = ids.get(stcfg.atr_indicator_id)
                 if atr is None or atr.kind != "ATR" or atr.timeframe != "1h" or atr.chart_only:
