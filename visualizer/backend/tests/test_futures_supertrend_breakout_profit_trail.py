@@ -105,7 +105,8 @@ def test_breakout_profit_trailing_and_protective_stop(
         ("STRATEGY_LAB_CACHE_ROOT",tmp_path/"cache"),
     ):
         monkeypatch.setenv(key,str(path))
-    stamps=pd.date_range("2026-01-01T00:05:00Z",periods=40,freq="5min")
+    # Include the prior 00:00 completed hourly EMA sample for the slope.
+    stamps=pd.date_range("2026-01-01T00:00:00Z",periods=41,freq="5min")
     records=[]
     short=direction=="SHORT"
     entry=900 if short else 1200
