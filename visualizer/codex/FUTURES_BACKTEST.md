@@ -314,3 +314,11 @@ Import `visualizer/backend/examples/btc-futures-supertrend-first-ema20-touch-2r.
 - Entry and take-profit fill proxies use only 5m OHLC; gap/fee/slippage and account-margin inaccuracies remain **RESEARCH_ONLY**. ETHUSD futures and 1m execution are not part of this mode. 22-month profitability has **not** been independently established.
 
 The cache version increments with the new mode, with no migration of old saved strategies; the config is opt-in.
+
+## First-touch Supertrend + 1H ATR(14) 3× trailing stop (November 2026)
+
+Import `visualizer/backend/examples/btc-futures-supertrend-first-ema20-touch-atr3-trailing.strategy.json`. This configuration uses `futures.supertrend_ema_first_touch.exit_mode="ATR_TRAIL"`, `atr_indicator_id="atr14_1h"`, and `trailing_atr_multiple=3`, plus a non-chart-only 1H ATR(14) instance. Set `futures.take_profit_percent=null` and omit the legacy `reward_r_multiple` from this strategy JSON: **no fixed 2R take profit exists**.
+
+At the first completed 5m EMA touch following a confirmed 1h Supertrend(10,3) flip, read the most recently completed 1h ATR and fill at the NEXT 5m candle open. Initialize a protective trailing stop at executed LONG entry minus 3× ATR (or SHORT entry plus 3× ATR). After testing the *previous* stop against the current 5m OHLC, record the best favorable high/low and ratchet to extreme minus/plus 3× the current last completed 1h ATR; snap outward to tick, never loosen, and apply the updated stop from the NEXT 5m bar. No same-bar favorable high can retrospectively protect against an earlier low.
+
+Exit at the active trailing stop or on the next 5m open after a confirmed opposite 1h Supertrend flip; margin/liquidation estimates may also force an exit. The 3×ATR trailing stop replaces the old fixed target, not the Supertrend flip exit. ATR is dynamic and a 3× multiple is not a guaranteed loss limit. Historic fills remain OHLC proxies; no 1-minute or ETHUSD futures support. The old `REFERENCE_2R` configuration and JSON remain usable without migration.
