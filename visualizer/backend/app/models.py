@@ -708,15 +708,18 @@ class FuturesRuleRiskConfig(BaseModel):
 
 
 class FuturesSupertrendEMATouchConfig(BaseModel):
-    """First 5m EMA touch after a confirmed 1h Supertrend flip.
+    """First completed 5m EMA touch after a confirmed 1h Supertrend flip.
 
-    The Supertrend line is a frozen R reference, never an executable stop.
-    A fill occurs at the next 5m open after the first completed touch bar.
+    REFERENCE_2R preserves existing strategy files; ATR_TRAIL removes the
+    fixed target and uses a 5m-monitored ratcheting stop based on closed 1h ATR.
     """
     enabled: bool = False
     supertrend_indicator_id: str = "supertrend_1h"
     ema_indicator_id: str = "ema20_1h"
+    exit_mode: Literal["REFERENCE_2R", "ATR_TRAIL"] = "REFERENCE_2R"
     reward_r_multiple: float = Field(default=2.0, gt=0, le=100)
+    atr_indicator_id: str = "atr14_1h"
+    trailing_atr_multiple: float = Field(default=3.0, gt=0, le=100)
 
 
 class FuturesCandlePatternConfig(BaseModel):
@@ -980,7 +983,7 @@ class StrategyConfig(BaseModel):
                 raise ValueError("Supertrend EMA first-touch requires both legacy percent exits null")
             if (self.futures.capital_stop.enabled or self.futures.force_exit_time is not None
                     or self.risk.max_hold_minutes is not None or self.risk.close_at_session_end):
-                raise ValueError("Supertrend EMA first-touch exits only on TP or confirmed flip; disable forced exits and capital stops")
+                raise ValueError("Supertrend EMA first-touch uses its selected exit mode or confirmed flip; disable forced exits and capital stops")
             if any(group.configured() for group in
                    (self.call_entry,self.put_entry,self.call_exit,self.put_exit)):
                 raise ValueError("Supertrend EMA first-touch is a dedicated entry/exit mode; leave ordinary entry/exit groups empty")
@@ -993,6 +996,12 @@ class StrategyConfig(BaseModel):
                 raise ValueError("First-touch EMA must be a non-chart-only 1h EMA20 indicator")
             if st.params.get("atr_period") != 10 or float(st.params.get("multiplier",0)) != 3.0:
                 raise ValueError("First-touch Supertrend requires ATR period 10 and multiplier 3")
+            if stcfg.exit_mode == "ATR_TRAIL":
+                atr = ids.get(stcfg.atr_indicator_id)
+                if atr is None or atr.kind != "ATR" or atr.timeframe != "1h" or atr.chart_only:
+                    raise ValueError("First-touch ATR trailing needs a non-chart-only 1h ATR indicator")
+                if stcfg.trailing_atr_multiple <= 0:
+                    raise ValueError("First-touch ATR trailing multiplier must be positive")
 
         if self.futures.candle_pattern.enabled:
             if self.market_type != "FUTURES" or self.timeframe != "5m":
