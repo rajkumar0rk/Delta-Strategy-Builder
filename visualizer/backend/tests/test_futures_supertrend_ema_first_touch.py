@@ -199,6 +199,10 @@ def test_flip_only_has_no_fixed_tp_stop_or_atr_and_waits_for_confirmed_flip(
     assert len(strategy.indicators)==2
     assert all(x.kind!="ATR" for x in strategy.indicators)
     assert strategy.futures.take_profit_percent is None
+    # At 3x leverage these intentionally huge bar excursions may cause a
+    # legitimate estimated isolated-margin liquidation before the flip.
+    # Use 1x here to isolate the absence of a TP or price-stop exit.
+    strategy.futures.leverage=1
     strategy.direction_mode="CALL" if direction=="LONG" else "PUT"
     strategy.futures.slippage_bps=0
     strategy.futures.taker_fee_percent=0
