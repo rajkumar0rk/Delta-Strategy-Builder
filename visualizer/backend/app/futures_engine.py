@@ -222,7 +222,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':21,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':22,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
@@ -251,6 +251,11 @@ def run_futures_backtest(req, progress=None):
     pullback=adaptive if adaptive else (cfg.pullback if cfg.pullback.enabled else None)
     rule_risk=cfg.rule_risk if cfg.rule_risk.enabled else None
     candle_pattern=cfg.candle_pattern if cfg.candle_pattern.enabled else None
+    first_touch_config=cfg.supertrend_ema_first_touch if cfg.supertrend_ema_first_touch.enabled else None
+    from .supertrend_ema_touch import SupertrendEMATouchCycle
+    first_touch_cycle=(SupertrendEMATouchCycle(
+        first_touch_config.supertrend_indicator_id,first_touch_config.ema_indicator_id)
+        if first_touch_config else None)
     pattern_signals=(completed_hour_patterns(frame,candle_pattern,cfg.tick_size)
                      if candle_pattern else {})
     planner=(AdaptiveBreakoutPlanner(frame,adaptive,strategy.timeframe) if adaptive else
@@ -395,6 +400,8 @@ def run_futures_backtest(req, progress=None):
           'capital_stop_loss_usd':pos.get('capital_stop_loss_usd'),
           'risk_per_lot_usd':pos.get('risk_per_lot_usd'),
           'initial_stop_price':pos.get('initial_stop_price'),
+          'supertrend_reference_line':pos.get('supertrend_reference_line'),
+          'reference_r_points':pos.get('reference_r_points'),
           'r_multiple_net':net/r_at_risk if r_at_risk>0 else None,
           'entry_fill_timing':pos.get('entry_fill_timing','OPEN'),
           'exit_reason':reason,'entry_execution_side':'ASK_PROXY' if sign==1 else 'BID_PROXY',
@@ -411,6 +418,8 @@ def run_futures_backtest(req, progress=None):
         # The candle-close marked equity series is appended once per bar in
         # the main loop. Do not append a duplicate exit timestamp here.
     for i,(ts,row) in enumerate(frame.iterrows()):
+        # Warmup and session-blocked bars still consume the FIRST touch.
+        touch_signal=first_touch_cycle.observe(ts,row) if first_touch_cycle else None
         # The OHLC row describes the candle ending at ts. Pending orders
         # execute at this candle's OPEN, so their regime gate must use the
         # previously completed regime, never the state learned at ts.
@@ -500,6 +509,18 @@ def run_futures_backtest(req, progress=None):
             px=_slipped(intrabar_candidate if intrabar_candidate is not None else float(row.open),
                         direction,True,effective_slippage_bps,cfg.tick_size,cfg.slippage_ticks)
             trade_qty=qty; stop_price=None; target_price=None; risk_per_lot=None; entry_rejection=None
+            if execution_setup and execution_setup.get('supertrend_ema_first_touch'):
+                # The frozen ST line sets 2R but is never an executable stop.
+                reference=float(execution_setup['supertrend_reference_line'])
+                signed_distance=(px-reference)*(1 if direction=='LONG' else -1)
+                if not math.isfinite(signed_distance) or signed_distance<cfg.tick_size-1e-9:
+                    entry_rejection='INVALID_SUPERTREND_REFERENCE'
+                else:
+                    target_price=target_at_r(px,reference,direction,
+                        first_touch_config.reward_r_multiple,cfg.tick_size)
+                    risk_per_lot=signed_distance*cfg.contract_btc
+                    if target_price is None:
+                        entry_rejection='INVALID_R_TARGET'
             if execution_setup and execution_setup.get('rule_risk') and rule_risk and rule_risk.stop_mode=='FIXED_POINTS':
                 sign=1 if direction=='LONG' else -1
                 execution_setup['stop_price']=px-sign*rule_risk.stop_loss_points
@@ -514,7 +535,7 @@ def run_futures_backtest(req, progress=None):
                 # Fixed distance measured from the actual slipped/tick-rounded
                 # short entry fill, not the preceding setup candle or signal close.
                 execution_setup['stop_price']=px+candle_pattern.stop_loss_points
-            if execution_setup:
+            if execution_setup and not execution_setup.get('supertrend_ema_first_touch'):
                 raw_stop=float(execution_setup['stop_price'])
                 units=raw_stop/cfg.tick_size
                 stop_price=round((math.floor(units+1e-10) if direction=='LONG' else math.ceil(units-1e-10))*cfg.tick_size,10)
@@ -599,6 +620,10 @@ def run_futures_backtest(req, progress=None):
                     'pattern_profit_active':False,
                     'pattern_setup_time':execution_setup.get('setup_time') if execution_setup else None,
                     'initial_stop_price':stop_price,
+                    'supertrend_reference_line':(execution_setup.get('supertrend_reference_line')
+                        if execution_setup and execution_setup.get('supertrend_ema_first_touch') else None),
+                    'reference_r_points':(abs(px-execution_setup['supertrend_reference_line'])
+                        if execution_setup and execution_setup.get('supertrend_ema_first_touch') else None),
                     'entry_fill_timing':'INTRABAR_ESTIMATED' if intrabar_candidate is not None else 'OPEN',
                     'mfe':0.0,'mae':0.0,
                     'lifecycle_provenance':dict(lifecycle_snapshot or {})}
