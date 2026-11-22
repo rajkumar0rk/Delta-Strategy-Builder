@@ -56,8 +56,8 @@ def test_3x_atr_stop_starts_at_entry_and_ratchets_after_prior_candle(
     records=[]
     for ts in dates:
         o,h,l,c=105,106,104,105
-        if ts==pd.Timestamp("2026-01-01T01:05:00Z"):
-            l=99  # first EMA20 touch; no entry until 01:10 OPEN
+        if ts==pd.Timestamp("2026-01-01T01:10:00Z"):
+            l=99  # first EMA20 touch confirms at 01:10; next bar opens at 01:10
         if ts==pd.Timestamp("2026-01-01T01:15:00Z"):
             if direction=="LONG":o,h,l,c=105,130,104,120
             else:o,h,l,c=105,106,80,90
