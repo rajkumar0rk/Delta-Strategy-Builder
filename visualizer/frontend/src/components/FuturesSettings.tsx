@@ -84,8 +84,9 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
     risk:{...value.risk,max_hold_minutes:null,close_at_session_end:false},
     pattern_trade:value.pattern_trade?{...value.pattern_trade,enabled:false}:undefined
    }:{}),
-   indicators:(enabled||patch.exit_mode==='ATR_TRAIL')
-    ?[...value.indicators.filter(i=>!required.some(r=>r.id===i.id)),...required]
+   indicators:(enabled||patch.exit_mode!==undefined)
+    ?[...value.indicators.filter(i=>!required.some(r=>r.id===i.id)
+        && (nextExitMode==='ATR_TRAIL'||i.id!==(touch.atr_indicator_id??'atr14_1h'))),...required]
     :value.indicators,
    futures:{...f,...(enabled?{
      stop_loss_percent:null,take_profit_percent:null,force_exit_time:null,
@@ -263,10 +264,13 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
     onChange={e=>setTouch({exit_mode:e.target.value as NonNullable<FuturesSupertrendEMATouchConfig['exit_mode']>})}>
     <option value="REFERENCE_2R">Fixed take-profit at 2R (legacy)</option>
     <option value="ATR_TRAIL">No take-profit · 3× ATR trailing stop</option>
+    <option value="FLIP_ONLY">No TP or ATR — exit on opposite Supertrend flip only</option>
    </select></label>
    {(touch.exit_mode??'REFERENCE_2R')==='REFERENCE_2R'
     ?<label>Take profit (reference R multiplier)<input type="number" step="0.25" min="0.1"
       value={touch.reward_r_multiple??2} onChange={e=>setTouch({reward_r_multiple:Number(e.target.value)})}/></label>
+    :(touch.exit_mode==='FLIP_ONLY')
+    ?<p>Exit only at NEXT 5M open after a confirmed opposite 1H Supertrend flip. No fixed TP, ATR trail or price stop; margin/liquidation is still estimated.</p>
     :<>
      <label>1H ATR indicator ID<input value={touch.atr_indicator_id??'atr14_1h'} readOnly/></label>
      <label>ATR trailing multiplier<input type="number" min="0.1" step="0.25"
