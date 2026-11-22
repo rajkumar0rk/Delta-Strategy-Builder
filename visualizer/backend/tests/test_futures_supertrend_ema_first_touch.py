@@ -141,3 +141,76 @@ def test_end_to_end_next_open_first_touch_and_tp_or_flip(tmp_path, monkeypatch, 
     assert t["exit_reason"]==("SUPERTREND_FLIP" if flip_exit else "TAKE_PROFIT")
     if flip_exit:
         assert pd.Timestamp(t["exit_time"])==pd.Timestamp("2026-01-01T02:00:00Z")
+
+
+@pytest.mark.parametrize("direction",["LONG","SHORT"])
+def test_flip_only_has_no_fixed_tp_stop_or_atr_and_waits_for_confirmed_flip(
+    tmp_path, monkeypatch, direction
+):
+    import app.futures_engine as futures_engine
+    root=tmp_path/"data"/"sample"
+    root.mkdir(parents=True)
+    for key,p in (
+        ("STRATEGY_LAB_DATA_ROOT",tmp_path/"data"),
+        ("STRATEGY_LAB_RESULT_ROOT",tmp_path/"results"),
+        ("STRATEGY_LAB_CACHE_ROOT",tmp_path/"cache"),
+    ):
+        monkeypatch.setenv(key,str(p))
+    dates=pd.date_range("2026-01-01T00:05:00Z",periods=39,freq="5min")
+    records=[]
+    for ts in dates:
+        # Large favorable and unfavorable intrabar moves MUST NOT exit:
+        # the only strategy exit is a confirmed opposite 1h Supertrend flip.
+        high=200 if ts==pd.Timestamp("2026-01-01T01:15:00Z") else 106
+        low=50 if ts==pd.Timestamp("2026-01-01T01:30:00Z") else 104
+        if ts==pd.Timestamp("2026-01-01T01:05:00Z"):
+            low=99  # first EMA20 touch
+        records.append(dict(timestamp=ts.isoformat(),open=105,
+                            high=high,low=low,close=105,volume=100))
+    with (root/"underlying_bars.csv").open("w",newline="",encoding="utf-8") as out:
+        w=csv.DictWriter(out,fieldnames=list(records[0]))
+        w.writeheader()
+        w.writerows(records)
+    original=futures_engine.compute_indicators
+    def closed_hour_indicators(bars,*args,**kwargs):
+        frame,meta=original(bars,*args,**kwargs)
+        flip=pd.Timestamp("2026-01-01T01:00:00Z")
+        reverse=pd.Timestamp("2026-01-01T02:00:00Z")
+        forward_field="bullish_flip" if direction=="LONG" else "bearish_flip"
+        reverse_field="bearish_flip" if direction=="LONG" else "bullish_flip"
+        frame["supertrend_1h.line"]=98 if direction=="LONG" else 112
+        frame["supertrend_1h.direction"]=[
+            (1 if direction=="LONG" else -1) if ts<reverse else
+            (-1 if direction=="LONG" else 1)
+            for ts in frame.index]
+        for name in ("bullish_flip","bearish_flip"):
+            frame["supertrend_1h."+name]=[
+                int((name==forward_field and flip<=ts<reverse)
+                    or (name==reverse_field and reverse<=ts))
+                for ts in frame.index]
+        frame["ema20_1h"]=100
+        return frame,meta
+    monkeypatch.setattr(futures_engine,"compute_indicators",closed_hour_indicators)
+    doc=json.loads((EXAMPLE.parent /
+        "btc-futures-supertrend-first-ema20-touch-flip-only.strategy.json"
+    ).read_text(encoding="utf-8"))
+    strategy=StrategyConfig.model_validate(doc["strategy"])
+    assert strategy.futures.supertrend_ema_first_touch.exit_mode=="FLIP_ONLY"
+    assert len(strategy.indicators)==2
+    assert all(x.kind!="ATR" for x in strategy.indicators)
+    assert strategy.futures.take_profit_percent is None
+    strategy.direction_mode="CALL" if direction=="LONG" else "PUT"
+    strategy.futures.slippage_bps=0
+    strategy.futures.taker_fee_percent=0
+    strategy.futures.gst_percent=0
+    result=run_backtest(BacktestRequest(dataset_id="sample",
+        start=dates[0].isoformat(),end=(dates[-1]+pd.Timedelta(minutes=5)).isoformat(),
+        strategy=strategy))
+    assert result["metrics"]["trades"]==1
+    trade=result["trades"][0]
+    assert trade["stop_price"] is None
+    assert trade["target_price"] is None
+    assert trade["reference_r_points"] is None
+    assert trade["exit_reason"]=="SUPERTREND_FLIP"
+    assert pd.Timestamp(trade["entry_time"])==pd.Timestamp("2026-01-01T01:05:00Z")
+    assert pd.Timestamp(trade["exit_time"])==pd.Timestamp("2026-01-01T02:00:00Z")
