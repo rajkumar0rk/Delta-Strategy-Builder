@@ -222,7 +222,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':25,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':26,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
@@ -254,7 +254,11 @@ def run_futures_backtest(req, progress=None):
     first_touch_config=cfg.supertrend_ema_first_touch if cfg.supertrend_ema_first_touch.enabled else None
     from .supertrend_ema_touch import SupertrendEMATouchCycle
     first_touch_cycle=(SupertrendEMATouchCycle(
-        first_touch_config.supertrend_indicator_id,first_touch_config.ema_indicator_id)
+        first_touch_config.supertrend_indicator_id,first_touch_config.ema_indicator_id,
+        entry_mode=first_touch_config.entry_mode,
+        breakout_lookback_bars=first_touch_config.breakout_lookback_bars,
+        require_ema_slope=first_touch_config.require_ema_slope,
+        swing_stop_lookback_bars=first_touch_config.swing_stop_lookback_bars)
         if first_touch_config else None)
     pattern_signals=(completed_hour_patterns(frame,candle_pattern,cfg.tick_size)
                      if candle_pattern else {})
@@ -423,6 +427,29 @@ def run_futures_backtest(req, progress=None):
         pos['trailing_active']=True
         return True
 
+    def ratchet_activated_point_trail(pos, completed_bar):
+        """Old stop tested first; activate at profit threshold, next-bar only."""
+        if not (first_touch_config and
+                first_touch_config.exit_mode=='ACTIVATED_POINT_TRAIL' and
+                pos.get('first_touch_activated_trail')):
+            return False
+        sign=1 if pos['direction']=='LONG' else -1
+        point=float(completed_bar.high if sign==1 else completed_bar.low)
+        extreme=max(pos['trail_extreme'],point) if sign==1 else min(pos['trail_extreme'],point)
+        pos['trail_extreme']=extreme
+        if sign*(extreme-pos['entry_price'])<first_touch_config.trailing_activation_points:
+            return False
+        proposed=extreme-sign*first_touch_config.trailing_distance_points
+        tick_stop=round((
+            math.floor(proposed/cfg.tick_size+1e-10) if sign==1
+            else math.ceil(proposed/cfg.tick_size-1e-10)
+        )*cfg.tick_size,10)
+        if tick_stop<=0 or (tick_stop-pos['stop_price'])*sign<=0:
+            return False
+        pos['stop_price']=tick_stop
+        pos['trailing_active']=True
+        return True
+
     def fee(price,quantity=None):
         return price*(qty if quantity is None else quantity)*cfg.taker_fee_percent/100*(1+cfg.gst_percent/100)
     def close(pos,exit_time,price,reason):
@@ -568,6 +595,24 @@ def run_futures_backtest(req, progress=None):
                     # No fixed TP, ATR trailing or price stop in flip-only mode.
                     # A confirmed opposite hourly flip remains the only signal exit.
                     pass
+                elif first_touch_config.exit_mode=='ACTIVATED_POINT_TRAIL':
+                    # Freeze prior 5m setup swing. The protective SL is live
+                    # immediately, while profit trailing activates at +500.
+                    try:
+                        raw_stop=float(execution_setup['setup_stop_price'])
+                    except (TypeError,ValueError,KeyError):
+                        raw_stop=float('nan')
+                    if not math.isfinite(raw_stop):
+                        entry_rejection='INVALID_SWING_STOP'
+                    else:
+                        units=raw_stop/cfg.tick_size
+                        stop_price=round((math.floor(units+1e-10) if sign==1
+                                          else math.ceil(units-1e-10))*cfg.tick_size,10)
+                        if stop_price<=0 or sign*(px-stop_price)<=0:
+                            entry_rejection='SWING_STOP_NOT_PROTECTIVE'
+                        else:
+                            risk_per_lot=abs(px-stop_price)*cfg.contract_btc
+                    target_price=None
                 elif first_touch_config.exit_mode=='POINT_TRAIL':
                     # Fixed distance from executed entry price. Active immediately;
                     # future favorable completed 5m extremes tighten it only.
@@ -712,6 +757,9 @@ def run_futures_backtest(req, progress=None):
                      'first_touch_point_trail':bool(execution_setup and
                          execution_setup.get('supertrend_ema_first_touch') and
                          first_touch_config.exit_mode=='POINT_TRAIL'),
+                     'first_touch_activated_trail':bool(execution_setup and
+                         execution_setup.get('supertrend_ema_first_touch') and
+                         first_touch_config.exit_mode=='ACTIVATED_POINT_TRAIL'),
                      'trail_extreme':px,
                     'rule_risk_position':bool(execution_setup and execution_setup.get('rule_risk')),
                     'candle_pattern_position':bool(execution_setup and execution_setup.get('candle_pattern')),
@@ -862,6 +910,11 @@ def run_futures_backtest(req, progress=None):
                         decisions.append({'timestamp':ts.isoformat(),'kind':'TRAIL_UPDATE',
                             'direction':position['direction'],'passed':True,
                             'reason':'FIRST_TOUCH_POINTS_RATCHET','stop_price':position['stop_price']})
+                    if ratchet_activated_point_trail(position,row):
+                        decisions.append({'timestamp':ts.isoformat(),'kind':'TRAIL_UPDATE',
+                            'direction':position['direction'],'passed':True,
+                            'reason':'SUPERTREND_BREAKOUT_ACTIVATED_TRAIL',
+                            'stop_price':position['stop_price']})
                     if strategy.risk.max_hold_minutes is not None and (ts-pd.Timestamp(position['entry_time'])).total_seconds()/60>=strategy.risk.max_hold_minutes:
                         pending=('CLOSE','TIME_STOP')
                     elif strategy.risk.close_at_session_end and _session_end_due(ts,strategy.session,tf):
@@ -941,7 +994,7 @@ def run_futures_backtest(req, progress=None):
             daily['blocks']+=1
             continue
         if first_touch_config:
-            # Entry is signaled on the first completed 5m EMA touch only.
+            # Legacy first touch or post-flip breakout/rejection signals.
             if touch_signal is not None:
                 direction=touch_signal['direction']
                 enabled=call_enabled if direction=='LONG' else put_enabled
@@ -956,16 +1009,21 @@ def run_futures_backtest(req, progress=None):
                             pending_setup['confirmed_atr']=float(raw_atr)
                         except (ValueError,TypeError):
                             pending_setup['confirmed_atr']=float('nan')
-                    pending_lifecycle_id='FIRST_EMA_TOUCH_PER_SUPERTREND_CYCLE'
+                    lifecycle_name=('FIRST_EMA_TOUCH_PER_SUPERTREND_CYCLE'
+                        if first_touch_config.entry_mode=='FIRST_TOUCH'
+                        else 'FIRST_BREAKOUT_OR_REJECTION_PER_SUPERTREND_CYCLE')
+                    pending_lifecycle_id=lifecycle_name
                     pending_lifecycle_snapshot={
-                        'entry_lifecycle_id':'FIRST_EMA_TOUCH_PER_SUPERTREND_CYCLE',
+                        'entry_lifecycle_id':lifecycle_name,
                         'entry_lifecycle_signal_time':ts.isoformat(),
                         'entry_lifecycle_age_bars':0,'entry_lifecycle_delay_bars':0,
                         'entry_lifecycle_entries_before':0,'entry_lifecycle_max_entries':1,
                         'entry_lifecycle_expired':False,'entry_lifecycle_eligible':True}
                     decisions.append({'timestamp':ts.isoformat(),'kind':'SIGNAL',
                         'direction':direction,'passed':True,
-                        'reason':'FIRST_EMA_TOUCH_AFTER_CONFIRMED_SUPERTREND_FLIP',
+                        'reason':('FIRST_EMA_TOUCH_AFTER_CONFIRMED_SUPERTREND_FLIP'
+                                   if first_touch_config.entry_mode=='FIRST_TOUCH'
+                                   else 'POST_SUPERTREND_'+touch_signal['entry_trigger']),
                         'supertrend_reference_line':touch_signal['supertrend_reference_line'],
                         'ema_touch_level':touch_signal['ema_touch_level']})
             continue
@@ -1198,6 +1256,8 @@ def run_futures_backtest(req, progress=None):
             if first_touch_config.exit_mode=='FLIP_ONLY' else
             'Supertrend first-touch POINT_TRAIL starts an immediately active BTCUSD point-distance protective stop and ratchets after each completed 5m favorable extreme, effective next candle; no fixed TP'
             if first_touch_config.exit_mode=='POINT_TRAIL' else
+            'Post-Supertrend BREAKOUT_OR_REJECTION enters on 5m close breakout or first directional EMA20 rejection with 1h EMA20 slope; starts protective swing stop, activates 200-point trailing after +500 BTCUSD points on completed 5m candles; opposite confirmed 1h flip exits; no fixed take-profit'
+            if first_touch_config.exit_mode=='ACTIVATED_POINT_TRAIL' else
             'Supertrend first-touch ATR_TRAIL uses 1h completed ATR to initialize a 3xATR protective stop and ratchets after each completed 5m candle, effective next 5m candle; no take-profit target'
             if first_touch_config.exit_mode=='ATR_TRAIL' else
             'Supertrend first-touch REFERENCE_2R uses next-open entry and a 5m monitored fixed 2R target; no Supertrend-line stop') if first_touch_config else 'No first-touch mode enabled']},
