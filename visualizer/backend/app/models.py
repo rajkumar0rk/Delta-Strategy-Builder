@@ -715,14 +715,17 @@ class FuturesSupertrendEMATouchConfig(BaseModel):
     FLIP_ONLY has neither a fixed target nor a protective price stop; exit
     signals occur only on the opposite confirmed 1h Supertrend flip
     (except simulated liquidation/margin events).
+    POINT_TRAIL has no fixed target; its immediately active price stop trails
+    favorable 5m highs/lows in BTCUSD points without intrabar lookahead.
     """
     enabled: bool = False
     supertrend_indicator_id: str = "supertrend_1h"
     ema_indicator_id: str = "ema20_1h"
-    exit_mode: Literal["REFERENCE_2R", "ATR_TRAIL", "FLIP_ONLY"] = "REFERENCE_2R"
+    exit_mode: Literal["REFERENCE_2R", "ATR_TRAIL", "FLIP_ONLY", "POINT_TRAIL"] = "REFERENCE_2R"
     reward_r_multiple: float = Field(default=2.0, gt=0, le=100)
     atr_indicator_id: str = "atr14_1h"
     trailing_atr_multiple: float = Field(default=3.0, gt=0, le=100)
+    trailing_distance_points: float = Field(default=200.0, gt=0, le=1000000)
 
 
 class FuturesCandlePatternConfig(BaseModel):
