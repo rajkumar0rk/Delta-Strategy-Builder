@@ -1,0 +1,138 @@
+{
+  "schema_version": 15,
+  "app": "BTC Strategy Lab",
+  "strategy": {
+    "name": "BTCUSD Futures | 1H Supertrend Flip + 5M 12-Bar Breakout or EMA20 Rejection + 500/200 Profit Trail",
+    "market_type": "FUTURES",
+    "timeframe": "5m",
+    "direction_mode": "BOTH",
+    "position_policy": "EXCLUSIVE",
+    "conflict_policy": "SKIP",
+    "call_action": "BUY",
+    "put_action": "BUY",
+    "call_signal_mode": "ORDER_ONLY",
+    "put_signal_mode": "ORDER_ONLY",
+    "futures": {
+      "symbol": "BTCUSD",
+      "contract_btc": 0.001,
+      "quantity_lots": 1,
+      "leverage": 3,
+      "margin_mode": "ISOLATED",
+      "maintenance_margin_percent": 0.25,
+      "taker_fee_percent": 0.05,
+      "gst_percent": 18,
+      "slippage_bps": 2,
+      "tick_size": 0.5,
+      "slippage_ticks": 0,
+      "funding_rate_multiplier": 1,
+      "stop_loss_percent": null,
+      "take_profit_percent": null,
+      "funding_mode": "EXCLUDE_WITH_WARNING",
+      "margin_tier_mode": "FLAT_RESEARCH",
+      "pullback": {
+        "enabled": false
+      },
+      "force_exit_time": null,
+      "extra_half_spread_bps": 0,
+      "rule_risk": {
+        "enabled": false
+      },
+      "adaptive": {
+        "enabled": false
+      },
+      "candle_pattern": {
+        "enabled": false
+      },
+      "capital_stop": {
+        "enabled": false
+      },
+      "supertrend_ema_first_touch": {
+        "enabled": true,
+        "supertrend_indicator_id": "supertrend_1h",
+        "ema_indicator_id": "ema20_1h",
+        "entry_mode": "BREAKOUT_OR_REJECTION",
+        "breakout_lookback_bars": 12,
+        "require_ema_slope": true,
+        "swing_stop_lookback_bars": 12,
+        "exit_mode": "ACTIVATED_POINT_TRAIL",
+        "trailing_activation_points": 500,
+        "trailing_distance_points": 200
+      }
+    },
+    "indicators": [
+      {
+        "id": "supertrend_1h",
+        "kind": "SUPERTREND",
+        "params": {
+          "atr_period": 10,
+          "multiplier": 3
+        },
+        "timeframe": "1h",
+        "visible": true,
+        "chart_only": false
+      },
+      {
+        "id": "ema20_1h",
+        "kind": "EMA",
+        "params": {
+          "period": 20,
+          "source": "close"
+        },
+        "timeframe": "1h",
+        "visible": true,
+        "chart_only": false
+      }
+    ],
+    "call_entry": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [],
+      "groups": []
+    },
+    "put_entry": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [],
+      "groups": []
+    },
+    "risk": {
+      "starting_balance_usd": 1000,
+      "max_hold_minutes": null,
+      "max_trades_per_day": null,
+      "max_consecutive_losses": null,
+      "max_daily_loss_percent": null,
+      "stop_trading_after_daily_loss_limit": true,
+      "close_at_session_end": false
+    },
+    "session": {
+      "timezone": "Asia/Kolkata",
+      "start": "00:00",
+      "end": "23:59",
+      "windows": [
+        {
+          "start": "00:00",
+          "end": "23:59"
+        }
+      ],
+      "blocked_weekdays": [
+        5,
+        6
+      ]
+    },
+    "call_exit": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [],
+      "groups": []
+    },
+    "put_exit": {
+      "mode": "ALL",
+      "min_pass": 1,
+      "conditions": [],
+      "groups": []
+    },
+    "entry_evaluation_timeframe": "strategy",
+    "call_entry_lifecycles": [],
+    "put_entry_lifecycles": []
+  }
+}
