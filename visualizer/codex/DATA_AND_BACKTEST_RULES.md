@@ -215,3 +215,7 @@ Options and futures support `strategy.timeframe=1D` and `IndicatorInstance.timef
   quantity. Explicit matching caps are required for a comparison with Demo
   server ceilings; broker margin and quote fidelity remain separate evidence.
   See [OPTIONS_DEMO_PARITY.md](../OPTIONS_DEMO_PARITY.md), cache 181.
+
+## 1H Supertrend first EMA20 touch causal execution
+
+Dedicated `futures.supertrend_ema_first_touch` mode uses a 5m strategy frame with *completed* 1h Supertrend/EMA20 projections only. A flip is recognized only on the actual hourly-close 5m bar; forward-filled 1h flip flags do not re-arm a cycle. The first subsequent 5m candle with low <= confirmed EMA20 <= high consumes its cycle even when blocked; an accepted signal fills at the next 5m open. At actual assumed fill, freeze the latest known Supertrend line as reference R and calculate a fixed tick-aligned 2R target. The reference line is not an active protective stop. Exit at a hit target on 5m OHLC, or next 5m open after a completed opposite 1h flip; still model margin breach and fee/slippage/funding assumptions. No 1m or ETHUSD futures engine. Old backtests are invalidated by a futures cache version bump. This is research-only OHLC and never a broker-executable historical fill guarantee.
