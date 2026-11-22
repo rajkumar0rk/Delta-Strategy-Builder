@@ -72,6 +72,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
    ...(enabled?{
     market_type:'FUTURES' as const,timeframe:'5m' as const,entry_evaluation_timeframe:'strategy' as const,
     call_entry:blank(),put_entry:blank(),call_exit:blank(),put_exit:blank(),
+    call_entry_lifecycles:[],put_entry_lifecycles:[],
     call_signal_mode:'ORDER_ONLY' as const,put_signal_mode:'ORDER_ONLY' as const,
     risk:{...value.risk,max_hold_minutes:null,close_at_session_end:false},
     pattern_trade:value.pattern_trade?{...value.pattern_trade,enabled:false}:undefined
