@@ -57,8 +57,10 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
 
  const touchDefaults:FuturesSupertrendEMATouchConfig={
   enabled:false,supertrend_indicator_id:'supertrend_1h',ema_indicator_id:'ema20_1h',
+  entry_mode:'FIRST_TOUCH',breakout_lookback_bars:12,require_ema_slope:true,
+  swing_stop_lookback_bars:12,
   exit_mode:'REFERENCE_2R',reward_r_multiple:2,atr_indicator_id:'atr14_1h',
-  trailing_atr_multiple:3,trailing_distance_points:200
+  trailing_atr_multiple:3,trailing_distance_points:200,trailing_activation_points:500
  };
  const touch={...touchDefaults,...f.supertrend_ema_first_touch};
  const setTouch=(patch:Partial<FuturesSupertrendEMATouchConfig>)=>{
@@ -253,25 +255,51 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
   </div>}
   <p>Enabling this mode selects FUTURES / SHORT-only / 5M, disables legacy percent exits, rule risk, pullback and adaptive. Configure Monday-Friday and the IST entry window in Futures risk and entry sessions. OHLC stop hits are research proxies, not guaranteed intrabar fills.</p>
  </section>
- <section className="card"><h2>1H Supertrend → first EMA20 touch (5M execution)</h2>
-  <p>Opt-in: confirmed 1H Supertrend (10,3) flip, first completed 5M EMA20 touch, NEXT 5M open entry. Choose fixed 2R, 3×ATR trailing, point trailing (200 BTCUSD points by default), or opposite-flip only. Opposite confirmed 1H flip always exits, and estimated margin breaches can force an exit.</p>
+ <section className="card"><h2>1H Supertrend → EMA touch or breakout (5M execution)</h2>
+  <p>Opt-in: confirmed 1H Supertrend (10,3) flip, then first 5M EMA20 touch, 12-candle breakout or EMA20 rejection. Signal on completed 5M candle; enter NEXT 5M open. Choose fixed 2R, ATR trailing, immediately active point trailing, or swing stop plus profit-activated 500/200 point trailing. Confirmed opposite 1H flip and estimated margin breach can exit.</p>
   <label className="switch"><input type="checkbox" checked={touch.enabled}
-   onChange={e=>setTouch({enabled:e.target.checked})}/>Enable first EMA20 touch, one trade per Supertrend cycle</label>
+   onChange={e=>setTouch({enabled:e.target.checked})}/>Enable Supertrend entry, one trade per confirmed Supertrend cycle</label>
   {touch.enabled&&<div className="form-grid">
    <label>1H Supertrend indicator ID<input value={touch.supertrend_indicator_id} readOnly/></label>
    <label>1H EMA20 indicator ID<input value={touch.ema_indicator_id} readOnly/></label>
+   <label>Entry mode<select value={touch.entry_mode??'FIRST_TOUCH'} onChange={e=>setTouch({
+    entry_mode:e.target.value as NonNullable<FuturesSupertrendEMATouchConfig['entry_mode']>,
+    ...(e.target.value==='FIRST_TOUCH'?{exit_mode:'POINT_TRAIL' as const}:
+    {exit_mode:'ACTIVATED_POINT_TRAIL' as const})
+   })}>
+     <option value="FIRST_TOUCH">First 5M EMA20 touch after flip (legacy)</option>
+     <option value="BREAKOUT">5M 12-candle breakout only after flip</option>
+     <option value="BREAKOUT_OR_REJECTION">5M breakout OR first directional EMA20 rejection</option>
+   </select></label>
+   {(touch.entry_mode??'FIRST_TOUCH')!=='FIRST_TOUCH'&&<>
+    <label>Breakout lookback (completed 5M bars)<input type="number" min="2" max="500" step="1"
+      value={touch.breakout_lookback_bars??12} onChange={e=>setTouch({breakout_lookback_bars:Number(e.target.value)})}/></label>
+    <label>Swing stop lookback (completed 5M bars)<input type="number" min="2" max="500" step="1"
+      value={touch.swing_stop_lookback_bars??12} onChange={e=>setTouch({swing_stop_lookback_bars:Number(e.target.value)})}/></label>
+    <label className="switch"><input type="checkbox" checked={touch.require_ema_slope??true}
+      onChange={e=>setTouch({require_ema_slope:e.target.checked})}/>Require last two confirmed 1H EMA20 values sloping in trade direction</label>
+   </>}
    <label>Exit mode<select value={touch.exit_mode??'REFERENCE_2R'}
     onChange={e=>setTouch({exit_mode:e.target.value as NonNullable<FuturesSupertrendEMATouchConfig['exit_mode']>})}>
     <option value="REFERENCE_2R">Fixed take-profit at 2R (legacy)</option>
     <option value="ATR_TRAIL">No take-profit · 3× ATR trailing stop</option>
     <option value="FLIP_ONLY">No TP or ATR — exit on opposite Supertrend flip only</option>
     <option value="POINT_TRAIL">No fixed TP — 200-point trailing + Supertrend flip</option>
+    <option value="ACTIVATED_POINT_TRAIL">Swing SL + activate after +500, trail 200 points</option>
    </select></label>
    {(touch.exit_mode??'REFERENCE_2R')==='REFERENCE_2R'
     ?<label>Take profit (reference R multiplier)<input type="number" step="0.25" min="0.1"
       value={touch.reward_r_multiple??2} onChange={e=>setTouch({reward_r_multiple:Number(e.target.value)})}/></label>
     :(touch.exit_mode==='FLIP_ONLY')
     ?<p>Exit only at NEXT 5M open after a confirmed opposite 1H Supertrend flip. No fixed TP, ATR trail or price stop; margin/liquidation is still estimated.</p>
+    :(touch.exit_mode==='ACTIVATED_POINT_TRAIL')
+    ?<>
+     <label>Trailing activate after favorable BTCUSD points<input type="number" min="0.5" step="0.5"
+       value={touch.trailing_activation_points??500} onChange={e=>setTouch({trailing_activation_points:Number(e.target.value)})}/></label>
+     <label>Trailing distance (BTCUSD points)<input type="number" min="0.5" step="0.5"
+       value={touch.trailing_distance_points??200} onChange={e=>setTouch({trailing_distance_points:Number(e.target.value)})}/></label>
+     <p>Initial stop at last completed 5M setup swing (including signal candle wick). Only after +500 favorable points, ratchet 200 points behind the favorable 5M high/low. New stops apply NEXT candle. No fixed TP. A protective SL can exit at a loss before activation.</p>
+    </>
     :(touch.exit_mode==='POINT_TRAIL')
     ?<>
      <label>Trailing distance (BTCUSD points)<input type="number" min="0.5" step="0.5"
@@ -286,7 +314,7 @@ export function FuturesSettings({value,onChange}:{value:Strategy;onChange:(s:Str
      <p>Initial stop = entry ± ATR multiplier × last completed 1H ATR14. Stop only tightens after each completed 5M candle, effective from the next 5M candle. No fixed take-profit.</p>
     </>}
   </div>}
-  <p>Uses 5M historical OHLC, not 1-minute or tick fills. First touch is consumed even when entry is blocked. When enabling, ordinary entry/exit groups, other futures entry modes, fixed-percent exits, time exits and capital stop are disabled.</p>
+  <p>Uses 5M historical OHLC, not 1-minute or tick fills. The first qualifying entry per Supertrend cycle is consumed even if blocked. Entry modes BREAKOUT / BREAKOUT_OR_REJECTION require ACTIVATED_POINT_TRAIL. When enabling, ordinary entry/exit groups, other futures modes, fixed-percent exits, time exits and capital stop are disabled.</p>
  </section>
  <section className="card"><h2>Rule-tree futures dynamic risk</h2>
   <p>Opt-in swing/signal/ATR stops for ordinary CALL=LONG and PUT=SHORT rules, including VWAP strategies. ATR may come from this strategy timeframe or a completed, exact-multiple higher timeframe (for example, 1H ATR on 15M). Signal extremes and ATR are frozen at candle close; entry fills at the next open. Size estimates include fees and adverse stop slippage.</p>
