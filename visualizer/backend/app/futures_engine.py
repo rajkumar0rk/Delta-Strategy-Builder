@@ -222,7 +222,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':23,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':24,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
@@ -541,7 +541,11 @@ def run_futures_backtest(req, progress=None):
             trade_qty=qty; stop_price=None; target_price=None; risk_per_lot=None; entry_rejection=None
             if execution_setup and execution_setup.get('supertrend_ema_first_touch'):
                 sign=1 if direction=='LONG' else -1
-                if first_touch_config.exit_mode=='ATR_TRAIL':
+                if first_touch_config.exit_mode=='FLIP_ONLY':
+                    # No fixed TP, ATR trailing or price stop in flip-only mode.
+                    # A confirmed opposite hourly flip remains the only signal exit.
+                    pass
+                elif first_touch_config.exit_mode=='ATR_TRAIL':
                     # Initial 3xATR stop is based on confirmed 1h ATR at the
                     # completed first-touch signal, never on forming 1h data.
                     atr=float(execution_setup.get('confirmed_atr',float('nan')))
@@ -1148,7 +1152,9 @@ def run_futures_backtest(req, progress=None):
            'Cash balance includes accrued funding and entry fees of any unresolved futures position; closed-trade net PnL excludes its open price exposure',
            'Funding excluded' if cfg.funding_mode=='EXCLUDE_WITH_WARNING' else 'Funding rates supplied externally and settlement notional approximated',
            'Current published BTCUSD margin tiers are not historical account margin; INR conversion and actual liquidation are not modeled',
-           ('Supertrend first-touch ATR_TRAIL uses 1h completed ATR to initialize a 3xATR protective stop and ratchets after each completed 5m candle, effective next 5m candle; no take-profit target'
+           ('Supertrend first-touch FLIP_ONLY exits at next 5m open after a confirmed opposite 1h Supertrend flip; no fixed TP, price stop, or ATR trail (estimated margin breach may still exit)'
+            if first_touch_config.exit_mode=='FLIP_ONLY' else
+            'Supertrend first-touch ATR_TRAIL uses 1h completed ATR to initialize a 3xATR protective stop and ratchets after each completed 5m candle, effective next 5m candle; no take-profit target'
             if first_touch_config.exit_mode=='ATR_TRAIL' else
             'Supertrend first-touch REFERENCE_2R uses next-open entry and a 5m monitored fixed 2R target; no Supertrend-line stop') if first_touch_config else 'No first-touch mode enabled']},
       'fee_model':{'name':'DELTA_FUTURES_ASSUMED_TAKER','taker_fee_percent':cfg.taker_fee_percent,'gst_percent':cfg.gst_percent},
