@@ -222,7 +222,7 @@ def run_futures_backtest(req, progress=None):
     funding_sigs=[]
     for p in _funding_files(parts):
         st=p.stat();funding_sigs.append((str(p.resolve()),st.st_size,st.st_mtime_ns))
-    key=hashlib.sha256(json.dumps({'futures_engine':24,'request':req.model_dump(mode='json'),
+    key=hashlib.sha256(json.dumps({'futures_engine':25,'request':req.model_dump(mode='json'),
           'bars':fingerprint,'funding':funding_sigs},sort_keys=True,default=str).encode()).hexdigest()
     cached=_cached_result(key)
     if cached is not None:
@@ -400,6 +400,29 @@ def run_futures_backtest(req, progress=None):
         pos['trailing_active']=True
         return True
 
+    def ratchet_first_touch_points(pos, completed_bar):
+        """Update from a favorable, completed 5m extreme only AFTER old-stop testing.
+
+        New stops activate on the next 5m candle; never loosen or use ATR.
+        """
+        if not (first_touch_config and first_touch_config.exit_mode=='POINT_TRAIL'
+                and pos.get('first_touch_point_trail')):
+            return False
+        sign=1 if pos['direction']=='LONG' else -1
+        point=float(completed_bar.high if sign==1 else completed_bar.low)
+        extreme=(max(pos['trail_extreme'],point) if sign==1
+                 else min(pos['trail_extreme'],point))
+        pos['trail_extreme']=extreme
+        raw_stop=extreme-sign*first_touch_config.trailing_distance_points
+        units=raw_stop/cfg.tick_size
+        snapped=round((math.floor(units+1e-10) if sign==1
+                       else math.ceil(units-1e-10))*cfg.tick_size,10)
+        if snapped<=0 or (snapped-pos['stop_price'])*sign<=0:
+            return False
+        pos['stop_price']=snapped
+        pos['trailing_active']=True
+        return True
+
     def fee(price,quantity=None):
         return price*(qty if quantity is None else quantity)*cfg.taker_fee_percent/100*(1+cfg.gst_percent/100)
     def close(pos,exit_time,price,reason):
@@ -545,6 +568,18 @@ def run_futures_backtest(req, progress=None):
                     # No fixed TP, ATR trailing or price stop in flip-only mode.
                     # A confirmed opposite hourly flip remains the only signal exit.
                     pass
+                elif first_touch_config.exit_mode=='POINT_TRAIL':
+                    # Fixed distance from executed entry price. Active immediately;
+                    # future favorable completed 5m extremes tighten it only.
+                    raw_stop=px-sign*first_touch_config.trailing_distance_points
+                    units=raw_stop/cfg.tick_size
+                    stop_price=round((math.floor(units+1e-10) if sign==1
+                                      else math.ceil(units-1e-10))*cfg.tick_size,10)
+                    if stop_price<=0 or (px-stop_price)*sign<=0:
+                        entry_rejection='INVALID_POINT_TRAILING_STOP'
+                    else:
+                        risk_per_lot=abs(px-stop_price)*cfg.contract_btc
+                    target_price=None
                 elif first_touch_config.exit_mode=='ATR_TRAIL':
                     # Initial 3xATR stop is based on confirmed 1h ATR at the
                     # completed first-touch signal, never on forming 1h data.
@@ -670,10 +705,13 @@ def run_futures_backtest(req, progress=None):
                     'favorable_close':px,
                      'trailing_active':bool(execution_setup and
                          execution_setup.get('supertrend_ema_first_touch') and
-                         first_touch_config.exit_mode=='ATR_TRAIL'),
+                         first_touch_config.exit_mode in ('ATR_TRAIL','POINT_TRAIL')),
                      'first_touch_atr_trail':bool(execution_setup and
                          execution_setup.get('supertrend_ema_first_touch') and
                          first_touch_config.exit_mode=='ATR_TRAIL'),
+                     'first_touch_point_trail':bool(execution_setup and
+                         execution_setup.get('supertrend_ema_first_touch') and
+                         first_touch_config.exit_mode=='POINT_TRAIL'),
                      'trail_extreme':px,
                     'rule_risk_position':bool(execution_setup and execution_setup.get('rule_risk')),
                     'candle_pattern_position':bool(execution_setup and execution_setup.get('candle_pattern')),
@@ -820,6 +858,10 @@ def run_futures_backtest(req, progress=None):
                         decisions.append({'timestamp':ts.isoformat(),'kind':'TRAIL_UPDATE',
                             'direction':position['direction'],'passed':True,
                             'reason':'FIRST_TOUCH_ATR_RATCHET','stop_price':position['stop_price']})
+                    if ratchet_first_touch_points(position,row):
+                        decisions.append({'timestamp':ts.isoformat(),'kind':'TRAIL_UPDATE',
+                            'direction':position['direction'],'passed':True,
+                            'reason':'FIRST_TOUCH_POINTS_RATCHET','stop_price':position['stop_price']})
                     if strategy.risk.max_hold_minutes is not None and (ts-pd.Timestamp(position['entry_time'])).total_seconds()/60>=strategy.risk.max_hold_minutes:
                         pending=('CLOSE','TIME_STOP')
                     elif strategy.risk.close_at_session_end and _session_end_due(ts,strategy.session,tf):
@@ -1154,6 +1196,8 @@ def run_futures_backtest(req, progress=None):
            'Current published BTCUSD margin tiers are not historical account margin; INR conversion and actual liquidation are not modeled',
            ('Supertrend first-touch FLIP_ONLY exits at next 5m open after a confirmed opposite 1h Supertrend flip; no fixed TP, price stop, or ATR trail (estimated margin breach may still exit)'
             if first_touch_config.exit_mode=='FLIP_ONLY' else
+            'Supertrend first-touch POINT_TRAIL starts an immediately active BTCUSD point-distance protective stop and ratchets after each completed 5m favorable extreme, effective next candle; no fixed TP'
+            if first_touch_config.exit_mode=='POINT_TRAIL' else
             'Supertrend first-touch ATR_TRAIL uses 1h completed ATR to initialize a 3xATR protective stop and ratchets after each completed 5m candle, effective next 5m candle; no take-profit target'
             if first_touch_config.exit_mode=='ATR_TRAIL' else
             'Supertrend first-touch REFERENCE_2R uses next-open entry and a 5m monitored fixed 2R target; no Supertrend-line stop') if first_touch_config else 'No first-touch mode enabled']},
