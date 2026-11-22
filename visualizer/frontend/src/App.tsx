@@ -47,6 +47,7 @@ export default function App(){
  const [start,setStart]=useState('');const [end,setEnd]=useState('');
  const [strategy,setStrategy]=useState<Strategy>(defaultStrategy());const [chart,setChart]=useState<ChartPayload|null>(null);const [result,setResult]=useState<BacktestResult|null>(null);
  const [chartWindowOffset,setChartWindowOffset]=useState(0);
+ const [chartContext,setChartContext]=useState<{strategy:Strategy;scope:string}|null>(null);
  const [completedBacktestScope,setCompletedBacktestScope]=useState<string|null>(null);
  const [status,setStatus]=useState('');const [busy,setBusy]=useState(false);const [promptBusy,setPromptBusy]=useState(false);const [preflight,setPreflight]=useState<PreflightResult|null>(null);const [job,setJob]=useState<JobState|null>(null);const [activeJobId,setActiveJobId]=useState<string|null>(null);
  const [savedStrategies,setSavedStrategies]=useState<SavedStrategy[]>([]);const [savedStrategyId,setSavedStrategyId]=useState('');
@@ -75,6 +76,7 @@ export default function App(){
  const selectionBody=()=>({dataset_mode:datasetMode,dataset_id:datasetMode==='SINGLE'?datasetId:null,dataset_ids:datasetMode==='MULTI'?datasetIds:[]});
  const currentBacktestScope=JSON.stringify({...selectionBody(),start,end,barGapPolicy});
  const resultIsCurrent=backtestOverlayCurrent(result,strategy,completedBacktestScope,currentBacktestScope);
+ const chartIsCurrent=chartContext?.strategy===strategy&&chartContext.scope===currentBacktestScope;
  const rangeIso=()=>{const s=inputToUtcIso(start);const inclusiveEnd=inputToUtcIso(end);if(new Date(inclusiveEnd)<new Date(s))throw new Error('To UTC candle must be the same as or later than From UTC');const e=plusMinutes(inclusiveEnd,timeframeMinutes);if(bounds&&datasetMode!=='ARCHIVE'){const lo=new Date(bounds.start).getTime();const hiInclusive=new Date(bounds.end).getTime();if(new Date(s).getTime()<lo||new Date(inclusiveEnd).getTime()>hiInclusive)throw new Error(`Selected UTC candles must stay inside downloaded coverage: ${utcInput(bounds.start)} → ${utcInput(bounds.end)}`)}return {s,e,inclusiveEnd}};
 
  const chartWindow=useMemo(()=>{
@@ -92,6 +94,7 @@ export default function App(){
    signal=>api.preview({...request,start:window.start,end:window.end},signal),
    p=>{
     const withMarkers={...p,markers:[...markersInWindow(markers.filter(m=>m.kind!=='alert'),window),...(p.markers||[])]};
+    setChartContext({strategy:request.strategy,scope:currentBacktestScope});
     setChart(trades.length?maskOpenPositions(withMarkers,trades):withMarkers);
     if(message)setStatus(`${message.replace('{count}',p.bars.length.toLocaleString())} Chart window ${window.total-window.index}/${window.total}.`);
    },
@@ -190,7 +193,7 @@ export default function App(){
  <StorageManager onStatus={setStatus}/>
  {result&&!resultIsCurrent&&<div className="warning-box" role="status"><b>Backtest is outdated for the current settings.</b> Previous entry/exit markers and CALL OPEN / PUT OPEN badges are hidden. This preview shows indicators only; click <b>Run backtest</b> to verify the selected stop mode.</div>}
  {resultIsCurrent&&strategy.futures?.supertrend_ema_first_touch?.enabled&&<div className="fee-summary" role="status"><b>Executed backtest settings:</b> First EMA20 touch · Exit mode: {strategy.futures.supertrend_ema_first_touch.exit_mode||'REFERENCE_2R'}{strategy.futures.supertrend_ema_first_touch.exit_mode==='POINT_TRAIL'?` · Trailing distance: ${strategy.futures.supertrend_ema_first_touch.trailing_distance_points??200} BTCUSD points`:''}. Historical 5M stop execution; not live orders.</div>}
- <TradingChart payload={result&&!resultIsCurrent?null:chart} strategy={strategy} onMoveIndicator={moveIndicator} onToggleIndicator={toggleIndicator}/>
+ <TradingChart payload={chartIsCurrent?chart:null} strategy={strategy} onMoveIndicator={moveIndicator} onToggleIndicator={toggleIndicator}/>
  <BigTrendDetector payload={chart} strategy={strategy}/>
  {researchRange.start&&<TrendDiscoveryPanel selection={selectionBody()} start={researchRange.start} end={researchRange.end} strategy={strategy} onStatus={setStatus}/>}
  <IndicatorManager catalog={catalog} value={strategy.indicators} onChange={indicators=>setStrategy({...strategy,indicators})}/>
