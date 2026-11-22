@@ -59,8 +59,8 @@ describe('BTCUSD perpetual futures market editor',()=>{
   expect(html).toContain('Enable first EMA20 touch');
   expect(html).toContain('supertrend_1h');
   expect(html).toContain('ema20_1h');
-  expect(html).toContain('following 5M open');
-  expect(html).toContain('no 1-minute');
+  expect(html).toContain('NEXT 5M open');
+  expect(html).toContain('not 1-minute');
  });
  it('clearly labels simulated futures fills in result report',()=>{
   const s=defaultStrategy();s.market_type='FUTURES';
